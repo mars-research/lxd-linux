@@ -54,6 +54,7 @@ struct sched_param {
 #include <linux/gfp.h>
 
 #include <asm/processor.h>
+#include "../../xcap/capability.h"
 
 struct exec_domain;
 struct futex_pi_state;
@@ -1415,6 +1416,9 @@ struct task_struct {
 #if defined(CONFIG_BCACHE) || defined(CONFIG_BCACHE_MODULE)
 	unsigned int	sequential_io;
 	unsigned int	sequential_io_avg;
+#endif
+#ifdef LCD_CAPABILITIES
+    cap_space *cspace;
 #endif
 };
 
