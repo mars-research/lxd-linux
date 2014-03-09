@@ -1417,7 +1417,7 @@ struct task_struct {
 	unsigned int	sequential_io;
 	unsigned int	sequential_io_avg;
 #endif
-    struct _cap_space *cspace;
+    struct cap_space * cspace;
 };
 
 /* Future-safe accessor for struct task_struct's cpus_allowed. */
