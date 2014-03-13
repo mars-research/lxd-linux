@@ -54,7 +54,6 @@ struct sched_param {
 #include <linux/gfp.h>
 
 #include <asm/processor.h>
-#include "../../xcap/capability.h"
 
 struct exec_domain;
 struct futex_pi_state;
@@ -1038,7 +1037,7 @@ struct task_struct {
 	atomic_t usage;
 	unsigned int flags;	/* per process flags, defined below */
 	unsigned int ptrace;
-
+    void *cspace;
 #ifdef CONFIG_SMP
 	struct llist_node wake_entry;
 	int on_cpu;
@@ -1417,7 +1416,6 @@ struct task_struct {
 	unsigned int	sequential_io;
 	unsigned int	sequential_io_avg;
 #endif
-    struct cap_space * cspace;
 };
 
 /* Future-safe accessor for struct task_struct's cpus_allowed. */
