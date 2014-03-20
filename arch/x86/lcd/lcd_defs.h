@@ -2,6 +2,7 @@
 #define LCD_LCD_DEFS_H
 
 #include <linux/bitmap.h>
+#include <asm/vmx.h>
 
 #if !defined(VMX_EPT_AD_BIT)
 #define VMX_EPT_AD_BIT          (1ull << 21)
@@ -238,6 +239,8 @@ typedef struct {
 
 #define LCD_FREE_MEM_START (LCD_ISR_END + PAGE_SIZE)
 #define LCD_TEST_CODE_ADDR LCD_FREE_MEM_START
+
+//static int load_lcd(struct load_info * info, const char __user *uargs, int flags);
 
 /* Exported functions */
 lcd_struct* lcd_create(void);
