@@ -27,6 +27,10 @@ static int __init hello_init(void)
 {
     printk(KERN_INFO "Hello world!\n");
     capTask = kthread_create(thread_fn, NULL, "CapTest");
+    if (capTask)
+    {
+	    wake_up_process(capTask);
+    }
     return 0;    // Non-zero return means that the module couldn't be loaded.
 }
  
@@ -45,6 +49,7 @@ static int LCD_Create_CSpace(void)
 
 static int LCD_Create_Object(objType_t type)
 {
+    printk(KERN_INFO "kernel object is created\n");
     return 0;
 }
  

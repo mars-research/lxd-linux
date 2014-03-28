@@ -16,7 +16,7 @@
 
 #include <uapi/asm/kvm.h>
 
-#include <asm/vmx.h>
+//#include <asm/vmx.h>
 #include <asm/processor.h>
 #include <asm/desc.h>
 #include <asm/virtext.h>
@@ -680,7 +680,6 @@ static int vmx_setup_initial_page_table(lcd_struct *vcpu) {
     gpa += PAGE_SIZE;
   }
 
-  /* Map stack PT */
   gpa = gva = LCD_STACK_BOTTOM;
   for (i = 0; i < (LCD_STACK_SIZE >> PAGE_SHIFT); ++i) {
     ret = map_gva_to_gpa(vcpu, gva, gpa, 1, 0);
@@ -1310,7 +1309,8 @@ static void vmx_setup_initial_guest_state(lcd_struct *vcpu)
   vmcs_writel(GUEST_IDTR_BASE, LCD_IDT_ADDR);
   vmcs_writel(GUEST_IDTR_LIMIT, IDT_ENTRIES*16);
   vmcs_writel(GUEST_RIP, LCD_TEST_CODE_ADDR);
-  vmcs_writel(GUEST_RSP, LCD_STACK_ADDR);
+    // commented out to test the dynamically allocated stack
+ // vmcs_writel(GUEST_RSP, LCD_STACK_ADDR);
   vmcs_writel(GUEST_RFLAGS, 0x02);
   vmcs_writel(GUEST_DR7, 0);
 
@@ -1737,6 +1737,8 @@ static int __vmx_enable(struct vmcs *vmxon_buf) {
   return 0;
 }
 
+#define store_gdt(g) native_store_gdt(g)
+
 static void vmx_enable(void *unused) {
   int ret;
   struct vmcs *vmxon_buf = __get_cpu_var(vmxarea);
@@ -1865,19 +1867,26 @@ int lcd_destroy(lcd_struct* lcd) {
 }
 EXPORT_SYMBOL(lcd_destroy);
 
-static int lcd_va_to_pa(void* va, void** pa) {
-  *(unsigned long*)pa = vmalloc_to_pfn(va)<<PAGE_SHIFT;
+static int lcd_va_to_pa(void* va, void** pa, int vmallocd) {
+  if (vmallocd == 1) {
+      *(unsigned long*)pa = vmalloc_to_pfn(va)<<PAGE_SHIFT;
+  } else {
+      *(unsigned long*)pa = virt_to_phys(va);
+  }
   return 0;
 }
 
 static int __move_host_mapping(lcd_struct *lcd, void* hva,
-                               unsigned int size) {
+                               unsigned int size, int vmallocd) {
   unsigned int mapped = 0;
   void *pa;
   void *va = (void*)round_down(((unsigned long)hva), PAGE_SIZE);
   int ret = 0;
+  
+  printk(KERN_ERR "mapping base - 0x%p (phys 0x%p)(phys2 %p) size %d\n", hva, (vmalloc_to_pfn(va)<<PAGE_SHIFT),virt_to_phys(va),size);
+    
   while (mapped < size) {
-    ret = lcd_va_to_pa(va, &pa);
+    ret = lcd_va_to_pa(va, &pa, vmallocd);
     if (ret != 0) {
       return ret;
     }
@@ -1898,16 +1907,98 @@ static int __move_host_mapping(lcd_struct *lcd, void* hva,
   return 0;
 }
 
+static int map_host_page_at_guest_va(lcd_struct *lcd, void* hva,
+                                     void *gva, int vmallocd ) {
+    void *pa;
+    void *va = (void*)round_down(((unsigned long)hva), PAGE_SIZE);
+    int ret = 0;
+    
+    ret = lcd_va_to_pa(va, &pa, vmallocd);
+    if (ret != 0) {
+        return ret;
+    }
+    
+    ret = lcd_map_gpa_to_hpa(lcd, (u64)pa, (u64)pa, 0);
+    if (ret != 0) {
+        printk(KERN_ERR "lcd: move PA mapping conflicts canary\n");
+        return ret;
+    }
+    
+    ret = lcd_map_gva_to_gpa(lcd, (u64)gva, (u64)pa, 1, 0);
+    if (ret != 0) {
+        printk(KERN_ERR "lcd: move PT mapping conflicts canary\n");
+        return ret;
+    }
+    
+    return 0;
+
+}
+
+static char *my_shared;
+static int lcd_setup_stack(lcd_struct *lcd) {
+    char *sp = NULL;
+    char *stack_top = NULL;
+    int ret = 0;
+    
+    printk (KERN_ERR "lcd : Entered lcd_setup_stack\n");
+    // allocate a few pages for LCD stack from
+    // Linux kernel memory allocator
+    sp = __get_free_pages(GFP_KERNEL | __GFP_ZERO, 2);
+    if (!sp) {
+        return -ENOMEM;
+    }
+    
+    my_shared = sp;
+    stack_top = (sp + (PAGE_SIZE * 4) - 1);
+    printk (KERN_ERR "lcd : stack bootm %p , stack top %p and myshare %p", sp, stack_top, my_shared);
+    
+    // map the stack in the LCD address space
+    ret = __move_host_mapping(lcd, (void *)sp , (PAGE_SIZE * 4), 0);
+    if (ret != 0) {
+        printk(KERN_ERR "lcd: Unable to map the dynamically allocate stack into LCD space\n");
+        return ret;
+    }
+    
+    //setup the stack
+    vmcs_writel(GUEST_RSP, stack_top);
+    
+    //setup the stack canary page referenced by %gs:28
+    sp = __get_free_pages(GFP_KERNEL | __GFP_ZERO, 0);
+    if (!sp) {
+        return -ENOMEM;
+    }
+    
+    // Map a valid page into first guest virtual page
+    // The aim is to not fault due to stack canary added
+    // against buffer overflow  stack protection.
+    // The gcc generated code expects %fs:0x28 to be
+    // valid. Since we have zero base for all segment
+    // registers - mapping the some page into virtual
+    // address 0 should suffice.
+    // refer to linux/arch/x86/include/asm/stackprotector.h for
+    // details.[http://stackoverflow.com/a/22476070/2950979]
+    map_host_page_at_guest_va(lcd, (void *)sp , 0, 0);
+    if (ret != 0) {
+        printk(KERN_ERR "lcd: Unable to map the canary\n");
+        return ret;
+    }
+
+    
+    return 0;
+}
+
 int lcd_move_module(lcd_struct *lcd, struct module *mod) {
   int ret;
   lcd->mod = mod;
   // lcd_va_to_pa(va, pa) // 4KB page assumption
 
-  ret = __move_host_mapping(lcd, mod->module_init, mod->init_size);
+  ret = __move_host_mapping(lcd, mod->module_init, mod->init_size, 1);
   if (!ret) {
-    ret = __move_host_mapping(lcd, mod->module_core, mod->core_size);
+    ret = __move_host_mapping(lcd, mod->module_core, mod->core_size, 1);
     if (!ret) {
       vmcs_writel(GUEST_RIP, (unsigned long)mod->module_init);
+      lcd_setup_stack(lcd);
+      return ret;
     }
   }
 
@@ -1971,7 +2062,8 @@ static void vmx_handle_external_interrupt(lcd_struct *lcd) {
 }
 
 static void vmx_handle_vmcall(lcd_struct *lcd) {
-  /* printk(KERN_INFO "lcd: got vmcall %llu\n", lcd->regs[VCPU_REGS_RAX]); */
+   //printk(KERN_ERR "lcd_run: got vmcall %llu and %c\n", lcd->regs[VCPU_REGS_RAX], lcd->regs[VCPU_REGS_RAX]);
+   printk(KERN_ERR "%c", lcd->regs[VCPU_REGS_RAX]);
 }
 
 static void vmx_handle_page_fault(lcd_struct *lcd) {
@@ -2050,7 +2142,7 @@ int lcd_run(lcd_struct *lcd) {
     ret = vmx_run_vcpu(lcd);
     if (ret == EXIT_REASON_VMCALL ||
         ret == EXIT_REASON_CPUID) {
-      /* vmx_step_instruction(); */
+       vmx_step_instruction();
     }
 
     if (ret == EXIT_REASON_EXTERNAL_INTERRUPT) {
@@ -2060,10 +2152,12 @@ int lcd_run(lcd_struct *lcd) {
     
     vmx_put_cpu(lcd);
 
-    if (ret == EXIT_REASON_VMCALL)
-      vmx_handle_vmcall(lcd);
-    else if (ret == EXIT_REASON_EPT_VIOLATION)
+      if (ret == EXIT_REASON_VMCALL) {
+          vmx_handle_vmcall(lcd);
+      }
+      else if (ret == EXIT_REASON_EPT_VIOLATION) {
       done = vmx_handle_ept_violation(lcd);
+      }
     else if (ret == EXIT_REASON_EXCEPTION_NMI) {
       if (vmx_handle_nmi_exception(lcd))
         done = 1;
