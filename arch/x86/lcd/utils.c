@@ -10,7 +10,7 @@
 #include <asm/uaccess.h>
 #include <asm/vmx.h>
 
-
+#include "ipc.h"
 #include "lcd_defs.h"
 
 int lcd_read_mod_file(const char* filepath,
