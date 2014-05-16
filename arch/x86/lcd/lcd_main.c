@@ -28,12 +28,17 @@
 #include <asm/tsc.h>
 #include <asm/uaccess.h>
 
+#include <uapi/asm/e820.h>
+#include <uapi/asm/bootparam.h>
+#include <uapi/linux/elf.h>
+
 #include <uapi/linux/limits.h>
-static char target_mod_filepath[PATH_MAX];
-module_param_string(mod_file, target_mod_filepath,
-                    sizeof(target_mod_filepath), 0644);
-MODULE_PARM_DESC(mod_file, "Filepath of the target module to"
-                 " run inside LCD");
+
+static char vmlinux_file[PATH_MAX];
+module_param_string(vmlinux_file, vmlinux_file,
+                    sizeof(vmlinux_file), 0644);
+MODULE_PARM_DESC(vmlinux_file, "vmlinux or vmlinuz path");
+
 
 /* #include "lcd.h" */
 #include "ipc.h"
@@ -437,7 +442,7 @@ static int ept_alloc_pt_item(lcd_struct *vcpu,
     ret = ept_lookup_gpa(vcpu, (void*)((*gpfn) << PAGE_SHIFT), 1, &epte);
     if (!ret) {
       if (!epte_present(*epte)) {
-        *page = __get_free_page(GFP_ATOMIC);
+        *page = __get_free_page(GFP_KERNEL);
         if (!(*page)) {
           ret = -ENOMEM;
         } else {
@@ -676,45 +681,6 @@ static int vmx_setup_initial_page_table(lcd_struct *vcpu) {
     gpa += PAGE_SIZE;
   }
 
-  /* Test code page */
-  gpa = gva = LCD_TEST_CODE_ADDR;
-  ret = map_gva_to_gpa(vcpu, gva, gpa, 1, 0);
-  if (ret) {
-    printk(KERN_ERR "ept: populate code page failed\n");
-    return ret;
-  }
-  hpa = __get_free_page(GFP_KERNEL);
-  if (!hpa)
-    return -ENOMEM;
-  memset((void*)hpa, 0, PAGE_SIZE);
-  {
-    u8* bincode = (u8*)hpa;
-    /* 0: b8 e0 0f 00 01       mov    $0x1000fe0,%eax*/
-    /* 5: c7 00 ef be ad de    movl   $0xdeadbeef,(%rax) */
-    /* ((u8*)hpa)[0] = 0xb8; ((u8*)hpa)[1] = 0xe0; ((u8*)hpa)[2] = 0xf; ((u8*)hpa)[3] = 0x10; */
-    /* ((u8*)hpa)[5] = 0xc7; ((u8*)hpa)[7] = 0xef; ((u8*)hpa)[8] = 0xbe; ((u8*)hpa)[9] = 0xad; */
-    /* ((u8*)hpa)[10] = 0xde; */
-    /* ((u8*)hpa)[11] = 0xf4; ((u8*)hpa)[12] = 0xf4; */
-    
-    bincode[0] = 0xf;  bincode[1] = 0x1; bincode[2] = 0xc1;
-    bincode[3] = 0xb8; bincode[4] = 0x34; bincode[5] = 0x12;
-    bincode[8] = 0x48; bincode[9] = 0x89; bincode[10] = 0xc1;
-    bincode[11] = 0xeb; bincode[12] = 0xf6;
-    bincode[13] = 0x90;
-    bincode[14] = 0xf4;
-  }
-  
-  hpa = __pa(hpa);
-  
-  ret = ept_set_epte(vcpu, gpa, hpa, 0);
-  if (ret) {
-    printk(KERN_ERR "ept: map code page failed\n");
-    return ret;
-  }
-
-    // commented to check the dynamically allocated stack
-#if 0
-  /* Map stack PT */
   gpa = gva = LCD_STACK_BOTTOM;
   for (i = 0; i < (LCD_STACK_SIZE >> PAGE_SHIFT); ++i) {
     ret = map_gva_to_gpa(vcpu, gva, gpa, 1, 0);
@@ -737,7 +703,18 @@ static int vmx_setup_initial_page_table(lcd_struct *vcpu) {
     gva += PAGE_SIZE;
     gpa += PAGE_SIZE;
   }
-#endif
+
+  ret = ept_set_epte(vcpu, LCD_BOOT_PARAMS_ADDR, __pa(vcpu->bp), 0);
+  if (ret) {
+    printk(KERN_ERR "ept: BP phy-addr occupied in EPT\n");
+    return ret;
+  }
+  ret = map_gva_to_gpa(vcpu, LCD_BOOT_PARAMS_ADDR, LCD_BOOT_PARAMS_ADDR, 1, 0);
+  if (ret) {
+    printk(KERN_ERR "ept: BP virt-addr occupied in guest PT\n");
+    return ret;
+  }
+  
   /* Map descriptors and tables in EPT */
   ret = ept_set_epte(vcpu, LCD_GDT_ADDR, __pa(vcpu->gdt), 0);
   if (ret) {
@@ -1012,6 +989,7 @@ static int setup_vmcs_config(struct vmcs_config *vmcs_conf) {
         SECONDARY_EXEC_RDTSCP |
         SECONDARY_EXEC_ENABLE_VPID |
         SECONDARY_EXEC_WBINVD_EXITING |
+        SECONDARY_EXEC_UNRESTRICTED_GUEST | // SECONDARY_EXEC_VIRTUAL_INTR_DELIVERY |
         SECONDARY_EXEC_ENABLE_INVPCID;
     if (adjust_vmx_controls(min2, opt2,
                             MSR_IA32_VMX_PROCBASED_CTLS2,
@@ -1505,12 +1483,27 @@ static lcd_struct * vmx_create_vcpu(void) {
 
   if (cpu_has_vmx_ept_ad_bits()) {
     vcpu->ept_ad_enabled = true;
-    printk(KERN_INFO "vmx: enabled EPT A/D bits");
+    printk(KERN_INFO "vmx: enabled EPT A/D bits\n");
   }
   if (vmx_create_ept(vcpu)) {
-    printk(KERN_ERR "vmx: creating EPT failed.");
+    printk(KERN_ERR "vmx: creating EPT failed.\n");
     goto fail_ept;
   }
+
+  vcpu->bp = (struct boot_params*)__get_free_page(GFP_KERNEL)
+  if (!vcpu->bp) {
+    printk(KERN_ERR "vmx: out of mem for boot params\n");
+    goto fail_ept;
+  }
+  memset(vcpu->bp, 0, sizeof(struct boot_params));
+
+  vcpu->si = (struct start_info*)__get_free_page(GFP_KERNEL)
+  if (!vcpu->si) {
+    printk(KERN_ERR "vmx: out of mem for start info\n");
+    goto fail_si;
+  }
+  memset(vcpu->si, 0, sizeof(struct start_info));
+  
 
   vmx_get_cpu(vcpu);
   vmx_setup_vmcs(vcpu);
@@ -1530,18 +1523,20 @@ static lcd_struct * vmx_create_vcpu(void) {
 
   return vcpu;
 
+fail_si:
+  free_page(vcpu->bp);
 fail_ept:
   vmx_free_vpid(vcpu);
 fail_vpid:
   vmx_free_vmcs(vcpu->vmcs);
 fail_vmcs:
-  kfree((void*)vcpu->isr_page);
+  free_page((void*)vcpu->isr_page);
 fail_isr:
-  kfree(vcpu->tss);
+  free_page(vcpu->tss);
 fail_tss:
-  kfree(vcpu->idt);
+  free_page(vcpu->idt);
 fail_idt:
-  kfree(vcpu->gdt);
+  free_page(vcpu->gdt);
 fail_gdt:
   kfree(vcpu->bmp_pt_pages);
 fail_bmp:
@@ -1561,6 +1556,8 @@ static void vmx_destroy_vcpu(lcd_struct *vcpu)
   vmx_free_vpid(vcpu);
   vmx_free_vmcs(vcpu->vmcs);
   kfree(vcpu->bmp_pt_pages);
+  free_page(vcpu->bp);
+  free_page(vcpu->si);
   kfree(vcpu);
 }
 
@@ -1705,11 +1702,26 @@ static int vmx_handle_ept_violation(lcd_struct *vcpu) {
     return -EINVAL;
   }
 
-  /* TODO: fix this. Now we fail on EPT fault unconditionally.  */
-  /* ret = vmx_do_ept_fault(vcpu, gpa, gva, exit_qual); */
-  printk(KERN_INFO "EPT: get violation GPA 0x%lx, GVA: 0x%lx, fail now!\n",
-         gpa, gva);
-  ret = -EINVAL;
+  /*
+   * EPT Fault.
+   * TODO: lock page table?
+   */
+  if (gpa < LCD_PHY_MEM_SIZE) {
+    u64 gpa_pg;
+    u64 pg = __get_free_page(GFP_KERNEL);
+    if (!pg)
+      ret = -ENOMEM;
+    else {
+      gpa_pg = round_down(gpa, PAGE_SIZE);
+      ret = lcd_map_gpa_to_hpa(vcpu, gpa_pg, __pa(pg), 0);
+      if (ret) {
+        printk(KERN_ERR "EPT: map page %p for %p failed\n",
+               (void*)pg, (void*)gpa_pg);
+        free_page(pg);
+      }
+    }
+  } else
+    ret = -EINVAL;
 
   if (ret) {
     printk(KERN_ERR "vmx: EPT violation failure "
@@ -1720,96 +1732,6 @@ static int vmx_handle_ept_violation(lcd_struct *vcpu) {
   }
 
   return ret;
-}
-
-// Obsoleted, use lcd_run instead.
-int vmx_launch(int64_t *ret_code) {
-  int ret, done = 0;
-  lcd_struct *vcpu = vmx_create_vcpu();
-  if (!vcpu)
-    return -ENOMEM;
-
-  printk(KERN_ERR "vmx: created VCPU (VPID %d)\n",
-         vcpu->vpid);
-
-  while (1) {
-    vmx_get_cpu(vcpu);
-
-#if 0
-    /* TODO: fix this.
-     * We assume that a Dune process will always use
-     * the FPU whenever it is entered, and thus we go
-     * ahead and load FPU state here. The reason is
-     * that we don't monitor or trap FPU usage inside
-     * a Dune process.
-     */
-    if (!__thread_has_fpu(current))
-      math_state_restore();
-#endif
-    
-    local_irq_disable();
-
-    if (need_resched()) {
-      local_irq_enable();
-      vmx_put_cpu(vcpu);
-      cond_resched();
-      continue;
-    }
-
-    ret = vmx_run_vcpu(vcpu);
-
-    local_irq_enable();
-
-    if (ret == EXIT_REASON_VMCALL ||
-        ret == EXIT_REASON_CPUID) {
-      vmx_step_instruction();
-    }
-
-    vmx_put_cpu(vcpu);
-
-    if (ret == EXIT_REASON_EPT_VIOLATION) {
-      done = vmx_handle_ept_violation(vcpu);
-    } else {
-      u64 eq = vmcs_readl(EXIT_QUALIFICATION);
-      if (ret == EXIT_REASON_EXTERNAL_INTERRUPT ||
-          ret == EXIT_REASON_EXCEPTION_NMI) {
-        u32 intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
-        printk(KERN_INFO "exception: exit reason %d: %s, intr info %x,"
-               " vector %u, vetoring info %x, error code %x\n",
-               ret, lcd_exit_reason(ret),
-               intr_info, intr_info&INTR_INFO_VECTOR_MASK,
-               vmcs_read32(IDT_VECTORING_INFO_FIELD),
-               vmcs_read32(IDT_VECTORING_ERROR_CODE));
-        if (is_page_fault(intr_info)) {
-          printk(KERN_INFO "got page fault gva: %p %p\n",
-                 (void*)vcpu->cr2, (void*)eq);
-        }
-      } else {
-        printk(KERN_INFO "unhandled exit: reason %d: %s, "
-               "exit qualification %lx\n",
-               ret, lcd_exit_reason(ret), (unsigned long)eq);
-      }
-
-      vmx_dump_cpu(vcpu);
-      done = 1;
-    }
-
-    if (done || vcpu->shutdown)
-      break;
-  }
-
-  printk(KERN_ERR "vmx: destroying VCPU (VPID %d)\n",
-         vcpu->vpid);
-
-  {
-    u32* ptr = (u32*)((u8*)vcpu->pt + 0xfe0);
-    printk(KERN_INFO "LCD: verify data 0x%x\n", *ptr);
-  }
-
-  *ret_code = vcpu->ret_code;
-  vmx_destroy_vcpu(vcpu);
-
-  return 0;
 }
 
 static int __vmx_enable(struct vmcs *vmxon_buf) {
@@ -1956,37 +1878,6 @@ void vmx_exit(void)
   free_page((unsigned long)msr_bitmap);
 }
 
-static struct task_struct *test_thread;
-
-static int lcd_test(void) {
-  int ret;
-  lcd_struct *lcd;
-
-  printk("LCD: start launching vmx\n");
-  /* ret = vmx_launch(&ret_code); */
-  g_prepare_start = get_cycles();
-  lcd = lcd_create();
-  if (!lcd)
-    return -ENOMEM;
-  /* printk("LCD: create lcd VPID %d\n", lcd->vpid); */
-  ret = lcd_run(lcd);
-  if (ret) {
-    printk(KERN_ERR "LCD: launch failure %d\n", ret);
-  } else {
-    printk(KERN_INFO "LCD: launch OK\n");
-  }
-
-  printk(KERN_INFO "LCD: prepare time %llu, ret code: %d\n",
-         g_prepare_time, lcd->ret_code);
-  lcd_destroy(lcd);
-  return ret;
-}
-
-static int lcd_thread(void* d) {
-  int ret = lcd_test();
-  do_exit(ret);
-  return 0; // avoid compiler warning
-}
 
 lcd_struct* lcd_create(void) {
   lcd_struct* lcd = vmx_create_vcpu();
@@ -2335,7 +2226,7 @@ int lcd_run(lcd_struct *lcd) {
              "exit qualification %llx, intr_info %x\n",
              ret, lcd_exit_reason(ret), lcd->exit_qualification,
              lcd->exit_intr_info);
-      vmx_dump_cpu(lcd);
+      /* vmx_dump_cpu(lcd); */
       break;
     }
   }
@@ -2348,6 +2239,46 @@ int lcd_run(lcd_struct *lcd) {
 EXPORT_SYMBOL(lcd_run);
 
 
+int setup_vmlinux(lcd_struct *lcd) {
+  int ret;
+  u64 elf_entry;
+
+  struct boot_params *bp = lcd->bp;
+
+  ret = lcd_load_vmlinux(vmlinux_file, lcd, &elf_entry);
+  if (!ret) {
+    printk(KERN_ERR "Error when loading vmlinux %d\n", ret);
+    goto err_out;
+  }
+
+  bp->e820_entries = 2;
+  
+  bp->e820_map[0].addr = 0;
+  bp->e820_map[0].size = 0x9fc00;
+  bp->e820_map[0].type = E820_RAM;
+
+  bp->e820_map[0].addr = 0x9fc00;
+  bp->e820_map[0].size = 0x400;
+  bp->e820_map[0].type = E820_RESERVED;
+
+  bp->e820_map[0].addr = 0xe8000;
+  bp->e820_map[0].size = 0x18000;
+  bp->e820_map[0].type = E820_RESERVED;
+
+  bp->e820_map[0].addr = 0x100000;
+  bp->e820_map[0].size = (LCD_PHY_MEM_SIZE - 0x100000);
+  bp->e820_map[0].type = E820_RAM;
+
+  bp->e820_map[1].addr = LCD_PHY_MEM_SIZE;
+  bp->e820_map[1].size = LCD_PHY_MEM_LIMIT - LCD_PHY_MEM_SIZE;
+  bp->e820_map[1].type = E820_RESERVED_KERN;
+
+  // TODO: setup correct boot_params
+
+
+err_out:
+  return ret;
+}
 
 static int __init lcd_init(void) {
   int r;
@@ -2355,14 +2286,7 @@ static int __init lcd_init(void) {
   if ((r = vmx_init())) {
     printk(KERN_ERR "LCD: failed to init VMX\n");
   } else {
-    ;
-    /* r = lcd_test(); */
-    /*
-    test_thread = kthread_create(&lcd_thread, NULL, "LCD");
-    if (!test_thread) {
-      printk(KERN_ERR "LCD: test thread failed to create\n");
-    }
-    */
+    ;//    r = lcd_test();
   } 
 
   return r;
