@@ -85,6 +85,10 @@ GTAGS
 *.orig
 *~
 \#*#
+*.vpw
+*.vpj
+*.vtg
+*.vpwhistu
 
 #
 # Leavings from module signing

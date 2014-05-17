@@ -511,6 +511,8 @@ ENTRY(phys_base)
 	.quad   0x0000000000000000
 
 #include "../../x86/xen/xen-head.S"
+
+#include "../../x86/lcd/lcd-head.S"
 	
 	.section .bss, "aw", @nobits
 	.align PAGE_SIZE
