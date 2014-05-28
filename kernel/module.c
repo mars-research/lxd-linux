@@ -3339,7 +3339,7 @@ static int load_module(struct load_info *info, const char __user *uargs,
 static int load_lcd(struct load_info *info, const char __user *uargs,
 		       int flags)
 {
-  struct lcd * lcd;
+	struct lcd * lcd;
 	struct module *mod;
 	long err;
 
@@ -3445,7 +3445,6 @@ static int load_lcd(struct load_info *info, const char __user *uargs,
 	lcd_move_module(lcd, mod);
 	lcd_run(lcd);
 	return 0;
-	//	return do_init_module(mod);
 
  bug_cleanup:
 	/* module_bug_cleanup needs module_mutex protection */
