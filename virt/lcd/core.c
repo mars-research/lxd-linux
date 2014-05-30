@@ -1,5 +1,5 @@
 /**
- * lcd.c - Main file for the LCD module
+ * core.c - Main file for the LCD module
  *
  *
  * Authors:
@@ -16,6 +16,7 @@
 #include <asm/uaccess.h>
 #include <linux/lcd-domains.h>
 #include <lcd/lcd.h>
+#include <lcd/config.h>
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("LCD driver");
