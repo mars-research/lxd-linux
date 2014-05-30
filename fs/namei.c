@@ -126,6 +126,7 @@ void final_putname(struct filename *name)
 		__putname(name);
 	}
 }
+EXPORT_SYMBOL(final_putname);
 
 #define EMBEDDED_NAME_MAX	(PATH_MAX - sizeof(struct filename))
 
@@ -218,6 +219,7 @@ void putname(struct filename *name)
 		return audit_putname(name);
 	final_putname(name);
 }
+EXPORT_SYMBOL(putname);
 #endif
 
 static int check_acl(struct inode *inode, int mask)
