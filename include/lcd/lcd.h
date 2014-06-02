@@ -109,10 +109,29 @@ int lcd_find_hva_by_gpa(struct lcd *lcd, u64 gpa, u64 *hva);
 int lcd_run(struct lcd *lcd);
 const char* lcd_exit_reason(int exit_code);
 
-/* Functions to support finer grained executable code piece in LCD */
+/*
+ * Functions to support finer grained executable code piece in LCD.
+ * XXX: I am waiting for the ''capability'' object type to define the
+ *      following functions. Basically, memory and functions should
+ *      be capability objects rather than raw pointers.
+ */
+
+/* Flags to indicate the memory requirements of a move */
+/* Preserve same physical address in and out of LCD */
+#define LCD_MOVE_SAME_PA  0x1
+/* Preserve same virtual address in and out of LCD */
+#define LCD_MOVE_SAME_VA  0x2
+/* Strictly identical memory mapping inside and outside of LCD */
+#define LCD_MOVE_SAME_PVA LCD_MOVE_SAME_PA | LCD_MOVE_SAME_VA
+
 /* Move a piece of memory into LCD. It can be as small as a function. */
-int lcd_move_mem(struct lcd *lcd, void *mem_start, u64 mem_size);
-/* Call a function inside LCD from outside, return value in rax */
-int lcd_invoke_function(struct lcd *lcd, void *func_ptr, u64 *rax);
+void* lcd_move_mem(struct lcd *lcd, void *mem_start, u64 mem_size, u32 flags);
+/*
+ * Call a function inside LCD from outside.
+ * Notes: This is assumed to be an IPC call.
+ *        Wrappers should be implemented to pass the arguments and to
+ *        save the return value.
+ */
+int lcd_invoke_function(struct lcd *lcd, void *func_ptr);
 
 #endif /* LCD_LCD_H */

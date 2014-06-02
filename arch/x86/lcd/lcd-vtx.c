@@ -2281,4 +2281,78 @@ err_out:
 	return ret;
 }
 
+/*
+ * Memory requirement:
+ *  mem_start must be PAGE_SIZE aligned.
+ *  [mem_start, mem_start+mem_size) intersects [VMALLOC_START, VMALLOC_END]
+ *    == \emptyset or [mem_start, mem_start+mem_size)
+ *
+ * Return: virtual address of the moved memory inside LCD.
+ */
+void* lcd_move_mem(struct lcd *lcd, void *mem_start, u64 mem_size, u32 flags)
+{
+	void *pa, *va;
+	int vmalloced;
+	u64 mapped;
+	int ret;
+
+	vmalloced = (u64)mem_start >= VMALLOC_START &&
+		(u64)mem_start + mem_size <= VMALLOC_END ? 1:0;
+	mapped = 0;
+	va = mem_start;
+	while (mapped < mem_size) {
+		ret = lcd_va_to_pa(va, &pa, vmalloced);
+		if (ret != 0) {
+			return NULL;
+		}
+
+		if (flags & LCD_MOVE_SAME_PA) {
+			ret = lcd_map_gpa_to_hpa(lcd, (u64)pa, (u64)pa, 0);
+			if (ret != 0) {
+				printk(KERN_ERR
+				       "lcd: move PA mapping conflicts\n");
+				return NULL;
+			}
+		} else {
+			/* TODO: in-LCD PA space allocator */
+			printk(KERN_ERR "lcd: identical PA mapping only now\n");
+			return NULL;
+		}
+
+		if (flags & LCD_MOVE_SAME_VA) {
+			ret = lcd_map_gva_to_gpa(lcd, (u64)va, (u64)pa, 1, 0);
+			if (ret != 0) {
+				printk(KERN_ERR
+				       "lcd: move PT mapping confilcts\n");
+				return NULL;
+			}
+		} else {
+			/* TODO: in-LCD VA space allocator */
+			printk(KERN_ERR "lcd: identical VA mapping only now\n");
+			return NULL;
+		}
+		mapped += PAGE_SIZE;
+		va += PAGE_SIZE;
+	}
+
+	/* At this time, all mappings are identical. */
+	return mem_start;	
+}
+EXPORT_SYMBOL(lcd_move_mem);
+
+int lcd_invoke_function(struct lcd *lcd, void *func_ptr)
+{
+	/*
+	 * TODO: a special memory area as return address of the called function.
+	 * Some thoughts:
+	 *      - how to modify the stack to set return address? (where?)
+	 *      - how to make sure current LCD is not in the middle of a
+	 *        function call?
+	 *      - the special memory area inside does vmexit directly?
+	 */
+	return 0;
+	
+}
+EXPORT_SYMBOL(lcd_invoke_function);
+
 
