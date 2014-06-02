@@ -15,7 +15,7 @@
 #include <linux/fs.h>
 #include <asm/uaccess.h>
 #include <linux/lcd-domains.h>
-#include <lcd/lcd.h>
+#include <asm/lcd-vmx.h>
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("LCD driver");
