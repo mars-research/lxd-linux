@@ -1,1 +1,1 @@
-obj-y                     += ping-pong/
+#obj-y                     += ping-pong/
