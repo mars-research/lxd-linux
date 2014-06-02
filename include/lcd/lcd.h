@@ -109,4 +109,10 @@ int lcd_find_hva_by_gpa(struct lcd *lcd, u64 gpa, u64 *hva);
 int lcd_run(struct lcd *lcd);
 const char* lcd_exit_reason(int exit_code);
 
+/* Functions to support finer grained executable code piece in LCD */
+/* Move a piece of memory into LCD. It can be as small as a function. */
+int lcd_move_mem(struct lcd *lcd, void *mem_start, u64 mem_size);
+/* Call a function inside LCD from outside, return value in rax */
+int lcd_invoke_function(struct lcd *lcd, void *func_ptr, u64 *rax);
+
 #endif /* LCD_LCD_H */
