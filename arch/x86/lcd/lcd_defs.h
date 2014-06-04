@@ -2,6 +2,12 @@
 #define LCD_LCD_DEFS_H
 
 #include <linux/bitmap.h>
+#include <uapi/asm/bootparam.h>
+#include <xen/interface/xen.h>
+#include <asm/vmx.h>
+#include <lcd/ipc.h>
+#include <lcd/lcd.h>
+
 
 #if !defined(VMX_EPT_AD_BIT)
 #define VMX_EPT_AD_BIT          (1ull << 21)
@@ -70,11 +76,11 @@ typedef unsigned long epte_t;
 #define __EPTE_TYPE(n) (((n) & 0x7) << 3)
 
 enum {
-  EPTE_TYPE_UC = 0, /* uncachable */
-  EPTE_TYPE_WC = 1, /* write combining */
-  EPTE_TYPE_WT = 4, /* write through */
-  EPTE_TYPE_WP = 5, /* write protected */
-  EPTE_TYPE_WB = 6, /* write back */
+	EPTE_TYPE_UC = 0, /* uncachable */
+	EPTE_TYPE_WC = 1, /* write combining */
+	EPTE_TYPE_WT = 4, /* write through */
+	EPTE_TYPE_WP = 5, /* write protected */
+	EPTE_TYPE_WB = 6, /* write back */
 };
 
 #define __EPTE_NONE 0
@@ -83,142 +89,78 @@ enum {
 #define EPTE_ADDR  (~(PAGE_SIZE - 1))
 #define EPTE_FLAGS (PAGE_SIZE - 1)
 
-#define ADDR_TO_IDX(la, n)                                      \
-  ((((unsigned long) (la)) >> (12 + 9 * (n))) & ((1 << 9) - 1))
+#define ADDR_TO_IDX(la, n)						\
+	((((unsigned long) (la)) >> (12 + 9 * (n))) & ((1 << 9) - 1))
 
 
 /* VMCS related */
 
 struct vmcs_config {
-  int size;
-  int order;
-  u32 revision_id;
-  u32 pin_based_exec_ctrl;
-  u32 cpu_based_exec_ctrl;
-  u32 cpu_based_2nd_exec_ctrl;
-  u32 vmexit_ctrl;
-  u32 vmentry_ctrl;
+	int size;
+	int order;
+	u32 revision_id;
+	u32 pin_based_exec_ctrl;
+	u32 cpu_based_exec_ctrl;
+	u32 cpu_based_2nd_exec_ctrl;
+	u32 vmexit_ctrl;
+	u32 vmentry_ctrl;
 };
 
 struct vmcs {
-  u32 revision_id;
-  u32 abort;
-  char data[0];
+	u32 revision_id;
+	u32 abort;
+	char data[0];
 };
 
 struct vmx_capability {
-  u32 ept;
-  u32 vpid;
-  int has_load_efer:1;
+	u32 ept;
+	u32 vpid;
+	int has_load_efer:1;
 };
 
 extern struct vmx_capability vmx_capability;
 extern struct vmcs_config vmcs_config;
 
-#define NR_AUTOLOAD_MSRS 8
-
-enum vmx_reg {
-  VCPU_REGS_RAX = 0,
-  VCPU_REGS_RCX = 1,
-  VCPU_REGS_RDX = 2,
-  VCPU_REGS_RBX = 3,
-  VCPU_REGS_RSP = 4,
-  VCPU_REGS_RBP = 5,
-  VCPU_REGS_RSI = 6,
-  VCPU_REGS_RDI = 7,
-  VCPU_REGS_R8 = 8,
-  VCPU_REGS_R9 = 9,
-  VCPU_REGS_R10 = 10,
-  VCPU_REGS_R11 = 11,
-  VCPU_REGS_R12 = 12,
-  VCPU_REGS_R13 = 13,
-  VCPU_REGS_R14 = 14,
-  VCPU_REGS_R15 = 15,
-  VCPU_REGS_RIP,
-  NR_VCPU_REGS
-};
 
 struct lcd_tss_struct {
-  struct x86_hw_tss tss;
-  u8 io_bitmap[1];
+	struct x86_hw_tss tss;
+	u8 io_bitmap[1];
 } __attribute__((packed));
 
-typedef struct {
-  int cpu;
-  int vpid;
-  int launched;
+struct ipc_waitq {
+	u32 partner_id;
+	struct list_head list;
+};
 
-  spinlock_t ept_lock;
-  unsigned long ept_root;
-  unsigned long eptp;
-  bool ept_ad_enabled;
-
-  pgd_t* pt;
-  unsigned long pt_gpa;
-
-  unsigned long *bmp_pt_pages;
-
-  /* GDT_ENTRIES * desc_struct */
-  struct desc_struct* gdt;
-  /* IDT_ENTRIES * gate_desc */
-  gate_desc* idt;
-  struct lcd_tss_struct* tss;
-
-  unsigned long isr_page;
-
-  unsigned long host_idt_base;
-
-  u8  fail;
-  u64 exit_reason;
-  u64 exit_qualification;
-  u32 idt_vectoring_info;
-  u32 exit_intr_info;
-  u32 error_code;
-  u32 vec_no;
-  u64 host_rsp;
-  u64 regs[NR_VCPU_REGS];
-  u64 cr2;
-
-  int shutdown;
-  int ret_code;
-
-  struct msr_autoload {
-    unsigned nr;
-    struct vmx_msr_entry guest[NR_AUTOLOAD_MSRS];
-    struct vmx_msr_entry host[NR_AUTOLOAD_MSRS];
-  } msr_autoload;
-
-  struct vmcs *vmcs;
-  
-  struct module *mod;
-} lcd_struct;
 
 
 /* Memory layout */
 // Range format: [begin, end)
-// 0x0000 0000 0000 0000 ~ 0x0000 0000 0100 0000 : 16MB : hole (Avoid possible MMIO)
-// 0x0000 0000 0100 0000 ~ 0x0000 0000 0500 0000 : 64MB : Page table structures
+// 0x0000 0000 0000 0000 ~ 0x0000 0000 4000 0000 : 1GB  : Physical Mem
+// 4K gap
+// 0x0000 0000 4000 1000 ~ 0x0000 0000 4040 1000 : 4MB : Page table structures
+// 0x0000 0000 4040 1000 ~ 0x0000 0000 4040 2000 : 4KB  : GDT
+// 0x0000 0000 4040 2000 ~ 0x0000 0000 4040 3000 : 4KB  : IDT
+// 0x0000 0000 4040 3000 ~ 0x0000 0000 4040 4000 : 4KB  : TSS page (sizeof(lcd_tss_struct))
 // 4K page gap as memory guard
-// 0x0000 0000 0500 1000 ~ 0x0000 0000 0500 2000 : 4KB  : GDT
-// 0x0000 0000 0500 2000 ~ 0x0000 0000 0500 3000 : 4KB  : IDT
-// 0x0000 0000 0500 3000 ~ 0x0000 0000 0500 4000 : 4KB  : TSS page (sizeof(lcd_tss_struct))
-// 4K page gap as memory guard
-// 0x0000 0000 0500 5000 ~ 0x0000 0000 0500 6000 : 4KB  : Common ISR code page
+// 0x0000 0000 4040 5000 ~ 0x0000 0000 4040 6000 : 4KB  : Common ISR code page
 // 4K memory guard
-// 0x0000 0000 0500 7000 ~ 0x0000 0000 0500 F000 : 32KB : stack
+// 0x0000 0000 4040 7000 ~ 0x0000 0000 4040 F000 : 32KB : stack
 // 4K memory guard
-// 0x0000 0000 0501 0000 ~ 0x0000 0000 0511 0000 : 1MB  : 256 ISRs, 4KB code page per ISR
-// 4K memory guard
-// 0x0000 0000 0511 1000 ~ Memory limit          : Code/data (start from 81MB+68KB)
-//
-// Todo:
-//   Heap start; Heap end.
+// 0x0000 0000 4041 0000 ~ 0x0000 0000 4051 0000 : 1MB  : 256 ISRs, 4KB code page per ISR
 
-#define LCD_NR_PT_PAGES    (1 << 14)       /* #pages for page table */
-#define LCD_PT_PAGES_START (0x1ULL << 24)  /* above 16MB */
+
+
+// Bootup structure:
+#define LCD_PHY_MEM_SIZE (1 << 30)  /* 1GB physical mem */
+
+#define LCD_BOOT_PARAMS_ADDR (1 << 20)
+
+#define LCD_NR_PT_PAGES    (1 << 10)       /* #pages for page table */
+#define LCD_PT_PAGES_START (LCD_PHY_MEM_SIZE + PAGE_SIZE) /* 1GB + 4KB */
 #define LCD_PT_PAGES_END   (LCD_PT_PAGES_START + (LCD_NR_PT_PAGES << PAGE_SHIFT))
 
-#define LCD_GDT_ADDR (LCD_PT_PAGES_END + PAGE_SIZE)  /* start from 80MB + 4KB */
+#define LCD_GDT_ADDR (LCD_PT_PAGES_END)  /* start from 1G + 4M + 4K */
 #define LCD_IDT_ADDR (LCD_GDT_ADDR + PAGE_SIZE)
 #define LCD_TSS_ADDR (LCD_IDT_ADDR + PAGE_SIZE)
 #define LCD_TSS_SIZE (sizeof(struct lcd_tss_struct))
@@ -236,23 +178,18 @@ typedef struct {
 #define LCD_ISR_END      (LCD_ISR_START + LCD_NR_ISRS*PAGE_SIZE)
 #define LCD_ISR_ADDR(n)  (LCD_ISR_START + (n)*PAGE_SIZE)
 
+#define LCD_PHY_MEM_LIMIT LCD_ISR_END
+
 #define LCD_FREE_MEM_START (LCD_ISR_END + PAGE_SIZE)
 #define LCD_TEST_CODE_ADDR LCD_FREE_MEM_START
 
-/* Exported functions */
-lcd_struct* lcd_create(void);
-int lcd_destroy(lcd_struct *lcd);
+//static int load_lcd(struct load_info * info, const char __user *uargs, int flags);
 
-int lcd_move_module(lcd_struct *lcd, struct module *mod);
-
-int lcd_map_gpa_to_hpa(lcd_struct *lcd, u64 gpa, u64 hpa, int overwrite);
-int lcd_map_gva_to_gpa(lcd_struct *lcd, u64 gva, u64 gpa, int create, int overwrite);
-int lcd_find_hva_by_gpa(lcd_struct *lcd, u64 gpa, u64 *hva);
-
-int lcd_run(lcd_struct *lcd);
-const char* lcd_exit_reason(int exit_code);
 
 // Inside LCD:
 int lcd_read_mod_file(const char* filepath, void** content, long* size);
+
+
+
 
 #endif

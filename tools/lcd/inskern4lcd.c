@@ -28,6 +28,8 @@
 #include <unistd.h>
 #include <errno.h>
 #include <asm/unistd.h>
+#include <sys/ioctl.h>
+#include <linux/lcd.h>
 
 extern long init_module(void *, unsigned long, const char *);
 
@@ -113,9 +115,12 @@ int main(int argc, char *argv[])
 	unsigned int i;
 	long int ret;
 	unsigned long len;
+	int fd;
 	void *file;
 	char *filename, *options = strdup("");
 	char *p, *progname = argv[0];
+	struct lcd_pv_kernel_config conf;
+
 
 	if (!options) {
 		fprintf(stderr,
@@ -164,7 +169,14 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	ret = init_module(file, len, options);
+	fd = open("/dev/lcd", 0);
+	if (fd < 0) {
+		printf("Can't open device file: %s\n", "/dev/lcd");
+		exit(-1);
+	}
+
+	conf.file = filename;
+	ret = ioctl(fd, LCD_LOAD_PV_KERNEL, &conf);
 	if (ret != 0) {
 		fprintf(stderr, "insmod: error inserting '%s': %li %s\n",
 			filename, ret, moderror(errno));

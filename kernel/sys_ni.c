@@ -209,3 +209,7 @@ cond_syscall(compat_sys_open_by_handle_at);
 
 /* compare kernel pointers */
 cond_syscall(sys_kcmp);
+
+/* LCD */
+cond_syscall(sys_init_lcd);
+
