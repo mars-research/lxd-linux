@@ -1,3 +1,6 @@
+#ifndef LCD_DOMAINS_H
+#define LCD_DOMAINS_H
+
 /*
  * lcd.h - public header for LCD support
  */
@@ -18,3 +21,4 @@ struct lcd_pv_kernel_config {
 	__u64 length;
 } __attribute__((packed));
 
+#endif /* LCD_DOMAINS_H */
