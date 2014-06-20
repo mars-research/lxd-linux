@@ -259,6 +259,7 @@ static int test04(void)
 	return 0;
 
 fail_map:
+
 	/*
 	 * can't use regular free ept since the hpa's were bogus
 	 */
