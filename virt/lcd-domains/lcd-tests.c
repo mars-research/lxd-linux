@@ -104,6 +104,7 @@ static int test03(void)
 	int ret;
 	u64 base;
 	u64 off;
+	u64 actual;
 
 	ret = lcd_create(&lcd);
 	if (ret) {
