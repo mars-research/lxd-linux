@@ -57,7 +57,9 @@ int strnicmp(const char *s1, const char *s2, size_t len)
 	return (int)c1 - (int)c2;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strnicmp);
+#endif
 #endif
 #endif
 
@@ -73,7 +75,9 @@ int strcasecmp(const char *s1, const char *s2)
 	return c1 - c2;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strcasecmp);
+#endif
 #endif
 #endif
 
@@ -89,7 +93,9 @@ int strncasecmp(const char *s1, const char *s2, size_t n)
 	return c1 - c2;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strncasecmp);
+#endif
 #endif
 #endif
 
@@ -109,7 +115,9 @@ char *strcpy(char *dest, const char *src)
 	return tmp;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strcpy);
+#endif
 #endif
 #endif
 
@@ -140,7 +148,9 @@ char *strncpy(char *dest, const char *src, size_t count)
 	return dest;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strncpy);
+#endif
 #endif
 #endif
 
@@ -168,7 +178,9 @@ size_t strlcpy(char *dest, const char *src, size_t size)
 	return ret;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strlcpy);
+#endif
 #endif
 #endif
 
@@ -190,7 +202,9 @@ char *strcat(char *dest, const char *src)
 	return tmp;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strcat);
+#endif
 #endif
 #endif
 
@@ -221,7 +235,9 @@ char *strncat(char *dest, const char *src, size_t count)
 	return tmp;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strncat);
+#endif
 #endif
 #endif
 
@@ -250,7 +266,9 @@ size_t strlcat(char *dest, const char *src, size_t count)
 	return res;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strlcat);
+#endif
 #endif
 #endif
 
@@ -276,7 +294,9 @@ int strcmp(const char *cs, const char *ct)
 	return 0;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strcmp);
+#endif
 #endif
 #endif
 
@@ -303,7 +323,9 @@ int strncmp(const char *cs, const char *ct, size_t count)
 	return 0;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strncmp);
+#endif
 #endif
 #endif
 
@@ -321,7 +343,9 @@ char *strchr(const char *s, int c)
 	return (char *)s;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strchr);
+#endif
 #endif
 #endif
 
@@ -341,7 +365,9 @@ char *strrchr(const char *s, int c)
        return NULL;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strrchr);
+#endif
 #endif
 #endif
 
@@ -360,7 +386,9 @@ char *strnchr(const char *s, size_t count, int c)
 	return NULL;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strnchr);
+#endif
 #endif
 #endif
 
@@ -377,7 +405,9 @@ char *skip_spaces(const char *str)
 	return (char *)str;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(skip_spaces);
+#endif
 #endif
 
 /**
@@ -405,7 +435,9 @@ char *strim(char *s)
 	return skip_spaces(s);
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strim);
+#endif
 #endif
 
 #ifndef __HAVE_ARCH_STRLEN
@@ -422,7 +454,9 @@ size_t strlen(const char *s)
 	return sc - s;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strlen);
+#endif
 #endif
 #endif
 
@@ -441,7 +475,9 @@ size_t strnlen(const char *s, size_t count)
 	return sc - s;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strnlen);
+#endif
 #endif
 #endif
 
@@ -469,7 +505,9 @@ size_t strspn(const char *s, const char *accept)
 	return count;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strspn);
+#endif
 #endif
 #endif
 
@@ -495,7 +533,9 @@ size_t strcspn(const char *s, const char *reject)
 	return count;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strcspn);
+#endif
 #endif
 #endif
 
@@ -518,7 +558,9 @@ char *strpbrk(const char *cs, const char *ct)
 	return NULL;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strpbrk);
+#endif
 #endif
 #endif
 
@@ -549,7 +591,9 @@ char *strsep(char **s, const char *ct)
 	return sbegin;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strsep);
+#endif
 #endif
 #endif
 
@@ -579,7 +623,9 @@ bool sysfs_streq(const char *s1, const char *s2)
 	return false;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(sysfs_streq);
+#endif
 #endif
 
 /**
@@ -610,7 +656,9 @@ int strtobool(const char *s, bool *res)
 	return 0;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strtobool);
+#endif
 #endif
 
 #ifndef __HAVE_ARCH_MEMSET
@@ -631,7 +679,9 @@ void *memset(void *s, int c, size_t count)
 	return s;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(memset);
+#endif
 #endif
 #endif
 
@@ -656,7 +706,9 @@ void *memcpy(void *dest, const void *src, size_t count)
 	return dest;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(memcpy);
+#endif
 #endif
 #endif
 
@@ -690,7 +742,9 @@ void *memmove(void *dest, const void *src, size_t count)
 	return dest;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(memmove);
+#endif
 #endif
 #endif
 
@@ -713,7 +767,9 @@ int memcmp(const void *cs, const void *ct, size_t count)
 	return res;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(memcmp);
+#endif
 #endif
 #endif
 
@@ -740,7 +796,9 @@ void *memscan(void *addr, int c, size_t size)
   	return (void *)p;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(memscan);
+#endif
 #endif
 #endif
 
@@ -767,7 +825,9 @@ char *strstr(const char *s1, const char *s2)
 	return NULL;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strstr);
+#endif
 #endif
 #endif
 
@@ -794,7 +854,9 @@ char *strnstr(const char *s1, const char *s2, size_t len)
 	return NULL;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(strnstr);
+#endif
 #endif
 #endif
 
@@ -819,7 +881,9 @@ void *memchr(const void *s, int c, size_t n)
 	return NULL;
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(memchr);
+#endif
 #endif
 #endif
 
@@ -888,5 +952,7 @@ void *memchr_inv(const void *start, int c, size_t bytes)
 	return check_bytes8(start, value, bytes % 8);
 }
 #ifndef LCD_BUILD
+#ifndef LCD_BUILD
 EXPORT_SYMBOL(memchr_inv);
+#endif
 #endif
