@@ -14,12 +14,13 @@
 #include <linux/compat.h>
 #include <linux/fs.h>
 #include <asm/uaccess.h>
+
 #include <lcd/lcd.h>
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("LCD driver");
 
-static long lcd_dev_ioctl(struct file *filp,
+static long lcd_dev_ioctl(struct file *filp ,
 			  unsigned int ioctl, unsigned long arg)
 {
 	long r = -EINVAL;
@@ -65,6 +66,7 @@ static long lcd_dev_ioctl(struct file *filp,
 out:
 	return r;
 }
+
 
 static const struct file_operations lcd_chardev_ops = {
 	.owner		= THIS_MODULE,

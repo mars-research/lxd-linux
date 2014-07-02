@@ -53,6 +53,10 @@ struct sched_param {
 #include <linux/uidgid.h>
 #include <linux/gfp.h>
 
+#ifdef CONFIG_LCD
+#include <lcd/cap.h>
+#endif
+
 #include <asm/processor.h>
 
 struct exec_domain;
@@ -1037,7 +1041,9 @@ struct task_struct {
 	atomic_t usage;
 	unsigned int flags;	/* per process flags, defined below */
 	unsigned int ptrace;
-    void *cspace;
+#ifdef CONFIG_LCD
+	struct cap_space cspace;
+#endif
 #ifdef CONFIG_SMP
 	struct llist_node wake_entry;
 	int on_cpu;
