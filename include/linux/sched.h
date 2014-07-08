@@ -55,6 +55,7 @@ struct sched_param {
 
 #ifdef CONFIG_LCD
 #include <lcd/cap.h>
+#include <lcd/ipc.h>
 #endif
 
 #include <asm/processor.h>
@@ -1043,6 +1044,8 @@ struct task_struct {
 	unsigned int ptrace;
 #ifdef CONFIG_LCD
 	struct cap_space cspace;
+	struct list_head sync_rendezvous;
+	struct utcb *utcb;
 #endif
 #ifdef CONFIG_SMP
 	struct llist_node wake_entry;

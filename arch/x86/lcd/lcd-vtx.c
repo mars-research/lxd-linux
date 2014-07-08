@@ -1510,14 +1510,6 @@ static struct lcd * vmx_create_vcpu(void) {
 	setup_idt(vcpu);
 	vmx_put_cpu(vcpu);
 
-	//IPC queues 
-	INIT_LIST_HEAD(&vcpu->sync_ipc.snd_q);
-	vcpu->sync_ipc.task = current;
-	vcpu->sync_ipc.state = IPC_DONT_CARE;
-	vcpu->sync_ipc.expected_sender = 0;
-	vcpu->sync_ipc.my_capid =  set_cap(vcpu);
-	// printk(KERN_ERR "=========%d======\n", vcpu->sync_ipc.my_capid);
-
 
 	return vcpu;
 
@@ -2092,19 +2084,19 @@ static void vmx_handle_vmcall(struct lcd *lcd) {
     
 	//printk(KERN_ERR "%c", lcd->regs[VCPU_REGS_RAX]);
 	printk(KERN_ERR "%016llx", lcd->regs[VCPU_REGS_RAX]);
-	ipc_dir = LCD_IPC_DIR(lcd->regs[VCPU_REGS_RAX]);
-	ipc_peer = LCD_IPC_PEER(lcd->regs[VCPU_REGS_RAX]);
+	//ipc_dir = LCD_IPC_DIR(lcd->regs[VCPU_REGS_RAX]);
+	//ipc_peer = LCD_IPC_PEER(lcd->regs[VCPU_REGS_RAX]);
 
 	printk(KERN_ERR "vmx_handle_vmcall  - dir %d peer %d\n", ipc_dir, ipc_peer);
 
-	switch(ipc_dir) {
-	case IPC_SEND:
-		ipc_send(lcd->sync_ipc.my_capid, ipc_peer);
-		break;
-	case IPC_RECV:
-		ipc_recv(lcd->sync_ipc.my_capid, ipc_peer);
-		break;
-	}
+	//switch(ipc_dir) {
+	//case IPC_SEND:
+	//	ipc_send(lcd->sync_ipc.my_capid, ipc_peer);
+	//	break;
+	//case IPC_RECV:
+	//	ipc_recv(lcd->sync_ipc.my_capid, ipc_peer);
+	//	break;
+	//}
 #if 0
 	//printk(KERN_ERR "lcd_run: got vmcall %llu and %c\n", lcd->regs[VCPU_REGS_RAX], lcd->regs[VCPU_REGS_RAX]);
 	if (lcd->regs[VCPU_REGS_RAX] == 0xdeadbeef) {
