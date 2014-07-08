@@ -90,7 +90,7 @@ static int test03(void)
 	}		
 
 	free_page((u64)__va(hpa));
-	lcd_arch_ept_unmap_range(lcd, gpa, 1);
+	lcd_arch_ept_unmap_range(lcd->lcd_arch, gpa, 1);
 
 	lcd_destroy(lcd);
 
@@ -98,7 +98,7 @@ static int test03(void)
 
 fail4:
 	free_page((u64)__va(hpa));
-	lcd_arch_ept_unmap_range(lcd, gpa, 1);
+	lcd_arch_ept_unmap_range(lcd->lcd_arch, gpa, 1);
 fail3:
 fail2:
 	lcd_destroy(lcd);
@@ -167,7 +167,7 @@ static int test04(void)
 	}
 
 	free_page((u64)__va(hpa));
-	lcd_arch_ept_unmap_range(lcd, gpa, 1);
+	lcd_arch_ept_unmap_range(lcd->lcd_arch, gpa, 1);
 	kfree(pmd_entry);
 
 	lcd_destroy(lcd);
@@ -179,7 +179,7 @@ fail5:
 	kfree(pmd_entry);
 fail4:
 	free_page((u64)__va(hpa));
-	lcd_arch_ept_unmap_range(lcd, gpa, 1);
+	lcd_arch_ept_unmap_range(lcd->lcd_arch, gpa, 1);
 fail3:
 fail2:
 	lcd_destroy(lcd);
@@ -250,7 +250,7 @@ static int test05(void)
 	}
 
 	free_page((u64)__va(hpa));
-	lcd_arch_ept_unmap_range(lcd, gpa, 1);
+	lcd_arch_ept_unmap_range(lcd->lcd_arch, gpa, 1);
 	kfree(pud_entry);
 
 	lcd_destroy(lcd);
@@ -262,7 +262,7 @@ fail5:
 	kfree(pud_entry);
 fail4:
 	free_page((u64)__va(hpa));
-	lcd_arch_ept_unmap_range(lcd, gpa, 1);
+	lcd_arch_ept_unmap_range(lcd->lcd_arch, gpa, 1);
 fail3:
 fail2:
 	lcd_destroy(lcd);
@@ -333,7 +333,7 @@ static int test06(void)
 	}
 
 	free_page((u64)__va(hpa));
-	lcd_arch_ept_unmap_range(lcd, gpa, 1);
+	lcd_arch_ept_unmap_range(lcd->lcd_arch, gpa, 1);
 	kfree(pgd_entry);
 
 	lcd_destroy(lcd);
@@ -345,7 +345,7 @@ fail5:
 	kfree(pgd_entry);
 fail4:
 	free_page((u64)__va(hpa));
-	lcd_arch_ept_unmap_range(lcd, gpa, 1);
+	lcd_arch_ept_unmap_range(lcd->lcd_arch, gpa, 1);
 fail3:
 fail2:
 	lcd_destroy(lcd);
@@ -413,9 +413,10 @@ static int test08(void)
 {
 	struct lcd *lcd;
 	int ret;
-	u64 gpa;
 	pgd_t *pgd_entry1;
 	pgd_t *pgd_entry2;
+	u64 gpa1;
+	u64 gpa2;
 
 	ret = lcd_create(&lcd);
 	if (ret) {
@@ -423,8 +424,8 @@ static int test08(void)
 		goto fail1;
 	}
 	
-	ret = lcd_mm_gva_init(lcd, LCD_ARCH_FREE,
-			LCD_ARCH_FREE + 4 * (1 << 20));
+	ret = lcd_mm_gva_init(lcd, LCD_ARCH_FREE, 
+			LCD_ARCH_FREE + 2 * PAGE_SIZE);
 	if (ret) {
 		printk(KERN_ERR "lcd test: test08 failed to init gva\n");
 		goto fail2;
@@ -448,6 +449,28 @@ static int test08(void)
 		goto fail5;
 	}
 
+	if (!pgd_present(*pgd_entry1) || !pgd_present(*pgd_entry2)) {
+		printk(KERN_ERR "lcd test: test08 entries not present\n");
+		ret = -1;
+		goto fail5;
+	}
+
+	gpa1 = pgd_pfn(*pgd_entry1) << PAGE_SHIFT;
+	gpa2 = pgd_pfn(*pgd_entry2) << PAGE_SHIFT;
+	if (gpa1 < LCD_ARCH_FREE || gpa1 > LCD_ARCH_FREE + 2 * PAGE_SIZE) {
+		printk(KERN_ERR "lcd test: test08 bad gpa %lx\n",
+			(unsigned long)gpa1);
+		ret = -1;
+		goto fail5;
+	}
+	
+	if (gpa1 != gpa2) {
+		printk(KERN_ERR "lcd test: test08 two diff gpa's: first = %lx, second %lx\n",
+			(unsigned long)gpa1, (unsigned long)gpa2);
+		ret = -1;
+		goto fail5;
+	}
+
 	lcd_destroy(lcd);
 
 	return 0;
@@ -461,8 +484,7 @@ fail1:
 	return ret;
 }
 
-#if 0
-static int test08(void)
+static int test09(void)
 {
 	struct lcd *lcd;
 	int ret;
@@ -472,14 +494,14 @@ static int test08(void)
 
 	ret = lcd_create(&lcd);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test02 failed to create lcd\n");
+		printk(KERN_ERR "lcd test: test09 failed to create lcd\n");
 		goto fail1;
 	}
 	
 	ret = lcd_mm_gva_init(lcd, LCD_ARCH_FREE,
 			LCD_ARCH_FREE + 4 * (1 << 20));
 	if (ret) {
-		printk(KERN_ERR "lcd test: test02 failed to init gva\n");
+		printk(KERN_ERR "lcd test: test09 failed to init gva\n");
 		goto fail2;
 	}
 
@@ -488,7 +510,7 @@ static int test08(void)
 	 */
 	ret = lcd_mm_gva_map_range(lcd, 0, 0, 1024);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test03 failed to map first 4 MBs\n");
+		printk(KERN_ERR "lcd test: test09 failed to map first 4 MBs\n");
 		goto fail3;
 	}
 
@@ -497,7 +519,7 @@ static int test08(void)
 	 */
 	ret = lcd_mm_gva_map_range(lcd, 0x40000000, 0x40000000, 1024);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test03 failed to map 2nd 4 MBs\n");
+		printk(KERN_ERR "lcd test: test09 failed to map 2nd 4 MBs\n");
 		goto fail3;
 	}
 
@@ -507,7 +529,7 @@ static int test08(void)
 	 */
 	ret = lcd_mm_gva_map_range(lcd, 0x8000000000, 0x8000000000, 1024);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test03 failed to map 3rd 4 MBs\n");
+		printk(KERN_ERR "lcd test: test09 failed to map 3rd 4 MBs\n");
 		goto fail3;
 	}
 
@@ -518,12 +540,12 @@ static int test08(void)
 	base = 0;
 	for (off = 0; off < 0x40000; off += PAGE_SIZE) {
 		if (lcd_mm_gva_to_gpa(lcd, base + off, &actual)) {
-			printk(KERN_ERR "lcd test: test03 failed lookup at %lx\n",
+			printk(KERN_ERR "lcd test: test09 failed lookup at %lx\n",
 				(unsigned long)(base + off));
 			goto fail3;
 		}
 		if (actual != (base + off)) {
-			printk(KERN_ERR "lcd test: test03 expected gpa %lx got %lx\n",
+			printk(KERN_ERR "lcd test: test09 expected gpa %lx got %lx\n",
 				(unsigned long)(base + off),
 				(unsigned long)actual);
 
@@ -534,12 +556,12 @@ static int test08(void)
 	base = 0x40000000;
 	for (off = 0; off < 0x40000; off += PAGE_SIZE) {
 		if (lcd_mm_gva_to_gpa(lcd, base + off, &actual)) {
-			printk(KERN_ERR "lcd test: test03 failed lookup at %lx\n",
+			printk(KERN_ERR "lcd test: test09 failed lookup at %lx\n",
 				(unsigned long)(base + off));
 			goto fail3;
 		}
 		if (actual != (base + off)) {
-			printk(KERN_ERR "lcd test: test03 expected gpa %lx got %lx\n",
+			printk(KERN_ERR "lcd test: test09 expected gpa %lx got %lx\n",
 				(unsigned long)(base + off),
 				(unsigned long)actual);
 
@@ -550,12 +572,12 @@ static int test08(void)
 	base = 0x8000000000;
 	for (off = 0; off < 0x40000; off += PAGE_SIZE) {
 		if (lcd_mm_gva_to_gpa(lcd, base + off, &actual)) {
-			printk(KERN_ERR "lcd test: test03 failed lookup at %lx\n",
+			printk(KERN_ERR "lcd test: test09 failed lookup at %lx\n",
 				(unsigned long)(base + off));
 			goto fail3;
 		}
 		if (actual != (base + off)) {
-			printk(KERN_ERR "lcd test: test03 expected gpa %lx got %lx\n",
+			printk(KERN_ERR "lcd test: test09 expected gpa %lx got %lx\n",
 				(unsigned long)(base + off),
 				(unsigned long)actual);
 
@@ -573,7 +595,6 @@ fail2:
 fail1:
 	return ret;
 }
-#endif
 
 static void lcd_tests(void)
 {
@@ -592,6 +613,8 @@ static void lcd_tests(void)
 	if (test07())
 		return;
 	if (test08())
+		return;
+	if (test09())
 		return;
 	return;
 }
