@@ -1,3 +1,20 @@
+#include <linux/fs.h>
+#include <linux/buffer_head.h>
+#include <linux/dcache.h>
+#include <linux/printk.h>
+#include <linux/rcupdate.h>
+#include <linux/rcutree.h>
+#include <linux/sched.h>
+#include <linux/rwlock_api_smp.h>
+#include <linux/spinlock_api_smp.h>
+#include <linux/highuid.h>
+#include <linux/time.h>
+#include <linux/pagemap.h>
+#include <linux/mm.h>
+#include <linux/slab.h>
+#include <asm-generic/bitops/find.h>
+#include <asm-generic/bitops/ffz.h>
+
 /*
  * To be filled by stubs.
  */
@@ -27,26 +44,26 @@ void iget_failed(struct inode *inode)
 {
 }
 
-int sb_set_blocksize(struct super_block *, int)
+int sb_set_blocksize(struct super_block *inode, int size)
 {
 	return 0;
 }
 
-int register_filesystem(struct file_system_type *)
+int register_filesystem(struct file_system_type *fs)
 {
 	return 0;
 }
 
-int unregister_filesystem(struct file_system_type *)
+int unregister_filesystem(struct file_system_type *fs)
 {	
 	return 0;
 }
 
-void __mark_inode_dirty(struct inode *, int)
+void __mark_inode_dirty(struct inode *inode, int flag)
 {
 }
 
-void clear_inode(struct inode *)
+void clear_inode(struct inode *inode)
 {
 }
 
@@ -58,7 +75,7 @@ void inc_nlink(struct inode *inode)
 {
 }
 
-struct inode * iget_locked(struct super_block *, unsigned long)
+struct inode * iget_locked(struct super_block *sb, unsigned long flag)
 {
 	return NULL;
 }
@@ -67,15 +84,15 @@ void ihold(struct inode * inode)
 {
 }
 
-void iput(struct inode *)
+void iput(struct inode *inode)
 {
 }
 
-void init_special_inode(struct inode *, umode_t, dev_t)
+void init_special_inode(struct inode *inode, umode_t mode, dev_t dev)
 {
 }
 
-void inode_init_once(struct inode *)
+void inode_init_once(struct inode *inode)
 {
 }
 
@@ -84,7 +101,7 @@ void inode_init_owner(struct inode *inode, const struct inode *dir,
 {
 }
 
-void __insert_inode_hash(struct inode *, unsigned long hashval)
+void __insert_inode_hash(struct inode *inode, unsigned long hashval)
 {
 }
 
@@ -97,30 +114,30 @@ void set_nlink(struct inode *inode, unsigned int nlink)
 {
 }
 
-void unlock_new_inode(struct inode *)
+void unlock_new_inode(struct inode *inode)
 {
 }
 
-int generic_file_fsync(struct file *, loff_t, loff_t, int)
-{
-	return 0;
-}
-
-ssize_t generic_read_dir(struct file *, char __user *, size_t, loff_t *)
+int generic_file_fsync(struct file *flip, loff_t oftsrc, loff_t oftdst, int flag)
 {
 	return 0;
 }
 
-int generic_readlink(struct dentry *, char __user *, int)
+ssize_t generic_read_dir(struct file *filp, char __user *buf, size_t size, loff_t *oft)
 {
 	return 0;
 }
 
-void *page_follow_link_light(struct dentry *, struct nameidata *)
+int generic_readlink(struct dentry *entry, char __user *buf, int flag)
+{
+	return 0;
+}
+
+void *page_follow_link_light(struct dentry *entry, struct nameidata *ni)
 {
 }
 
-void page_put_link(struct dentry *, struct nameidata *, void *)
+void page_put_link(struct dentry *entry, struct nameidata *ni, void *buf)
 {
 }
 
@@ -144,13 +161,13 @@ loff_t generic_file_llseek(struct file *file, loff_t offset, int whence)
 	return 0;
 }
 
-ssize_t generic_file_splice_read(struct file *, loff_t *,
-				 struct pipe_inode_info *, size_t, unsigned int)
+ssize_t generic_file_splice_read(struct file *flip, loff_t *oft,
+				 struct pipe_inode_info *pinfo, size_t size, unsigned int flag)
 {
 	return 0;
 }
 
-void generic_fillattr(struct inode *, struct kstat *)
+void generic_fillattr(struct inode *inode, struct kstat *stat)
 {
 }
 
@@ -165,17 +182,17 @@ struct dentry *mount_bdev(struct file_system_type *fs_type,
 	return NULL;
 }
 
-ssize_t generic_file_aio_read(struct kiocb *, const struct iovec *, unsigned long, loff_t)
+ssize_t generic_file_aio_read(struct kiocb *iocb, const struct iovec *vec, unsigned long size, loff_t oft)
 {
 	return 0;
 }
 
-ssize_t generic_file_aio_write(struct kiocb *, const struct iovec *, unsigned long, loff_t)
+ssize_t generic_file_aio_write(struct kiocb *iocb, const struct iovec *vec, unsigned long size, loff_t oft)
 {
 	return 0;
 }
 
-int generic_file_mmap(struct file *, struct vm_area_struct *)
+int generic_file_mmap(struct file *flip, struct vm_area_struct *vma)
 {
 	return 0;
 }
@@ -200,16 +217,16 @@ int sync_dirty_buffer(struct buffer_head *bh)
 	return 0;
 }
 
-void __bforget(struct buffer_head *)
+void __bforget(struct buffer_head *bh)
 {
 }
 
-int block_read_full_page(struct page*, get_block_t*)
+int block_read_full_page(struct page *p, get_block_t* gb)
 {
 	return 0;
 }
 
-int block_truncate_page(struct address_space *, loff_t, get_block_t *)
+int block_truncate_page(struct address_space *as, loff_t oft, get_block_t *gb)
 {
 	return 0;
 }
@@ -226,9 +243,9 @@ int __block_write_begin(struct page *page, loff_t pos, unsigned len,
 	return 0;
 }
 
-int block_write_end(struct file *, struct address_space *,
-		    loff_t, unsigned, unsigned,
-		    struct page *, void *)
+int block_write_end(struct file *flip, struct address_space *as,
+		    loff_t oft, unsigned pos, unsigned size,
+		    struct page *p, void *buf)
 {
 	return 0;
 }
@@ -239,23 +256,23 @@ int block_write_full_page(struct page *page, get_block_t *get_block,
 	return 0;
 }
 
-struct buffer_head *__bread(struct block_device *, sector_t block, unsigned size)
+struct buffer_head *__bread(struct block_device *bdev, sector_t block, unsigned size)
 {
 	return NULL;
 }
 
-void __brelse(struct buffer_head *)
+void __brelse(struct buffer_head *bh)
 {
 }
 
-sector_t generic_block_bmap(struct address_space *, sector_t, get_block_t *)
+sector_t generic_block_bmap(struct address_space *as, sector_t sec, get_block_t *gb)
 {
 	return 0;
 }
 
-int generic_write_end(struct file *, struct address_space *,
-		      loff_t, unsigned, unsigned,
-		      struct page *, void *)
+int generic_write_end(struct file *flip, struct address_space *as,
+		      loff_t oft, unsigned pos, unsigned flag,
+		      struct page *p, void *buf)
 {
 	return 0;
 }
@@ -277,16 +294,16 @@ void unlock_buffer(struct buffer_head *bh)
 
 /* include/linux/dcache.h */
 
-void d_instantiate(struct dentry *, struct inode *)
+void d_instantiate(struct dentry *entry, struct inode *inode)
 {
 }
 
-struct dentry * d_make_root(struct inode *)
+struct dentry * d_make_root(struct inode *inode)
 {
 	return NULL;
 }
 
-void d_rehash(struct dentry *)
+void d_rehash(struct dentry *entry)
 {
 }
 
@@ -302,10 +319,15 @@ int printk(const char *s, ...)
 	return 0;
 }
 
-int printk_ratelimit(void)
+int __printk_ratelimit(const char *func)
 {
 	return 0;
 }
+
+/*int printk_ratelimit(void)
+{
+	return 0;
+	}*/
 
 
 /* include/linux/rcuupdate.h */
@@ -393,10 +415,15 @@ int truncate_inode_page(struct address_space *mapping, struct page *page)
 	return 0;
 }
 
+void truncate_inode_pages(struct address_space *a, loff_t oft)
+{
+}
+
+
 /* include/linux/slab.h */
 struct kmem_cache *kmalloc_caches[KMALLOC_SHIFT_HIGH + 1];
 
-void kfree(const void *)
+void kfree(const void *buf)
 {
 }
 
@@ -405,7 +432,7 @@ void *__kmalloc(size_t size, gfp_t flags)
 	return NULL;
 }
 
-void *kmem_cache_alloc(struct kmem_cache *, gfp_t)
+void *kmem_cache_alloc(struct kmem_cache *s, gfp_t flags)
 {
 	return NULL;
 }
@@ -415,18 +442,18 @@ void *kmem_cache_alloc_trace(struct kmem_cache *s, gfp_t gfpflags, size_t size)
 	return NULL;
 }
 
-struct kmem_cache *kmem_cache_create(const char *, size_t, size_t,
-				     unsigned long,
-				     void (*)(void *))
+struct kmem_cache *kmem_cache_create(const char *b, size_t s, size_t nr,
+				     unsigned long sz,
+				     void (*op)(void *))
 {
 	return NULL;
 }
 
-void kmem_cache_destroy(struct kmem_cache *)
+void kmem_cache_destroy(struct kmem_cache *m)
 {
 }
 
-void kmem_cache_free(struct kmem_cache *, void *)
+void kmem_cache_free(struct kmem_cache *m, void *obj)
 {
 }
 
