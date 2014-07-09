@@ -19,6 +19,10 @@
  * To be filled by stubs.
  */
 
+void __fentry__(void)
+{
+}
+
 /* include/linux/fs.h */
 
 const char *bdevname(struct block_device *bdev, char *buffer)
