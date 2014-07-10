@@ -20,6 +20,11 @@
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("LCD driver");
 
+int lcd_enter() {
+	return lcd_cap_init_cspace(&current->cspace);
+};
+EXPORT_SYMBOL(lcd_enter);
+
 static long lcd_dev_ioctl(struct file *filp ,
 			  unsigned int ioctl, unsigned long arg)
 {
