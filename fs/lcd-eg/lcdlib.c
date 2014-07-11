@@ -351,20 +351,6 @@ int _cond_resched(void)
 {
 }
 
-/* include/linux/rwlock_api_smp.h */
-void __lockfunc _raw_read_lock(rwlock_t *lock)
-{
-}
-
-void __lockfunc _raw_write_lock(rwlock_t *lock)
-{
-}
-
-/* include/linux/spinlock_api_smp.h */
-void __lockfunc _raw_spin_lock(raw_spinlock_t *lock)
-{
-}
-
 /* include/linux/highuid.h */
 int fs_overflowuid = DEFAULT_FS_OVERFLOWUID; /* 65534 */
 int fs_overflowgid = DEFAULT_FS_OVERFLOWUID;
@@ -464,6 +450,26 @@ void kmem_cache_free(struct kmem_cache *m, void *obj)
 /*
  * Implementations
  */
+
+
+/* include/linux/rwlock_api_smp.h */
+
+#include <asm/spinlock.h>
+void __lockfunc _raw_read_lock(rwlock_t *lock)
+{
+	arch_read_lock(&lock->raw_lock);
+}
+
+void __lockfunc _raw_write_lock(rwlock_t *lock)
+{
+	arch_write_lock(&lock->raw_lock);
+}
+
+/* include/linux/spinlock_api_smp.h */
+void __lockfunc _raw_spin_lock(raw_spinlock_t *lock)
+{
+	arch_spin_lock(&lock->raw_lock);
+}
 
 /* include/asm-generic/bitops/find.h */
 /* ffz in asm-generic/bitops/ffz.h */
