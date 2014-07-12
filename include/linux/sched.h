@@ -53,7 +53,7 @@ struct sched_param {
 #include <linux/uidgid.h>
 #include <linux/gfp.h>
 
-#ifdef CONFIG_LCD
+#ifdef CONFIG_HAVE_LCD
 #include <lcd/cap.h>
 #include <lcd/ipc.h>
 #endif
@@ -1042,7 +1042,7 @@ struct task_struct {
 	atomic_t usage;
 	unsigned int flags;	/* per process flags, defined below */
 	unsigned int ptrace;
-#ifdef CONFIG_LCD
+#ifdef CONFIG_HAVE_LCD
 	struct cap_space cspace;
 	struct list_head sync_rendezvous;
 	struct utcb *utcb;

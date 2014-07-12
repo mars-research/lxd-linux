@@ -16,6 +16,7 @@
 #include <asm/uaccess.h>
 
 #include <lcd/lcd.h>
+#include <lcd/cap-internal.h>
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("LCD driver");
@@ -90,7 +91,17 @@ static struct miscdevice lcd_dev = {
 
 static int __init lcd_init(void)
 {
-	int r;
+	int r = 0;
+
+	r = lcd_cap_init();
+	if(r)
+		return r;
+
+	r = lcd_ipc_init();
+	if(r)
+		return r;
+
+#if 0
 
 	printk(KERN_ERR "LCD module loaded\n");
 
@@ -104,14 +115,18 @@ static int __init lcd_init(void)
 		printk(KERN_ERR "lcd: misc device register failed\n");
 		
 	}
-
+#endif
 	return r;
 }
 
 static void __exit lcd_exit(void)
 {
+	lcd_cap_exit();
+#if 0
 	misc_deregister(&lcd_dev);
 	lcd_vmx_exit();
+#endif
+	return; 
 }
 
 module_init(lcd_init);
