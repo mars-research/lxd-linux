@@ -14,6 +14,7 @@
 #include <linux/compat.h>
 #include <linux/fs.h>
 #include <asm/uaccess.h>
+#include <linux/slab.h>
 
 #include <lcd/lcd.h>
 #include <lcd/cap.h>
@@ -21,7 +22,12 @@
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("LCD driver");
 
-int lcd_enter() {
+int lcd_enter(void) {
+	
+	current->utcb = kmalloc(sizeof(struct utcb), GFP_KERNEL); 
+	if (!current->utcb) 
+		return -ENOMEM;
+
 	return lcd_init_cspace(&current->cspace);
 };
 EXPORT_SYMBOL(lcd_enter);
