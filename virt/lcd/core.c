@@ -16,13 +16,13 @@
 #include <asm/uaccess.h>
 
 #include <lcd/lcd.h>
-#include <lcd/cap-internal.h>
+#include <lcd/cap.h>
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("LCD driver");
 
 int lcd_enter() {
-	return lcd_cap_init_cspace(&current->cspace);
+	return lcd_init_cspace(&current->cspace);
 };
 EXPORT_SYMBOL(lcd_enter);
 
