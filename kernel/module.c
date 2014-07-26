@@ -820,19 +820,15 @@ static void wait_for_zero_refcount(struct module *mod)
 	mutex_lock(&module_mutex);
 }
 
-SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
-		unsigned int, flags)
+int do_sys_delete_module(const char *name, unsigned int flags,
+			int for_lcd)
 {
 	struct module *mod;
-	char name[MODULE_NAME_LEN];
+
 	int ret, forced = 0;
 
 	if (!capable(CAP_SYS_MODULE) || modules_disabled)
 		return -EPERM;
-
-	if (strncpy_from_user(name, name_user, MODULE_NAME_LEN-1) < 0)
-		return -EFAULT;
-	name[MODULE_NAME_LEN-1] = '\0';
 
 	if (mutex_lock_interruptible(&module_mutex) != 0)
 		return -EINTR;
@@ -881,8 +877,9 @@ SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
 		wait_for_zero_refcount(mod);
 
 	mutex_unlock(&module_mutex);
+
 	/* Final destruction now no one is using it. */
-	if (mod->exit != NULL)
+	if (mod->exit != NULL && !for_lcd)
 		mod->exit();
 	blocking_notifier_call_chain(&module_notify_list,
 				     MODULE_STATE_GOING, mod);
@@ -896,6 +893,19 @@ SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
 out:
 	mutex_unlock(&module_mutex);
 	return ret;
+}
+EXPORT_SYMBOL(do_sys_delete_module);
+
+SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
+		unsigned int, flags)
+{
+	char name[MODULE_NAME_LEN];
+
+	if (strncpy_from_user(name, name_user, MODULE_NAME_LEN-1) < 0)
+		return -EFAULT;
+	name[MODULE_NAME_LEN-1] = '\0';
+
+	return do_sys_delete_module(name, flags, 0);
 }
 
 static inline void print_unload_info(struct seq_file *m, struct module *mod)
@@ -3031,7 +3041,7 @@ static void do_mod_ctors(struct module *mod)
 }
 
 /* This is where the real work happens */
-static int do_init_module(struct module *mod)
+static int do_init_module(struct module *mod, int for_lcd)
 {
 	int ret = 0;
 
@@ -3058,7 +3068,7 @@ static int do_init_module(struct module *mod)
 
 	do_mod_ctors(mod);
 	/* Start the module */
-	if (mod->init != NULL)
+	if (mod->init != NULL && !for_lcd)
 		ret = do_one_initcall(mod->init);
 	if (ret < 0) {
 		/* Init routine failed: abort.  Try to protect us from
@@ -3115,12 +3125,19 @@ static int do_init_module(struct module *mod)
 	mod->symtab = mod->core_symtab;
 	mod->strtab = mod->core_strtab;
 #endif
-	unset_module_init_ro_nx(mod);
-	module_free(mod, mod->module_init);
-	mod->module_init = NULL;
-	mod->init_size = 0;
-	mod->init_ro_size = 0;
-	mod->init_text_size = 0;
+	if (!for_lcd) {
+		/* 
+		 * Only free init code if we're not going to run in
+		 * an lcd. If we will run in an lcd, init code will
+		 * be deallocated via free_module in do_sys_delete_module.
+		 */
+		unset_module_init_ro_nx(mod);
+		module_free(mod, mod->module_init);
+		mod->module_init = NULL;
+		mod->init_size = 0;
+		mod->init_ro_size = 0;
+		mod->init_text_size = 0;
+	}
 	mutex_unlock(&module_mutex);
 	wake_up_all(&module_wq);
 
@@ -3198,7 +3215,7 @@ out:
 /* Allocate and load the module: note that size of section 0 is always
    zero, and we rely on this for optional sections. */
 static int load_module(struct load_info *info, const char __user *uargs,
-		       int flags)
+		int flags, int for_lcd)
 {
 	struct module *mod;
 	long err;
@@ -3301,7 +3318,7 @@ static int load_module(struct load_info *info, const char __user *uargs,
 	/* Done! */
 	trace_module_load(mod);
 
-	return do_init_module(mod);
+	return do_init_module(mod, for_lcd);
 
  bug_cleanup:
 	/* module_bug_cleanup needs module_mutex protection */
@@ -3331,8 +3348,8 @@ static int load_module(struct load_info *info, const char __user *uargs,
 	return err;
 }
 
-SYSCALL_DEFINE3(init_module, void __user *, umod,
-		unsigned long, len, const char __user *, uargs)
+int do_sys_init_module(void __user *umod, unsigned long len,
+		const char __user *uargs, int for_lcd)
 {
 	int err;
 	struct load_info info = { };
@@ -3348,7 +3365,14 @@ SYSCALL_DEFINE3(init_module, void __user *, umod,
 	if (err)
 		return err;
 
-	return load_module(&info, uargs, 0);
+	return load_module(&info, uargs, 0, for_lcd);
+}
+EXPORT_SYMBOL(do_sys_init_module);
+
+SYSCALL_DEFINE3(init_module, void __user *, umod,
+		unsigned long, len, const char __user *, uargs)
+{
+	return do_sys_init_module(umod, len, uargs, 0);
 }
 
 SYSCALL_DEFINE3(finit_module, int, fd, const char __user *, uargs, int, flags)
@@ -3370,7 +3394,7 @@ SYSCALL_DEFINE3(finit_module, int, fd, const char __user *, uargs, int, flags)
 	if (err)
 		return err;
 
-	return load_module(&info, uargs, flags);
+	return load_module(&info, uargs, flags, 0);
 }
 
 static inline int within(unsigned long addr, void *start, unsigned long size)
