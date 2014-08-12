@@ -53,10 +53,8 @@ struct sched_param {
 #include <linux/uidgid.h>
 #include <linux/gfp.h>
 
-#ifdef CONFIG_HAVE_LCD
-#include <lcd/cap.h>
-#include <lcd/ipc.h>
-#include <lcd/cap-cache.h>
+#ifdef CONFIG_LCD_PROTOTYPE
+#include <lcd-prototype/lcd.h>
 #endif
 
 #include <asm/processor.h>
@@ -1043,11 +1041,8 @@ struct task_struct {
 	atomic_t usage;
 	unsigned int flags;	/* per process flags, defined below */
 	unsigned int ptrace;
-#ifdef CONFIG_HAVE_LCD
-	struct cspace cspace;
-	struct cap_cache cap_cache;
-	struct list_head sync_rendezvous;
-	struct utcb *utcb;
+#ifdef CONFIG_LCD_PROTOTYPE
+	struct lcd *lcd;
 #endif
 #ifdef CONFIG_SMP
 	struct llist_node wake_entry;

@@ -14,10 +14,9 @@
 #include <net/net_namespace.h>
 #include <linux/sched/rt.h>
 
-#ifdef CONFIG_LCD
-#define INIT_LCD(tsk)					\
-	.sync_rendezvous = LIST_HEAD_INIT(tsk.sync_rendezvous), \
-        .utcb = NULL,
+#ifdef CONFIG_LCD_PROTOTYPE
+#define INIT_LCD(tsk) \
+	.lcd = NULL,  
 #else
 #define INIT_LCD(tsk)
 #endif
@@ -173,6 +172,7 @@ extern struct task_group root_task_group;
 	.usage		= ATOMIC_INIT(2),				\
 	.flags		= PF_KTHREAD,					\
 	.prio		= MAX_PRIO-20,					\
+	INIT_LCD(tsk)                                                   \
 	.static_prio	= MAX_PRIO-20,					\
 	.normal_prio	= MAX_PRIO-20,					\
 	.policy		= SCHED_NORMAL,					\
