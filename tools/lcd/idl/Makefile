@@ -1,27 +1,19 @@
 
-all: compiler
+lcd_compiler: lcd_ast.o lcd_compiler.o lcd_idl.o
+		g++ lcd_idl.o lcd_ast.o lcd_compiler.o -o compiler
 
-compiler: flounder_parser.o idl_compiler.o ast.o visitor.o
-	g++ flounder_parser.o visitor.o idl_compiler.o ast.o -o compiler
+lcd_compiler.o: lcd_compiler.cpp lcd_ast.h lcd_idl.h
+		g++ -c -g lcd_compiler.cpp
 
-idl_compiler.o: idl_compiler.cpp flounder_parser.h
-		g++ -c -g idl_compiler.cpp flounder_parser.h
+lcd_idl.o: lcd_idl.h lcd_ast.h
 
-ast.o: ast.cpp ast.h
-	g++ -c -g ast.cpp ast.h
+lcd_ast.o: lcd_ast.h
 
-visitor.o: visitor.cpp visitor.h
-	g++ -c -g visitor.cpp visitor.h
+lcd_idl.h: 
+	vembyr-1.1/peg.py --h lcd_idl.peg > lcd_idl.h
 
-flounder_parser.o: flounder_parser.cpp flounder_parser.h
-		g++ -c -g flounder_parser.cpp flounder_parser.h
-
-flounder_parser.cpp:
-		vembyr-1.1/peg.py --cpp flounder > flounder_parser.cpp
-
-flounder_parser.h:
-		vembyr-1.1/peg.py --h flounder > flounder_parser.h
+lcd_idl.cpp:
+	vembyr-1.1/peg.py --cpp lcd_idl.peg > lcd_idl.cpp
 
 clean:
-		rm flounder_parser.* *.o compiler peg_peg.py
-		vembyr-1.1/peg_peg.pyc
+		rm lcd_idl.cpp lcd_idl.h lcd_ast.h.gch compiler *.o

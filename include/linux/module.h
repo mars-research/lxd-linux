@@ -656,4 +656,8 @@ static inline void module_bug_finalize(const Elf_Ehdr *hdr,
 static inline void module_bug_cleanup(struct module *mod) {}
 #endif	/* CONFIG_GENERIC_BUG */
 
+int do_sys_delete_module(const char *name, unsigned int flags, int for_lcd);
+int do_sys_init_module(void __user *umod, unsigned long len,
+		const char __user *uargs, int for_lcd);
+
 #endif /* _LINUX_MODULE_H */

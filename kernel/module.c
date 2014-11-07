@@ -64,10 +64,6 @@
 #include <uapi/linux/module.h>
 #include "module-internal.h"
 
-#ifdef CONFIG_LCD
-#include <lcd/lcd.h>
-#endif
-
 #define CREATE_TRACE_POINTS
 #include <trace/events/module.h>
 
@@ -824,19 +820,15 @@ static void wait_for_zero_refcount(struct module *mod)
 	mutex_lock(&module_mutex);
 }
 
-SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
-		unsigned int, flags)
+int do_sys_delete_module(const char *name, unsigned int flags,
+			int for_lcd)
 {
 	struct module *mod;
-	char name[MODULE_NAME_LEN];
+
 	int ret, forced = 0;
 
 	if (!capable(CAP_SYS_MODULE) || modules_disabled)
 		return -EPERM;
-
-	if (strncpy_from_user(name, name_user, MODULE_NAME_LEN-1) < 0)
-		return -EFAULT;
-	name[MODULE_NAME_LEN-1] = '\0';
 
 	if (mutex_lock_interruptible(&module_mutex) != 0)
 		return -EINTR;
@@ -885,8 +877,9 @@ SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
 		wait_for_zero_refcount(mod);
 
 	mutex_unlock(&module_mutex);
+
 	/* Final destruction now no one is using it. */
-	if (mod->exit != NULL)
+	if (mod->exit != NULL && !for_lcd)
 		mod->exit();
 	blocking_notifier_call_chain(&module_notify_list,
 				     MODULE_STATE_GOING, mod);
@@ -900,6 +893,19 @@ SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
 out:
 	mutex_unlock(&module_mutex);
 	return ret;
+}
+EXPORT_SYMBOL(do_sys_delete_module);
+
+SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
+		unsigned int, flags)
+{
+	char name[MODULE_NAME_LEN];
+
+	if (strncpy_from_user(name, name_user, MODULE_NAME_LEN-1) < 0)
+		return -EFAULT;
+	name[MODULE_NAME_LEN-1] = '\0';
+
+	return do_sys_delete_module(name, flags, 0);
 }
 
 static inline void print_unload_info(struct seq_file *m, struct module *mod)
@@ -3035,7 +3041,7 @@ static void do_mod_ctors(struct module *mod)
 }
 
 /* This is where the real work happens */
-static int do_init_module(struct module *mod)
+static int do_init_module(struct module *mod, int for_lcd)
 {
 	int ret = 0;
 
@@ -3062,7 +3068,7 @@ static int do_init_module(struct module *mod)
 
 	do_mod_ctors(mod);
 	/* Start the module */
-	if (mod->init != NULL)
+	if (mod->init != NULL && !for_lcd)
 		ret = do_one_initcall(mod->init);
 	if (ret < 0) {
 		/* Init routine failed: abort.  Try to protect us from
@@ -3119,12 +3125,19 @@ static int do_init_module(struct module *mod)
 	mod->symtab = mod->core_symtab;
 	mod->strtab = mod->core_strtab;
 #endif
-	unset_module_init_ro_nx(mod);
-	module_free(mod, mod->module_init);
-	mod->module_init = NULL;
-	mod->init_size = 0;
-	mod->init_ro_size = 0;
-	mod->init_text_size = 0;
+	if (!for_lcd) {
+		/* 
+		 * Only free init code if we're not going to run in
+		 * an lcd. If we will run in an lcd, init code will
+		 * be deallocated via free_module in do_sys_delete_module.
+		 */
+		unset_module_init_ro_nx(mod);
+		module_free(mod, mod->module_init);
+		mod->module_init = NULL;
+		mod->init_size = 0;
+		mod->init_ro_size = 0;
+		mod->init_text_size = 0;
+	}
 	mutex_unlock(&module_mutex);
 	wake_up_all(&module_wq);
 
@@ -3202,7 +3215,7 @@ out:
 /* Allocate and load the module: note that size of section 0 is always
    zero, and we rely on this for optional sections. */
 static int load_module(struct load_info *info, const char __user *uargs,
-		       int flags)
+		int flags, int for_lcd)
 {
 	struct module *mod;
 	long err;
@@ -3305,7 +3318,7 @@ static int load_module(struct load_info *info, const char __user *uargs,
 	/* Done! */
 	trace_module_load(mod);
 
-	return do_init_module(mod);
+	return do_init_module(mod, for_lcd);
 
  bug_cleanup:
 	/* module_bug_cleanup needs module_mutex protection */
@@ -3335,149 +3348,8 @@ static int load_module(struct load_info *info, const char __user *uargs,
 	return err;
 }
 
-#ifdef CONFIG_LCD
-static int load_lcd(struct load_info *info, const char __user *uargs,
-		       int flags)
-{
-	struct lcd * lcd;
-	struct module *mod;
-	long err;
-
-	err = module_sig_check(info);
-	if (err)
-		goto free_copy;
-
-	err = elf_header_check(info);
-	if (err)
-		goto free_copy;
-
-	/* Figure out module layout, and allocate all the memory. */
-	mod = layout_and_allocate(info, flags);
-	if (IS_ERR(mod)) {
-		err = PTR_ERR(mod);
-		goto free_copy;
-	}
-
-	/* Reserve our place in the list. */
-	err = add_unformed_module(mod);
-	if (err)
-		goto free_module;
-
-#ifdef CONFIG_MODULE_SIG
-	mod->sig_ok = info->sig_ok;
-	if (!mod->sig_ok) {
-		printk_once(KERN_NOTICE
-			    "%s: module verification failed: signature and/or"
-			    " required key missing - tainting kernel\n",
-			    mod->name);
-		add_taint_module(mod, TAINT_FORCED_MODULE, LOCKDEP_STILL_OK);
-	}
-#endif
-
-	/* To avoid stressing percpu allocator, do this once we're unique. */
-	err = alloc_module_percpu(mod, info);
-	if (err)
-		goto unlink_mod;
-
-	/* Now module is in final location, initialize linked lists, etc. */
-	err = module_unload_init(mod);
-	if (err)
-		goto unlink_mod;
-
-	/* Now we've got everything in the final locations, we can
-	 * find optional sections. */
-	find_module_sections(mod, info);
-
-	err = check_module_license_and_versions(mod);
-	if (err)
-		goto free_unload;
-
-	/* Set up MODINFO_ATTR fields */
-	setup_modinfo(mod, info);
-
-	/* Fix up syms, so that st_value is a pointer to location. */
-	err = simplify_symbols(mod, info);
-	if (err < 0)
-		goto free_modinfo;
-
-	err = apply_relocations(mod, info);
-	if (err < 0)
-		goto free_modinfo;
-
-	err = post_relocation(mod, info);
-	if (err < 0)
-		goto free_modinfo;
-
-	flush_module_icache(mod);
-
-	/* Now copy in args */
-	mod->args = strndup_user(uargs, ~0UL >> 1);
-	if (IS_ERR(mod->args)) {
-		err = PTR_ERR(mod->args);
-		goto free_arch_cleanup;
-	}
-
-	dynamic_debug_setup(info->debug, info->num_debug);
-
-	/* Finally it's fully formed, ready to start executing. */
-	err = complete_formation(mod, info);
-	if (err)
-		goto ddebug_cleanup;
-
-	/* Module is ready to execute: parsing args may do that. */
-	err = parse_args(mod->name, mod->args, mod->kp, mod->num_kp,
-			 -32768, 32767, &ddebug_dyndbg_module_param_cb);
-	if (err < 0)
-		goto bug_cleanup;
-
-	/* Link in to syfs. */
-	err = mod_sysfs_setup(mod, info, mod->kp, mod->num_kp);
-	if (err < 0)
-		goto bug_cleanup;
-
-	/* Get rid of temporary copy. */
-	free_copy(info);
-
-	/* Done! */
-	trace_module_load(mod);
-
-	lcd = lcd_create();
-	lcd_move_module(lcd, mod);
-	lcd_run(lcd);
-	return 0;
-
- bug_cleanup:
-	/* module_bug_cleanup needs module_mutex protection */
-	mutex_lock(&module_mutex);
-	module_bug_cleanup(mod);
-	mutex_unlock(&module_mutex);
- ddebug_cleanup:
-	dynamic_debug_remove(info->debug);
-	synchronize_sched();
-	kfree(mod->args);
- free_arch_cleanup:
-	module_arch_cleanup(mod);
- free_modinfo:
-	free_modinfo(mod);
- free_unload:
-	module_unload_free(mod);
- unlink_mod:
-	mutex_lock(&module_mutex);
-	/* Unlink carefully: kallsyms could be walking list. */
-	list_del_rcu(&mod->list);
-	wake_up_all(&module_wq);
-	mutex_unlock(&module_mutex);
- free_module:
-	module_deallocate(mod, info);
- free_copy:
-	free_copy(info);
-	return err;
-}
-#endif
-
-#ifdef CONFIG_LCD
-SYSCALL_DEFINE3(init_lcd, void __user *, umod,
-		unsigned long, len, const char __user *, uargs)
+int do_sys_init_module(void __user *umod, unsigned long len,
+		const char __user *uargs, int for_lcd)
 {
 	int err;
 	struct load_info info = { };
@@ -3493,28 +3365,14 @@ SYSCALL_DEFINE3(init_lcd, void __user *, umod,
 	if (err)
 		return err;
 
-	return load_lcd(&info, uargs, 0);
+	return load_module(&info, uargs, 0, for_lcd);
 }
-#endif
+EXPORT_SYMBOL(do_sys_init_module);
 
 SYSCALL_DEFINE3(init_module, void __user *, umod,
 		unsigned long, len, const char __user *, uargs)
 {
-	int err;
-	struct load_info info = { };
-
-	err = may_init_module();
-	if (err)
-		return err;
-
-	pr_debug("init_module: umod=%p, len=%lu, uargs=%p\n",
-	       umod, len, uargs);
-
-	err = copy_module_from_user(umod, len, &info);
-	if (err)
-		return err;
-
-	return load_module(&info, uargs, 0);
+	return do_sys_init_module(umod, len, uargs, 0);
 }
 
 SYSCALL_DEFINE3(finit_module, int, fd, const char __user *, uargs, int, flags)
@@ -3536,7 +3394,7 @@ SYSCALL_DEFINE3(finit_module, int, fd, const char __user *, uargs, int, flags)
 	if (err)
 		return err;
 
-	return load_module(&info, uargs, flags);
+	return load_module(&info, uargs, flags, 0);
 }
 
 static inline int within(unsigned long addr, void *start, unsigned long size)

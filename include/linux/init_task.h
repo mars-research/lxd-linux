@@ -13,8 +13,9 @@
 #include <linux/seqlock.h>
 #include <net/net_namespace.h>
 #include <linux/sched/rt.h>
+#include <lcd-domains/lcd-domains.h>
 
-#ifdef CONFIG_LCD_PROTOTYPE
+#ifdef CONFIG_LCD_PROTOTYPE || CONFIG_HAVE_LCD
 #define INIT_LCD(tsk) \
 	.lcd = NULL,  
 #else
@@ -221,6 +222,7 @@ extern struct task_group root_task_group;
 		[PIDTYPE_SID]  = INIT_PID_LINK(PIDTYPE_SID),		\
 	},								\
 	.thread_group	= LIST_HEAD_INIT(tsk.thread_group),		\
+	INIT_LCD(tsk)							\
 	INIT_IDS							\
 	INIT_PERF_EVENTS(tsk)						\
 	INIT_TRACE_IRQFLAGS						\
