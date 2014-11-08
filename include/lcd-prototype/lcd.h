@@ -349,5 +349,4 @@ enum {
 /* see include/uapi/linux/lcd-prototype.h */
 #include <uapi/linux/lcd-prototype.h>
 
-
 #endif /* LCD_LCD_H */

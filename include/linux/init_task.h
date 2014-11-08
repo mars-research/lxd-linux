@@ -15,7 +15,7 @@
 #include <linux/sched/rt.h>
 #include <lcd-domains/lcd-domains.h>
 
-#ifdef CONFIG_LCD_PROTOTYPE || CONFIG_HAVE_LCD
+#ifdef CONFIG_LCD_PROTOTYPE || CONFIG_HAVE_LCD || CONFIG_LCD_PROTOTYPE
 #define INIT_LCD(tsk) \
 	.lcd = NULL,  
 #else
