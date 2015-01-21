@@ -25,11 +25,14 @@
 #include <asm/lcd-domains-arch.h>
 #include <lcd-domains/lcd-domains.h>
 #include <lcd-domains/syscall.h>
+#include <lcd-domains/ipc.h>
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("LCD driver");
 
-#define LCD_PAGING_MEM_SIZE (4 * (1 << 20)) /* 4 MBs */
+/* DEBUG -------------------------------------------------- */
+
+#define LCD_DEBUG 0
 
 #define LCD_ERR(msg...) __lcd_err(__FILE__, __LINE__, msg)
 static inline void __lcd_err(char *file, int lineno, char *fmt, ...)
@@ -59,7 +62,240 @@ static inline void __lcd_warn(char *file, int lineno, char *fmt, ...)
 	va_end(args);
 }
 
-/* Guest Virtual -------------------------------------------------- */
+/* MEMORY ALLOCATION -------------------------------------------------- */
+
+/**
+ * Converts a guest physical "page frame number" in the lcd's page heap
+ * into a guest physical address.
+ */
+static inline gpa_t lcd_mm_gp_pfn_to_gpa(unsigned long gp_pfn)
+{
+	return __gpa((gp_pfn << PAGE_SHIFT) + LCD_GP_MEM_START);
+}
+
+/**
+ * Converts a guest physical address to a "page frame number" in the lcd's 
+ * page heap.
+ */
+static inline unsigned long lcd_mm_gpa_to_gp_pfn(gpa_t gpa)
+{
+	return (gpa_val(gpa) - LCD_GP_MEM_START) >> PAGE_SHIFT;
+}
+
+/**
+ * Allocates a page in the lcd's guest physical address space and maps it to
+ * the host physical page at hpa.
+ *
+ * Note: Guest physical and host allocation are decoupled so we can allocate
+ * guest physical memory for things already in the host, like modules.
+ *
+ * If gpa_out is non-NULL, returns the guest physical address of the
+ * page.
+ */
+static int lcd_mm_gp_alloc_map(struct lcd *lcd, hpa_t hpa, gpa_t *gpa_out)
+{
+	unsigned long gp_pfn;
+	gpa_t gpa;
+	int ret;
+	/*
+	 * Find the next free guest physical page
+	 */
+	gp_pfn = find_first_zero_bit(lcd->gp_paging.bmap, LCD_GP_BMAP_NBITS);
+	if (gp_pfn >= LCD_GP_BMAP_NBITS) {
+		LCD_ERR("out of guest physical mem");
+		ret = -ENOMEM;
+		goto fail1;
+	}
+	gpa = lcd_mm_gp_pfn_to_gpa(gp_pfn);
+	/*
+	 * Map gpa to hpa
+	 */
+	ret = lcd_arch_ept_map(lcd->lcd_arch, gpa, hpa, 1, 0);
+	if (ret) {
+		LCD_ERR("couldn't map gpa %lx to hpa %lx\n",
+			gpa_val(gpa),
+			hpa_val(hpa));
+		goto fail2;
+	}
+	/*
+	 * Set bit to mark page as alloc'd
+	 */
+	set_bit(gp_pfn, lcd->gp_paging.bmap);
+
+	if (gpa_out)
+		*gpa_out = gpa;
+	
+	return 0;
+
+fail2:
+	clear_bit(gp_pfn, lcd->gp_paging.bmap);
+fail1:
+	return ret;
+}
+
+/**
+ * Allocates a zeroed out host page *and* a guest physical page. Maps the
+ * host page in the lcd's guest physical address space.
+ *
+ * If hva_out and/or gpa_out are non-NULL, returns host virtual/guest physical
+ * address of allocated page, for convenience.
+ */
+static int lcd_mm_gp_gfp(struct lcd *lcd, hva_t *hva_out, gpa_t *gpa_out)
+{
+	hva_t hva;
+	hpa_t hpa;
+	int ret;
+	/*
+	 * Allocate a host physical page
+	 */
+	hva = __hva(get_zeroed_page(GFP_KERNEL));
+	if (!hva_val(hva)) {
+		LCD_ERR("no host mem");
+		ret = -ENOMEM;
+		goto fail1;
+	}
+	hpa = hva2hpa(hva);
+	/*
+	 * Allocate a guest physical page and map it to host page
+	 */
+	ret = lcd_mm_gp_alloc_map(lcd, hpa, gpa_out);
+	if (ret) {
+		LCD_ERR("map in guest phys");
+		goto fail2;
+	}
+
+	if (hva_out)
+		*hva_out = hva;
+
+	return 0;
+
+fail2:
+	free_page(hva_val(hva));
+fail1:
+	return ret;
+}
+
+/**
+ * Unmaps the page at gpa in lcd's guest physical address space.
+ *
+ * If hpa_out is non-NULL, returns host physical address of page.
+ */
+static void lcd_mm_gp_dealloc_unmap(struct lcd *lcd, gpa_t gpa, hpa_t *hpa_out)
+{
+	int ret;
+	unsigned long gp_pfn;
+	/*
+	 * Convert the gpa to a "page frame"
+	 */
+	gp_pfn = lcd_mm_gpa_to_gp_pfn(gpa);
+	BUG_ON(gp_pfn >= LCD_GP_BMAP_NBITS);
+	/*
+	 * Clear the bit in the bitmap
+	 */
+	clear_bit(gp_pfn, lcd->gp_paging.bmap);
+	/*
+	 * Unmap in the lcd's ept
+	 */
+	ret = lcd_arch_ept_unmap2(lcd->lcd_arch, gpa, hpa_out);
+	if (ret)
+		LCD_ERR("ept unmap2");
+}
+
+/**
+ * Frees the gpa in the guest physical address space of lcd, *and* on the
+ * host (so there better be a host page corresponding to gpa, or else
+ * you'll get a double free!).
+ *
+ * To unmap/free only in guest physical, do lcd_mm_gp_dealloc_unmap.
+ */
+static void lcd_mm_gp_free_page(struct lcd *lcd, gpa_t gpa)
+{
+	hpa_t hpa;
+	/*
+	 * Unmap in ept
+	 */
+	lcd_mm_gp_dealloc_unmap(lcd, gpa, &hpa);
+	/*
+	 * Free page
+	 *
+	 * XXX: hpa may be bogus if the above call failed
+	 */
+	free_page(hva_val(hpa2hva(hpa)));
+}
+
+/**
+ * Frees any pages still mapped in the guest physical address space.
+ *
+ * XXX: Tries to free underlying host pages. Beware! If you leave something
+ * mapped, you could get double frees for something already freed, or you
+ * may have pages freed that you didn't mean to.
+ */
+static void lcd_mm_gp_free_all(struct lcd *lcd)
+{
+	unsigned long gp_pfn;
+	gpa_t gpa;
+
+	gp_pfn = 0;
+
+	while (1) {
+		/*
+		 * Find the next mapped guest physical page (find_next_bit
+		 * starts searching at gp_pfn).
+		 */
+		gp_pfn = find_next_bit(lcd->gp_paging.bmap, LCD_GP_BMAP_NBITS,
+				gp_pfn);
+		if (gp_pfn >= LCD_GP_BMAP_NBITS)
+			break; /* no more set bits */
+		/*
+		 * Convert to guest physical, and free it
+		 */
+		gpa = lcd_mm_gp_pfn_to_gpa(gp_pfn);
+		lcd_mm_gp_free_page(lcd, gpa);
+	}
+}
+
+/**
+ * *** THIS IS FOR SETTING UP THE BOOT GUEST VIRTUAL ADDRESS SPACE ONLY ***
+ *
+ * The LCD is responsible for allocating guest virtual pages thereafter.
+ *
+ * Allocates a host page for the lcd's guest virtual paging hierarchy. Tracks
+ * how many of these are allocated using lcd's counter.
+ *
+ * Returns guest physical and host virtual addresses of page.
+ */
+static int lcd_mm_gv_gfp(struct lcd *lcd, gpa_t *gpa_out, hva_t *hva_out)
+{
+	int ret;
+	/*
+	 * Check counter
+	 */
+	if (lcd->gv_paging.counter >= LCD_GV_MEM_SIZE) {
+		LCD_ERR("exhausted guest virtual paging mem");
+		ret = -ENOMEM;
+		goto fail1;
+	}
+	/*
+	 * Allocate a host page
+	 */
+	ret = lcd_mm_gp_gfp(lcd, hva_out, gpa_out);
+	if (ret) {
+		LCD_ERR("getting free page");
+		goto fail2;
+	}
+	/*
+	 * Bump counter etc.
+	 */
+	lcd->gv_paging.counter += PAGE_SIZE;
+
+	return 0;
+
+fail2:
+fail1:
+	return ret;
+}
+
+/* GUEST VIRTUAL PAGING (FOR BOOT) ---------------------------------------- */
 
 static inline gpa_t pte_gpa(pte_t *pte)
 {
@@ -95,109 +331,30 @@ static inline void set_pgd_gpa(pgd_t *entry, gpa_t gpa)
 }
 
 /**
- * Allocates a host physical page and guest physical
- * page (in the lcd's guest phys address space) for
- * storing a paging structure.
- */
-static int lcd_mm_gva_alloc(struct lcd *lcd, gpa_t *ga_out, hpa_t *ha_out)
-{
-	hva_t hva;
-	gpa_t gpa;
-	hpa_t hpa;
-	int ret;
-
-	if (!lcd->gv.present) {
-		printk(KERN_ERR "lcd_mm_gva_alloc: gv paging not present\n");
-		ret = -EINVAL;
-		goto fail1;
-	}
-
-	/*
-	 * Check watermark, and bump it.
-	 */
-	if (gpa_val(lcd->gv.paging_mem_brk) >= 
-		gpa_val(lcd->gv.paging_mem_top)) {
-		printk(KERN_ERR "lcd_mm_gva_alloc: exhausted paging mem\n");
-		ret = -ENOMEM;
-		goto fail1;
-	}
-	gpa = lcd->gv.paging_mem_brk;
-	lcd->gv.paging_mem_brk = gpa_add(lcd->gv.paging_mem_brk, PAGE_SIZE);
-
-	/*
-	 * Allocate a host physical page
-	 */
-	hva = __hva(__get_free_page(GFP_KERNEL));
-	if (!hva_val(hva)) {
-		printk(KERN_ERR "lcd_mm_gva_alloc: no host phys mem\n");
-		ret = -ENOMEM;
-		goto fail2;
-	}
-	memset(hva2va(hva), 0, PAGE_SIZE);
-	hpa = hva2hpa(hva);
-
-	/*
-	 * Map in ept
-	 */
-	ret = lcd_arch_ept_map_range(lcd->lcd_arch, gpa, hpa, 1);
-	if (ret) {
-		printk(KERN_ERR "lcd_mm_gva_alloc: couldn't map gpa %lx to hpa %lx\n",
-			gpa_val(gpa),
-			hpa_val(hpa));
-		goto fail3;
-	}
-
-	*ga_out = gpa;
-	*ha_out = hpa;
-
-	return 0;
-
-fail3:
-	free_page(hva_val(hva));
-fail2:
-fail1:
-	return ret;
-}
-
-/**
- * Initializes guest virtual address space info in lcd, and
- * sets gva root pointer (e.g., x86 %cr3).
+ * Initializes root page directory for guest virtual paging in lcd,
+ * and sets the root directory pointer (on x86, %cr3).
  *
- * Must be called before mapping any gva's.
+ * Must be called before mapping any gva's, or else you'll get a kernel
+ * oops on the NULL %cr3 when we try to do a page walk.
  */
-static int lcd_mm_gva_init(struct lcd *lcd, gpa_t gv_paging_mem_start,
-			gpa_t gv_paging_mem_end)
+static int lcd_mm_gv_init(struct lcd *lcd)
 {
 	gpa_t gpa;
-	hpa_t hpa;
+	hva_t hva;
 	int ret;
-
 	/*
-	 * Set start / end
+	 * Alloc a page for the pgd. 
 	 */
-	lcd->gv.paging_mem_bot = gv_paging_mem_start;
-	lcd->gv.paging_mem_brk = gv_paging_mem_start;
-	lcd->gv.paging_mem_top = gv_paging_mem_end;
-
-	/*
-	 * Mark paging as present
-	 */
-	lcd->gv.present = 1;
-
-	/*
-	 * Alloc a page for the pgd
-	 */
-	ret = lcd_mm_gva_alloc(lcd, &gpa, &hpa);
+	ret = lcd_mm_gv_gfp(lcd, &gpa, &hva);
 	if (ret) {
-		printk(KERN_ERR "lcd_mm_gva_init: error alloc'ing\n");
+		LCD_ERR("alloc root page directory");
 		goto fail1;
 	}
-	
 	/*
 	 * Store the root pointer
 	 */
-	lcd->gv.root = (pgd_t *)hpa2va(hpa);
-	lcd_arch_set_gva_root(lcd->lcd_arch, gpa);
+	lcd->gv_paging.root = hva2va(hva);
+	lcd->gv_paging.root_gpa = gpa;
 
 	return 0;
 
@@ -211,7 +368,9 @@ static int lcd_mm_pt_destroy(struct lcd *lcd, pmd_t *pmd_entry)
 	hpa_t hpa;
 	int ret;
 	pte_t* pt;
+#if LCD_DEBUG
 	int i;
+#endif
 	
 	/*
 	 * Get hpa of page table, using gpa stored in pmd_entry.
@@ -219,37 +378,29 @@ static int lcd_mm_pt_destroy(struct lcd *lcd, pmd_t *pmd_entry)
 	gpa = pmd_gpa(pmd_entry);
 	ret = lcd_arch_ept_gpa_to_hpa(lcd->lcd_arch, gpa, &hpa);
 	if (ret) {
-		printk(KERN_ERR "lcd_mm_pt_destroy: error looking up gpa %lx\n",
-			gpa_val(gpa));
+		LCD_ERR("looking up gpa %lx\n", gpa_val(gpa));
 		return ret;
 	}
 
-	pt = (pte_t *)hpa2va(hpa);
+	pt = hpa2va(hpa);
 
+#if LCD_DEBUG
 	/*
 	 * Check for any potential memory leaks
 	 */
 	for (i = 0; i < PTRS_PER_PTE; i++) {
 		if (pte_present(pt[i])) {
-			printk(KERN_ERR "lcd_mm_pt_destroy: possible memory leak for gpa %lx (pt idx %d)\n",
+			LCD_ERR("possible memory leak for gpa %lx (pt idx %d)\n",
 				gpa_val(pte_gpa(&pt[i])), i);
 			dump_stack();
 		}
 	}
+#endif
 
 	/*
-	 * Unmap page table
+	 * Unmap and free page table
 	 */
-	ret = lcd_arch_ept_unmap_range(lcd->lcd_arch, gpa, 1);
-	if (ret) {
-		printk(KERN_ERR "lcd_mm_pt_destroy: error unmapping pt\n");
-		return ret;
-	}
-
-	/*
-	 * Free page table
-	 */
-	free_page((unsigned long)pt);
+	lcd_mm_gp_free_page(lcd, gpa);
 
 	return 0;
 }
@@ -268,12 +419,11 @@ static int lcd_mm_pmd_destroy(struct lcd *lcd, pud_t *pud_entry)
 	gpa = pud_gpa(pud_entry);
 	ret = lcd_arch_ept_gpa_to_hpa(lcd->lcd_arch, gpa, &hpa);
 	if (ret) {
-		printk(KERN_ERR "lcd_mm_pmd_destroy: error looking up gpa %lx\n",
-			gpa_val(gpa));
+		LCD_ERR("looking up gpa %lx\n",	gpa_val(gpa));
 		return ret;
 	}
 
-	pmd = (pmd_t *)hpa2va(hpa);
+	pmd = hpa2va(hpa);
 
 	/*
 	 * Free all present page tables
@@ -282,25 +432,16 @@ static int lcd_mm_pmd_destroy(struct lcd *lcd, pud_t *pud_entry)
 		if (pmd_present(pmd[i])) {
 			ret = lcd_mm_pt_destroy(lcd, &pmd[i]);
 			if (ret) {
-				printk(KERN_ERR "lcd_mm_pmd_destroy: error destroying child pt\n");
+				LCD_ERR("destroying child pt");
 				return ret;
 			}
 		}
 	}
 
 	/*
-	 * Unmap pmd
+	 * Unmap and free pmd
 	 */
-	ret = lcd_arch_ept_unmap_range(lcd->lcd_arch, gpa, 1);
-	if (ret) {
-		printk(KERN_ERR "lcd_mm_pmd_destroy: error unmapping pmd\n");
-		return ret;
-	}
-
-	/*
-	 * Free pmd
-	 */
-	free_page((unsigned long)pmd);
+	lcd_mm_gp_free_page(lcd, gpa);
 
 	return 0;
 }
@@ -319,12 +460,11 @@ static int lcd_mm_pud_destroy(struct lcd *lcd, pgd_t *pgd_entry)
 	gpa = pgd_gpa(pgd_entry);
 	ret = lcd_arch_ept_gpa_to_hpa(lcd->lcd_arch, gpa, &hpa);
 	if (ret) {
-		printk(KERN_ERR "lcd_mm_pud_destroy: error looking up gpa %lx\n",
-			gpa_val(gpa));
+		LCD_ERR("looking up gpa %lx\n", gpa_val(gpa));
 		return ret;
 	}
 
-	pud = (pud_t *)hpa2va(hpa);
+	pud = hpa2va(hpa);
 
 	/*
 	 * Destroy all present pmd's
@@ -333,31 +473,29 @@ static int lcd_mm_pud_destroy(struct lcd *lcd, pgd_t *pgd_entry)
 		if (pud_present(pud[i])) {
 			ret = lcd_mm_pmd_destroy(lcd, &pud[i]);
 			if (ret) {
-				printk(KERN_ERR "lcd_mm_pud_destroy: error destroying child pmd\n");
+				LCD_ERR("destroying child pmd");
 				return ret;
 			}
 		}
 	}
 
 	/*
-	 * Unmap pud
+	 * Unmap and free pud
 	 */
-	ret = lcd_arch_ept_unmap_range(lcd->lcd_arch, gpa, 1);
-
-	/*
-	 * Free pud
-	 */
-	free_page((unsigned long)pud);
+	lcd_mm_gp_free_page(lcd, gpa);
 
 	return 0;
 }
 
 /**
- * Unmaps guest virtual paging structures in lcd's ept, and
- * frees host physical memory associated with paging structures.
+ * Unmaps and frees host memory used for lcd's guest virtual paging
+ * hierarchy.
  *
- * Note! Does not free host physical memory mapped (via guest
- * physical addresses) by gva; just the paging structures themselves.
+ * NOTE: Does *not* free the mapped page frames themselves; just the
+ * page tables, etc.
+ *
+ * XXX: This should probably get axed when we get more serious. LCDs can
+ * modify their page tables.
  */
 static void lcd_mm_gva_destroy(struct lcd *lcd)
 {
@@ -365,8 +503,7 @@ static void lcd_mm_gva_destroy(struct lcd *lcd)
 	int i;
 	int ret;
 
-	pgd = lcd->gv.root;
-	
+	pgd = lcd->gv_paging.root;
 	/*
 	 * Free all present pud's
 	 */
@@ -374,39 +511,21 @@ static void lcd_mm_gva_destroy(struct lcd *lcd)
 		if (pgd_present(pgd[i])) {
 			ret = lcd_mm_pud_destroy(lcd, &pgd[i]);
 			if (ret) {
-				printk(KERN_ERR "lcd_mm_gva_destroy: error freeing pud at idx %d\n",
-					i);
+				LCD_ERR("freeing pud at idx %d\n", i);
 				return;
 			}
 		}
 	}
 
 	/*
-	 * Unmap in ept
+	 * Unmap and free root page dir
 	 */
-	ret = lcd_arch_ept_unmap_range(lcd->lcd_arch, 
-				lcd->gv.paging_mem_bot, 1);
-	if (ret) {
-		printk(KERN_ERR "lcd_mm_gva_destroy: error unmapping pgd\n");
-		return;
-	}
-
-	/*
-	 * Free pgd
-	 */
-	free_page((unsigned long)pgd);
-	lcd->gv.root = NULL;
-
-	/*
-	 * Mark as invalid
-	 */
-	lcd->gv.present = 0;
+	lcd_mm_gp_free_page(lcd, lcd->gv_paging.root_gpa);
+	lcd->gv_paging.root = NULL;
 }
 
-
 /**
- * Get host virtual address of pte
- * for gva and pmd_entry.
+ * Get host virtual address of pte for gva and pmd_entry.
  */
 static int lcd_mm_gva_lookup_pte(struct lcd *lcd, gva_t gva, pmd_t *pmd_entry,
 				pte_t **pte_out)
@@ -422,8 +541,7 @@ static int lcd_mm_gva_lookup_pte(struct lcd *lcd, gva_t gva, pmd_t *pmd_entry,
 	gpa = pmd_gpa(pmd_entry);
 	ret = lcd_arch_ept_gpa_to_hpa(lcd->lcd_arch, gpa, &hpa);
 	if (ret) {
-		printk(KERN_ERR "lcd_mm_gva_lookup_pte: error looking up gpa %lx\n",
-			gpa_val(gpa));
+		LCD_ERR("looking up gpa %lx", gpa_val(gpa));
 		return ret;
 	}
 	/*
@@ -447,7 +565,7 @@ static int lcd_mm_gva_walk_pt(struct lcd *lcd, gva_t gva, pmd_t *pmd_entry,
 
 	ret = lcd_mm_gva_lookup_pte(lcd, gva, pmd_entry, &entry);
 	if (ret) {
-		printk(KERN_ERR "lcd_mm_gva_walk_pt: error looking up pte\n");
+		LCD_ERR("looking up pte for gva %lx", gva_val(gva));
 		return ret;
 	}
 
@@ -457,8 +575,7 @@ static int lcd_mm_gva_walk_pt(struct lcd *lcd, gva_t gva, pmd_t *pmd_entry,
 }
 
 /**
- * Get host virtual address of pmd entry
- * for gva and pud_entry.
+ * Get host virtual address of pmd entry for gva and pud_entry.
  */
 static int lcd_mm_gva_lookup_pmd(struct lcd *lcd, gva_t gva, pud_t *pud_entry,
 				pmd_t **pmd_out)
@@ -474,8 +591,7 @@ static int lcd_mm_gva_lookup_pmd(struct lcd *lcd, gva_t gva, pud_t *pud_entry,
 	gpa = pud_gpa(pud_entry);
 	ret = lcd_arch_ept_gpa_to_hpa(lcd->lcd_arch, gpa, &hpa);
 	if (ret) {
-		printk(KERN_ERR "lcd_mm_gva_lookup_pmd: error looking up gpa %lx\n",
-			gpa_val(gpa));
+		LCD_ERR("looking up gpa %lx", gpa_val(gpa));
 		return ret;
 	}
 	/*
@@ -497,11 +613,11 @@ static int lcd_mm_gva_walk_pmd(struct lcd *lcd, gva_t gva, pud_t *pud_entry,
 	int ret;
 	pmd_t *entry;
 	gpa_t gpa;
-	hpa_t hpa;
+	hva_t hva;
 
 	ret = lcd_mm_gva_lookup_pmd(lcd, gva, pud_entry, &entry);
 	if (ret) {
-		printk(KERN_ERR "lcd_mm_gva_walk_pmd: error looking up pmd\n");
+		LCD_ERR("looking up pmd for gva %lx", gva_val(gva));
 		return ret;
 	}
 
@@ -509,9 +625,9 @@ static int lcd_mm_gva_walk_pmd(struct lcd *lcd, gva_t gva, pud_t *pud_entry,
 		/*
 		 * Alloc and map a page table
 		 */
-		ret = lcd_mm_gva_alloc(lcd, &gpa, &hpa);
+		ret = lcd_mm_gv_gfp(lcd, &gpa, &hva);
 		if (ret) {
-			printk(KERN_ERR "lcd_mm_gva_walk_pmd: error alloc'ing\n");
+			LCD_ERR("alloc page table");
 			return ret;
 		}
 
@@ -529,8 +645,7 @@ static int lcd_mm_gva_walk_pmd(struct lcd *lcd, gva_t gva, pud_t *pud_entry,
 }
 
 /**
- * Get host virtual address of pud entry
- * for gva and pgd_entry.
+ * Get host virtual address of pud entry for gva and pgd_entry.
  */
 static int lcd_mm_gva_lookup_pud(struct lcd *lcd, gva_t gva, pgd_t *pgd_entry,
 				pud_t **pud_out)
@@ -546,8 +661,7 @@ static int lcd_mm_gva_lookup_pud(struct lcd *lcd, gva_t gva, pgd_t *pgd_entry,
 	gpa = pgd_gpa(pgd_entry);
 	ret = lcd_arch_ept_gpa_to_hpa(lcd->lcd_arch, gpa, &hpa);
 	if (ret) {
-		printk(KERN_ERR "lcd_mm_gva_lookup_pud: error looking up gpa %lx\n",
-			gpa_val(gpa));
+		LCD_ERR("looking up gpa %lx\n", gpa_val(gpa));
 		return ret;
 	}
 	/*
@@ -569,11 +683,11 @@ static int lcd_mm_gva_walk_pud(struct lcd *lcd, gva_t gva, pgd_t *pgd_entry,
 	int ret;
 	pud_t *entry;
 	gpa_t gpa;
-	hpa_t hpa;
+	hva_t hva;
 
 	ret = lcd_mm_gva_lookup_pud(lcd, gva, pgd_entry, &entry);
 	if (ret) {
-		printk(KERN_ERR "lcd_mm_gva_walk_pud: error looking up pud\n");
+		LCD_ERR("looking up pud for gva %lx", gva_val(gva));
 		return ret;
 	}
 
@@ -581,9 +695,9 @@ static int lcd_mm_gva_walk_pud(struct lcd *lcd, gva_t gva, pgd_t *pgd_entry,
 		/*
 		 * Alloc and map a pmd
 		 */
-		ret = lcd_mm_gva_alloc(lcd, &gpa, &hpa);
+		ret = lcd_mm_gv_gfp(lcd, &gpa, &hva);
 		if (ret) {
-			printk(KERN_ERR "lcd_mm_gva_walk_pud: error alloc'ing\n");
+			LCD_ERR("alloc pmd");
 			return ret;
 		}
 
@@ -606,16 +720,16 @@ static int lcd_mm_gva_walk_pgd(struct lcd *lcd, gva_t gva, pgd_t **pgd_out)
 	int ret;
 	pgd_t *entry;
 	gpa_t gpa;
-	hpa_t hpa;
+	hva_t hva;
 
-	entry = lcd->gv.root + pgd_index(gva_val(gva));
+	entry = lcd->gv_paging.root + pgd_index(gva_val(gva));
 	if (!pgd_present(*entry)) {
 		/*
 		 * Alloc and map a pud
 		 */
-		ret = lcd_mm_gva_alloc(lcd, &gpa, &hpa);
+		ret = lcd_mm_gv_gfp(lcd, &gpa, &hva);
 		if (ret) {
-			printk(KERN_ERR "lcd_mm_gva_walk_pgd: error alloc'ing\n");
+			LCD_ERR("alloc pud");
 			return ret;
 		}
 
@@ -635,7 +749,8 @@ static int lcd_mm_gva_walk_pgd(struct lcd *lcd, gva_t gva, pgd_t **pgd_out)
  * address gva, using the pgd pointed to by root_hva.
  *
  * Paging data structures are allocated along the
- * way.
+ * way (since this is only used when setting up the boot
+ * guest virtual address space).
  *
  * Hierarchy: pgd -> pud -> pmd -> page table -> page frame
  *
@@ -672,7 +787,7 @@ static int lcd_mm_gva_walk(struct lcd *lcd, gva_t gva, pte_t **pte_out)
 	 */
 	ret = lcd_mm_gva_walk_pgd(lcd, gva, &pgd);
 	if (ret) {
-		printk(KERN_ERR "lcd_mm_gva_walk: err walking pgd\n");
+		LCD_ERR("walking pgd for gva %lx", gva_val(gva));
 		return ret;
 	}
 
@@ -681,7 +796,7 @@ static int lcd_mm_gva_walk(struct lcd *lcd, gva_t gva, pte_t **pte_out)
 	 */
 	ret = lcd_mm_gva_walk_pud(lcd, gva, pgd, &pud);
 	if (ret) {
-		printk(KERN_ERR "lcd_mm_gva_walk: err walking pud\n");
+		LCD_ERR("walking pud for gva %lx", gva_val(gva));
 		return ret;
 	}
 
@@ -690,7 +805,7 @@ static int lcd_mm_gva_walk(struct lcd *lcd, gva_t gva, pte_t **pte_out)
 	 */
 	ret = lcd_mm_gva_walk_pmd(lcd, gva, pud, &pmd);
 	if (ret) {
-		printk(KERN_ERR "lcd_mm_gva_walk: err walking pmd\n");
+		LCD_ERR("walking pmd for gva %lx", gva_val(gva));
 		return ret;
 	}
 
@@ -726,12 +841,12 @@ static int lcd_mm_gva_map(struct lcd *lcd, gva_t gva, gpa_t gpa)
 
 	ret = lcd_mm_gva_walk(lcd, gva, &pte);
 	if (ret) {
-		printk(KERN_ERR "lcd_mm_gva_map: error getting pte\n");
+		LCD_ERR("getting pte for gva %lx", gva_val(gva));
 		return ret;
 	}
 
 	if (pte_present(*pte)) {
-		printk(KERN_ERR "lcd_mm_gva_map: remap gva %lx to gpa %lx (was %lx)\n",
+		LCD_ERR("remap gva %lx to gpa %lx (was %lx)\n",
 			gva_val(gva), gpa_val(gpa),
 			gpa_val(lcd_mm_gva_get(pte)));
 		return -EINVAL;
@@ -743,8 +858,7 @@ static int lcd_mm_gva_map(struct lcd *lcd, gva_t gva, gpa_t gpa)
 }
 
 /**
- * Simple routine combining walk and set. Never
- * overwrites.
+ * Simple routine combining walk and unset.
  */
 static int lcd_mm_gva_unmap(struct lcd *lcd, gva_t gva)
 {
@@ -753,15 +867,40 @@ static int lcd_mm_gva_unmap(struct lcd *lcd, gva_t gva)
 
 	ret = lcd_mm_gva_walk(lcd, gva, &pte);
 	if (ret) {
-		printk(KERN_ERR "lcd_mm_gva_unmap: error getting pte\n");
+		LCD_ERR("getting pte for gva %lx", gva_val(gva));
 		return ret;
 	}
 
 	if (!pte_present(*pte)) {
-		printk(KERN_ERR "lcd_mm_gva_unmap: no mapping for gva %lx\n",
-			gva_val(gva));
+		LCD_ERR("no mapping for gva %lx\n", gva_val(gva));
 		return -EINVAL;
 	}
+
+	lcd_mm_gva_unset(pte);
+
+	return 0;
+}
+
+/**
+ * Simple routine combining walk and unset. Returns gpa in gpa_out.
+ */
+static int lcd_mm_gva_unmap2(struct lcd *lcd, gva_t gva, gpa_t *gpa_out)
+{
+	int ret;
+	pte_t *pte;
+
+	ret = lcd_mm_gva_walk(lcd, gva, &pte);
+	if (ret) {
+		LCD_ERR("getting pte for gva %lx", gva_val(gva));
+		return ret;
+	}
+
+	if (!pte_present(*pte)) {
+		LCD_ERR("no mapping for gva %lx\n", gva_val(gva));
+		return -EINVAL;
+	}
+
+	*gpa_out = lcd_mm_gva_get(pte);
 
 	lcd_mm_gva_unset(pte);
 
@@ -779,7 +918,7 @@ static int lcd_mm_gva_to_gpa(struct lcd *lcd, gva_t gva, gpa_t *gpa)
 
 	ret = lcd_mm_gva_walk(lcd, gva, &pte);
 	if (ret) {
-		printk(KERN_ERR "lcd_mm_gva_to_gpa: error getting pte\n");
+		LCD_ERR("getting pte for gva %lx", gva_val(gva));
 		return ret;
 	}
 
@@ -814,7 +953,7 @@ static int lcd_mm_gva_map_range(struct lcd *lcd, gva_t gva_start,
 					gva_add(gva_start, off),
 					/* gpa */
 					gpa_add(gpa_start, off))) {
-			printk(KERN_ERR "lcd_mm_gva_map_range: error mapping gva %lx to gpa %lx\n",
+			LCD_ERR("mapping gva %lx to gpa %lx\n",
 				gva_val(gva_add(gva_start,off)),
 				gpa_val(gpa_add(gpa_start,off)));
 			return -EIO;
@@ -840,7 +979,7 @@ static int lcd_mm_gva_unmap_range(struct lcd *lcd, gva_t gva_start,
 	len = npages * PAGE_SIZE;
 	for (off = 0; off < len; off += PAGE_SIZE) {
 		if (lcd_mm_gva_unmap(lcd, gva_add(gva_start, off))) {
-			printk(KERN_ERR "lcd_mm_gva_unmap_range: error unmapping gva %lx\n",
+			LCD_ERR("unmapping gva %lx\n",
 				gva_val(gva_add(gva_start,off)));
 			return -EIO;
 		}
@@ -849,343 +988,27 @@ static int lcd_mm_gva_unmap_range(struct lcd *lcd, gva_t gva_start,
 	return 0;
 }
 
-/* lcd create / destroy ---------------------------------------- */
-
-static int lcd_create(struct lcd **lcd_out)
-{
-	struct lcd *lcd;
-	int r;
-
-	/*
-	 * Alloc and init lcd
-	 */
-	lcd = (struct lcd *)kmalloc(sizeof(*lcd), GFP_KERNEL);
-	if (!lcd) {
-		printk(KERN_ERR "lcd_create: error alloc'ing lcd\n");
-		r = -ENOMEM;
-		goto fail1;
-	}
-	memset(lcd, 0, sizeof(*lcd)); /* sets status to unformed */
-
-	lcd->lcd_arch = lcd_arch_create();
-	if(!lcd->lcd_arch) {
-		printk(KERN_ERR "lcd_create: error creating lcd_arch\n");
-		r = -ENOMEM;
-		goto fail2;
-	}
-
-	*lcd_out = lcd;
-
-	return 0;
-
-fail2:
-	kfree(lcd);
-fail1:
-	return r;
-
-}
-
-static void lcd_destroy(struct lcd *lcd)
-{
-	/*
-	 * Order is important ...
-	 */
-	if (lcd->gv.present)
-		lcd_mm_gva_destroy(lcd);
-	lcd_arch_destroy(lcd->lcd_arch);
-	kfree(lcd);
-}
-
-
-/* BLOBs -------------------------------------------------- */
-
-static int lcd_do_run_blob_once(struct lcd *lcd)
-{
-	int r;
-	int syscall_id;
-
-	r = lcd_arch_run(lcd->lcd_arch);
-	if (r < 0) {
-		printk(KERN_ERR "lcd_do_run_blob_once: error running blob\n");
-		goto out;
-	}
-
-	switch(r) {
-	case LCD_ARCH_STATUS_PAGE_FAULT:
-		/*
-		 * Paging shouldn't be needed for blob (blob shouldn't
-		 * use instructions that access memory, for now)
-		 */
-		printk(KERN_ERR "lcd_run_blob: page fault\n");
-		r = -EIO;
-		goto out;
-		break;
-	case LCD_ARCH_STATUS_EXT_INTR:
-		/*
-		 * Continue
-		 */
-		printk(KERN_ERR "lcd_run_blob: got external intr\n");
-		r = -EIO;
-		goto out;
-	case LCD_ARCH_STATUS_EPT_FAULT:
-		/*
-		 * EPT should everything mapped the blob needs, so
-		 * there's a problem. Quit.
-		 */
-		printk(KERN_ERR "lcd_run_blob: ept fault\n");
-		r = -EIO;
-		goto out;
-	case LCD_ARCH_STATUS_CR3_ACCESS:
-		/*
-		 * %cr3 shouldn't be accessed for simple blobs (for
-		 * now). Quit.
-		 */
-		printk(KERN_ERR "lcd_run_blob: cr3 access\n");
-		r = -EIO;
-		goto out;
-	case LCD_ARCH_STATUS_SYSCALL:
-		/*
-		 * Only allow yield syscalls for now
-		 */
-		syscall_id = LCD_ARCH_GET_SYSCALL_NUM(lcd->lcd_arch);
-		printk(KERN_ERR "lcd_run_blob: handling syscall %d\n",
-			syscall_id);
-		if (syscall_id != LCD_SYSCALL_YIELD) {
-			printk(KERN_ERR "lcd_run_blob: unexpected syscall id %d\n",
-				syscall_id);
-			r = -EIO;
-			goto out;
-		} else {
-			printk(KERN_ERR "lcd_run_blob: lcd yielded, exiting lcd...\n");
-			r = -EIO;
-			goto out;
-		}
-	}
-
-out:
-	return r;
-}
-
-static int lcd_do_run_blob(struct lcd *lcd)
-{
-	int r;
-
-	while (1) {
-		r = lcd_do_run_blob_once(lcd);
-		if (r)
-			return r;
-	}
-}
-
-static int lcd_init_blob(struct lcd *lcd, unsigned char *blob,
-			unsigned int blob_order)
-{
-	int r;
-	unsigned long paging_mem_size;
-	unsigned long npages;
-
-	/*
-	 * (initial)
-	 * Blob Memory Layout
-	 * ==================
-	 *
-	 * The layout below reflects the guest physical *and* virtual memory
-	 * layout with the exception that not all paging memory is mapped in
-	 * in the guest physical address space (for efficiency). 
-	 *
-	 * Guest physical addresses are mapped one-to-one to the same guest 
-	 * virtual addresses.
-	 *
-	 * All allocated guest physical memory--including the arch-dependent 
-	 * region, guest virtual page tables, and the lcd's code--is mapped
-	 * in the guest virtual address space.
-	 *
-	 *                   +---------------------------+
-	 *                   |                           |
-	 *                   :                           :
-	 *                   :      Free / Unmapped      :
-	 *                   |                           |
-	 *                   +---------------------------+
-	 *                   |           Blob            | (max 16 pgs)	 
-	 * blob entry------> +---------------------------+ 
-	 *                   |       Guest Virtual       | (4 MBs)
-	 *                   |       Paging Memory       |
-	 * LCD_ARCH_FREE---> +---------------------------+
-	 *                   |                           |
-	 *                   :   Reserved Arch Memory    :
-	 *                   |                           |
-	 *                   +---------------------------+ 0x0000 0000 0000 0000
-	 */
-	
-	paging_mem_size = 4 * (1 << 20); /* 4 MBs */
-
-	/*
-	 * Initialize guest virtual paging
-	 */
-	r = lcd_mm_gva_init(lcd, LCD_ARCH_FREE, 
-			gpa_add(LCD_ARCH_FREE, paging_mem_size));
-	if (r) {
-		printk(KERN_ERR "lcd_init_blob: error setting up gva\n");
-		goto fail1;
-	}
-
-	/*
-	 * Map blob in guest physical, after paging mem
-	 */
-	r = lcd_arch_ept_map_range(lcd->lcd_arch, 
-				gpa_add(LCD_ARCH_FREE, paging_mem_size), 
-				va2hpa(blob),
-				(1 << blob_order));
-	if (r) {
-		printk(KERN_ERR "lcd_init_blob: error mapping blob in gpa\n");
-		goto fail2;
-	}
-
-	/*
-	 * Map gpa from 0 to top of blob in lcd's gva
-	 */
-	npages = (gpa_val(LCD_ARCH_FREE) + paging_mem_size) >> PAGE_SHIFT;
-	npages += (1 << blob_order);
-	r = lcd_mm_gva_map_range(lcd, 
-				/* gva start */
-				__gva(0), 
-				/* gpa start */
-				__gpa(0), 
-				/* num pages */
-				npages);
-	if (r) {
-		printk(KERN_ERR "lcd_init_blob: error setting up initial gva\n");
-		goto fail3;
-	}
-
-	/*
-	 * Initialize program counter to blob entry point (just after
-	 * guest virtual paging mem).
-	 */
-	r = lcd_arch_set_pc(lcd->lcd_arch, 
-			__gva(gpa_val(gpa_add(LCD_ARCH_FREE, 
-							paging_mem_size))));
-	if (r) {
-		printk(KERN_ERR "lcd_init_blob: error setting prgm counter\n");
-		goto fail4;
-	}
-
-	r = lcd_do_run_blob(lcd);
-	if (r) {
-		printk(KERN_ERR "lcd_init_blob: error running blob: err %d\n",
-			r);
-		goto fail4;
-	}
-
-	r = 0;
-	goto done;
-done:
-fail4:
-	lcd_mm_gva_unmap_range(lcd, __gva(0), npages);
-fail3:
-	lcd_arch_ept_unmap_range(lcd->lcd_arch, 
-				gpa_add(LCD_ARCH_FREE, paging_mem_size), 
-				(1 << blob_order));
-fail2:
-	lcd_mm_gva_destroy(lcd);
-fail1:
-	return r;
-}
-
-static int lcd_run_blob(struct lcd_blob_info *bi)
-{
-	struct lcd *lcd;
-	int r;
-	unsigned char *blob;
-
-	/*
-	 * Sanity check blob order
-	 */
-	if (bi->blob_order > 4) {
-		printk(KERN_ERR "lcd_run_blob: blob is bigger than 16 pgs\n");
-		r = -EINVAL;
-		goto fail1;
-	}
-	
-	/*
-	 * Load blob mem
-	 */
-	blob = (unsigned char *)__get_free_pages(GFP_KERNEL, bi->blob_order);
-	if (!blob) {
-		printk(KERN_ERR "lcd_run_blob: couldn't alloc mem for blob\n");
-		r = -ENOMEM;
-		goto fail2;
-	}
-
-	/*
-	 * Copy blob
-	 */
-	r = copy_from_user(blob, (void __user *)bi->blob, 
-			(1 << bi->blob_order) * PAGE_SIZE);
-	if (r) {
-		printk(KERN_ERR "lcd_run_blob: error copying blob\n");
-		goto fail3;
-	}
-
-	/*
-	 * Alloc and init lcd
-	 */
-	r = lcd_create(&lcd);
-	if (r) {
-		printk(KERN_ERR "lcd_run_blob: error creating lcd\n");
-		goto fail4;
-	}
-
-	/*
-	 * Initialize lcd for blob
-	 */
-	r = lcd_init_blob(lcd, blob, bi->blob_order);
-	if (r) {
-		printk(KERN_ERR "lcd_run_blob: error loading blob in lcd\n");
-		r = -EIO;
-		goto fail5;
-	}
-
-
-	r = 0;
-	goto done;
-done:
-fail5:
-	lcd_destroy(lcd);
-fail4:
-fail3:
-	free_pages((unsigned long)blob, bi->blob_order);
-fail2:
-fail1:
-	return r;
-}
-
-/* module loading ---------------------------------------- */
-
-struct lcd_module_load {
-	struct module *module;
-	struct completion done;
-};
+/* VMALLOC PAGE WALK ---------------------------------------- */
 
 /**
- * Walks physical pages in module chunk (init or core), and fires callback
- * with the values that should be used to either map or unmap the pages.
- * Because module memory is allocated with vmalloc, there's 
- * no guarantee the physical pages are contiguous, hence why we need to
- * do this.
+ * Walks physical pages in group of vmalloc pages that start at hva and
+ * end after hva + size bytes, fires callback with host virtual and
+ * physical addresses for each page.
  *
- * Code assumes chunk is page aligned, and the entire chunk is a group of
- * pages.
+ * Caller is responsible for undoing effects of callback if there's an
+ * error.
+ *
+ * (Because module memory is allocated with vmalloc, there's 
+ * no guarantee the physical pages are contiguous, hence why we need to
+ * do this.)
  *
  * (Jithu, I owe you one for implementing this in the original code.)
  */
-static int lcd_module_mem_walk(struct lcd *lcd, hva_t chunk, unsigned long size,
-			int (*cb)(struct lcd *, hpa_t, gpa_t, gva_t))
+static int lcd_vmalloc_walk(struct lcd *lcd, hva_t hva, unsigned long size,
+			int (*cb)(struct lcd *, hpa_t, hva_t))
 {
-	int r;
+	int ret;
 	hpa_t hpa;
-	gpa_t gpa;
-	gva_t gva;
 	unsigned long mapped;
 
 	mapped = 0;
@@ -1193,280 +1016,433 @@ static int lcd_module_mem_walk(struct lcd *lcd, hva_t chunk, unsigned long size,
 		/*
 		 * Convert hva to correct hpa
 		 */
-		hpa = __hpa(vmalloc_to_pfn(hva2va(chunk)) << PAGE_SHIFT);
+		hpa = __hpa(vmalloc_to_pfn(hva2va(hva)) << PAGE_SHIFT);
 		/*
-		 * Map gpa = hpa ---> hpa, and gva = hva ---> gpa
-		 *
-		 * (So, overall, we will have hva ---> hpa, inside the lcd.)
-		 *
-		 * XXX: Guest physical address = host physical address, for
-		 * simplicity. This shouldn't overlap with arch-dependent guest
-		 * physical mem, but be aware...
+		 * Fire callback
 		 */
-		gpa = __gpa(hpa_val(hpa));
-		gva = __gva(hva_val(chunk));
-		r = cb(lcd, hpa, gpa, gva);
-		if (r)
-			return r;
-
+		ret = cb(lcd, hpa, hva);
+		if (ret)
+			return ret;
+		/*
+		 * Increment ...
+		 */
 		mapped += PAGE_SIZE;
-		chunk = hva_add(chunk, PAGE_SIZE);
+		hva = hva_add(hva, PAGE_SIZE);
 	}
 	return 0;
 }
 
 /**
- * Check module code alignment before we do anything.
- *
- * If the base or top is not page aligned, the lcd could peek into
- * the host kernel.
+ * Callback used with vmalloc walk for modules that maps a page of a module
+ * into the lcd. To avoid relocating symbols, we just set gva = hva.
  */
-static int lcd_module_check_chunk(hva_t base, unsigned long size)
+static int lcd_module_map_page(struct lcd *lcd, hpa_t hpa, hva_t hva)
 {
-	if (hva_val(base) & ~(PAGE_MASK))
-		return -EINVAL;
-	if ((hva_val(base) + size) & ~(PAGE_MASK))
-		return -EINVAL;
-	return 0;
-}	
+	int ret;
+	gpa_t gpa;
+	gva_t gva;
 
-static int lcd_module_map_page(struct lcd *lcd, hpa_t hpa, gpa_t gpa,
-			gva_t gva)
-{
-	int r;
+	gva = __gva(hva_val(hva));
 
-	r = lcd_arch_ept_map(lcd->lcd_arch, gpa, hpa, 1, 0);
-	if (r) {
+	/*
+	 * Map module page in lcd's ept
+	 */
+	ret = lcd_mm_gp_alloc_map(lcd, hpa, &gpa);
+	if (ret) {
 		LCD_ERR("error mapping into ept");
-		return r;
+		return ret;
 	}
-	r = lcd_mm_gva_map(lcd, gva, gpa);
-	if (r) {
+	/*
+	 * Map module page into lcd's guest virtual
+	 */
+	ret = lcd_mm_gva_map(lcd, gva, gpa);
+	if (ret) {
 		LCD_ERR("error mapping into gv");
-		return r;
+		return ret;
 	}
 	return 0;
 }
 
-static int lcd_module_unmap_page(struct lcd *lcd, hpa_t hpa, gpa_t gpa,
-				gva_t gva)
+/**
+ * Callback used with vmalloc walk to unmap module pages.
+ */
+static int lcd_module_unmap_page(struct lcd *lcd, hpa_t hpa, hva_t hva)
 {
-	int r;
+	int ret;
+	gpa_t gpa;
+	gva_t gva;
 
-	r = lcd_arch_ept_unmap(lcd->lcd_arch, gpa);
-	if (r) {
-		LCD_ERR("error unmapping gpa in ept");
-		return r;
-	}
-	r = lcd_mm_gva_unmap(lcd, gva);
-	if (r) {
+	gva = __gva(hva_val(hva));
+
+	/*
+	 * Unmap module page in lcd's guest virtual
+	 */
+	ret = lcd_mm_gva_unmap2(lcd, gva, &gpa);
+	if (ret) {
 		LCD_ERR("error unmapping gva in gv");
-		return r;
+		return ret;
 	}
+	/*
+	 * Unmap module page in lcd's ept
+	 */
+	lcd_mm_gp_dealloc_unmap(lcd, gpa, NULL);
 	return 0;
 }
 
-static void lcd_module_addr_free(struct lcd *lcd, struct module *m)
+
+/* LCD CREATE / DESTROY -------------------------------------------------- */
+
+/**
+ * Maps the module in the guest physical and virtual address space of
+ * the lcd. This is a bit complicated because modules are mapped in the host
+ * using vmalloc. Unlike kmalloc, vmalloc allocates at page granularity so we
+ * don't need to worry about parts of the host "sneaking into" the lcd.
+ *
+ * A module is made up of two parts: init and core. Init is code and data
+ * marked with __init and sit in the module's .init sections 
+ * (e.g., .init.text); these are unloaded for *non-lcd modules*
+ * after the module's init returns. We have patched the module loading code
+ * to prevent this from happening for lcd modules. Core is basically
+ * everything else in the module (code, data).
+ *
+ * On failure, the module may be partially mapped in the guest physical
+ * and/or guest virtual address spaces. The caller is responsible for
+ * taking this (e.g., during the ept/guest virtual tear down).
+ */
+static int lcd_setup_module_address_space(struct lcd *lcd)
 {
-	int r;
-	unsigned long npages;
-
-	r = lcd_module_mem_walk(lcd, va2hva(m->module_init), 
-				m->init_size, lcd_module_unmap_page);
-	if (r) {
-		LCD_ERR("unmap module init");
-		goto fail;
+	int ret;
+	/*
+	 * Map the module's init code
+	 */
+	ret = lcd_vmalloc_walk(lcd, va2hva(lcd->module->module_init), 
+			lcd->module->init_size, lcd_module_map_page);
+	if (ret) {
+		LCD_ERR("mapping module's init");
+		return ret;
 	}
-	r = lcd_module_mem_walk(lcd, va2hva(m->module_core), 
-				m->core_size, lcd_module_unmap_page);
-	if (r) {
-		LCD_ERR("unmap module core");
-		goto fail;
+	/*
+	 * Map the module's core code
+	 */
+	ret = lcd_vmalloc_walk(lcd, va2hva(lcd->module->module_core), 
+			lcd->module->core_size, lcd_module_map_page);
+	if (ret) {
+		LCD_ERR("mapping module's core");
+		return ret;
 	}
-	npages = (gpa_val(LCD_ARCH_FREE) + LCD_PAGING_MEM_SIZE) >> PAGE_SHIFT; 
-	r = lcd_mm_gva_unmap_range(lcd, __gva(0), npages);
-	if (r) {
-		LCD_ERR("unmap arch-dep and paging mem\n");
-		goto fail;
-	}		
-	lcd_mm_gva_destroy(lcd);
 
-	return;	
-fail:
-	return;
+	return 0;
 }
 
 /**
- * Initializes the lcd's guest virtual address space, and maps
- * the kernel module m into the lcd's guest physical / virtual
- * address space.
+ * Maps the arch-dependent chunks of memory into the guest virtual
+ * address space of the lcd. Assumes the memory has already been mapped
+ * in the guest physical address space, starting at LCD_ARCH_BOTTOM.
  */
-static int lcd_module_load(struct lcd *lcd, struct module *m)
+static int lcd_setup_arch_address_space(struct lcd *lcd)
 {
-	int r = -EINVAL;
-	unsigned long npages;
+	int ret = 0;
+	unsigned int npages;
 	/*
-	 * Module Memory Layout
-	 * ====================
-	 *
-	 * The layout below reflects the guest physical *and* virtual memory
-	 * layout with the exception that not all paging memory is mapped in
-	 * in the guest physical address space (for efficiency). 
-	 *
-	 * Guest physical addresses are mapped one-to-one to the same guest 
-	 * virtual addresses.
-	 *
-	 * All allocated guest physical memory--including the arch-dependent 
-	 * region, guest virtual page tables, and the lcd's code--is mapped
-	 * in the guest virtual address space.
-	 *
-	 * The module is mapped to the same guest physical / guest virtual
-	 * address space as the host, to avoid relocating symbols.
-	 *
-	 *                  +---------------------------+
-	 *   module mapped  |                           |
-	 *   somewhere in   :                           :
-	 *    here ------>  :                           :
-	 *                  |                           |
-	 *                  +---------------------------+ 
-	 *                  |       Guest Virtual       | (4 MBs)
-	 *                  |       Paging Memory       |
-	 * LCD_ARCH_FREE--> +---------------------------+
-	 *                  |                           |
-	 *                  :   Reserved Arch Memory    :
-	 *                  |                           |
-	 *                  +---------------------------+ 0x0000 0000 0000 0000
+	 * Map arch-dependent chunks of memory
 	 */
-
-	/*
-	 * Check module memory alignment
-	 */
-	r = lcd_module_check_chunk(va2hva(m->module_init), m->init_size);
-	if (r)
-		LCD_WARN("mod init code not page aligned; parts of host kernel will be visible inside lcd");
-
-	r = lcd_module_check_chunk(va2hva(m->module_core), m->core_size);
-	if (r)
-		LCD_WARN("mod core code not page aligned; parts of host kernel will be visible inside lcd");
-
-	/*
-	 * Initialize guest virtual paging
-	 */
-	r = lcd_mm_gva_init(lcd, LCD_ARCH_FREE, 
-			gpa_add(LCD_ARCH_FREE, LCD_PAGING_MEM_SIZE));
-	if (r) {
-		LCD_ERR("setting up gva");
-		goto fail;
+	npages = (LCD_ARCH_TOP - LCD_ARCH_BOTTOM) >> PAGE_SHIFT;
+	if (npages > 0) {
+		ret = lcd_mm_gva_map_range(lcd, 
+					__gva(LCD_ARCH_BOTTOM),
+					__gpa(LCD_ARCH_BOTTOM),
+					npages);
 	}
+	return ret;
+}
 
+/**
+ * Initializes the guest virtual address space, maps module and arch-dep
+ * parts of memory into guest virtual address space.
+ *
+ * On failure, parts of the address space may be set up. The caller is
+ * responsible for tearing it down.
+ */
+static int lcd_setup_address_space(struct lcd *lcd)
+{
+	int ret;
 	/*
-	 * Map arch-dependent mem and paging mem in guest virtual
+	 * Initialize guest virtual address space (root page dir)
 	 */
-	npages = (gpa_val(LCD_ARCH_FREE) + LCD_PAGING_MEM_SIZE) >> PAGE_SHIFT;
-	r = lcd_mm_gva_map_range(lcd, __gva(0), __gpa(0), npages);
-	if (r) {
-		LCD_ERR("mapping arch-dep code and paging mem");
-		goto fail;
+	ret = lcd_mm_gv_init(lcd);
+	if (ret) {
+		LCD_ERR("setting up guest virtual addr space");
+		goto fail1;
 	}
-
 	/*
-	 * Map module init and core
+	 * Map arch-dependent chunks of memory
 	 */
-	r = lcd_module_mem_walk(lcd, va2hva(m->module_init), m->init_size,
-				lcd_module_map_page);
-	if (r) {
-		LCD_ERR("error mapping init code");
-		goto fail;
+	ret = lcd_setup_arch_address_space(lcd);
+	if (ret) {
+		LCD_ERR("mapping arch-dependent memory");
+		goto fail2;
 	}
-	r = lcd_module_mem_walk(lcd, va2hva(m->module_core), m->core_size,
-				lcd_module_map_page);
-	if (r) {
-		LCD_ERR("error mapping core code");
-		goto fail;
-	}
-	
 	/*
-	 * Initialize program counter to module init
+	 * Map the module into the lcd
 	 */
-	r = lcd_arch_set_pc(lcd->lcd_arch, 
-			__gva(hva_val(va2hva(m->module_init))));
-	if (r) {
-		LCD_ERR("setting pgm counter");
-		goto fail;
+	ret = lcd_setup_module_address_space(lcd);
+	if (ret) {
+		LCD_ERR("mapping module");
+		goto fail3;
 	}
 
 	return 0;
 
-fail:
-	return r;
+/* Caller responsible for tear down */
+fail3:		
+fail2:
+fail1:
+	return ret;
 }
 
-/**
- * Returns when the hypervisor says the kthread should stop.
- */
-static void lcd_module_kthread_stop(void)
+static struct lcd * __lcd_create(void)
 {
-	set_current_state(TASK_INTERRUPTIBLE);
-	while(!kthread_should_stop()) {
-		schedule();
-		set_current_state(TASK_INTERRUPTIBLE);
+	struct lcd *lcd;
+	/*
+	 * Alloc lcd data structure
+	 *
+	 * zero alloc sets guest paging counter to zero, etc.
+	 */
+	lcd = kzalloc(sizeof(*lcd), GFP_KERNEL);
+	if (!lcd) {
+		LCD_ERR("error alloc'ing lcd");
+		goto fail1;
 	}
-	set_current_state(TASK_RUNNING);
+	/*
+	 * Alloc arch-dependent part
+	 */
+	lcd->lcd_arch = lcd_arch_create();
+	if(!lcd->lcd_arch) {
+		LCD_ERR("error creating lcd_arch");
+		goto fail2;
+	}
+	/*
+	 * Initialize lcd_threads list and lock
+	 */
+	INIT_LIST_HEAD(&lcd->lcd_threads.list);
+	mutex_init(&lcd->lcd_threads.lock);
+	/*
+	 * Done
+	 */
+	return lcd;
+
+fail2:
+	kfree(lcd);
+fail1:
+	return NULL;
 }
 
 /**
- * Tears down lcd, and waits until hypervisor tells it to stop (if
- * run_ret_val is non-zero). The entire lcd is not destroyed until
- * the hypervisor tells it to stop, so that it can check the lcd's
- * status.
+ * Loads module into host address space, and stores pointer to
+ * struct module in lcd.
  */
-static int lcd_module_kthread_die(struct lcd *lcd, 
-				struct lcd_module_load *info, int run_ret_val)
+static int lcd_load_module(struct lcd *lcd, char *module_name)
 {
+	int ret;
 	/*
-	 * XXX: For now, we're not calling the module's exit routine ...
+	 * Load the requested module
 	 */
+	ret = request_lcd_module(module_name);
+	if (ret < 0) {
+		LCD_ERR("load module");
+		goto fail1;
+	}
+	/*
+	 * Find loaded module, and inc its ref counter; must hold module mutex
+	 * while finding module.
+	 */
+	mutex_lock(&module_mutex);
+	lcd->module = find_module(module_name);
+	mutex_unlock(&module_mutex);	
+	if (!lcd->module) {
+		LCD_ERR("couldn't find module");
+		goto fail2;
+	}
+	if(!try_module_get(lcd->module)) {
+		LCD_ERR("incrementing module ref count");
+		goto fail3;
+	}
+	/*
+	 * Set the lcd name
+	 */
+	strncpy(lcd->name, module_name, MODULE_NAME_LEN);
+
+	return ret;
+
+fail3:
+	ret = do_sys_delete_module(module_name, 0, 1);
+	if (ret)
+		LCD_ERR("deleting module");
+	lcd->module = NULL;
+fail2:
+fail1:
+	return ret;
+}
+
+void lcd_destroy(struct lcd *lcd)
+{
+	int ret;
+	/*
+	 * Assume we have no running lcd_thread's ...
+	 *
+	 * ORDER IS IMPORTANT:
+	 *
+	 * (1) unmap the module
+	 *
+	 * (2) delete the module from the host
+	 *
+	 * (3) tear down guest virtual paging
+	 *
+	 * (4) free up any pages still in the guest physical addr space
+	 *     XXX: This will attempt to free the underlying host page.
+	 *                       Beware!
+	 *
+	 * (5) tear down the lcd arch
+	 *
+	 * Why? We need to unmap the module so we don't try to double free
+	 * the module memory in (4). Deleting the module just needs to come
+	 * somewhere after (1). (3) needs to come before (4) so we don't
+	 * double free pages. (5) needs to come after (4) so that the ept
+	 * is still around to tear down the guest phys addr space.
+	 *
+	 * If you do it in the wrong order, you can get NULLs or double
+	 * frees (very fun!).
+	 *
+	 * I do NULL checks so that calls to __lcd_create (doesn't set up
+	 * module or guest virtual) can be matched with lcd_destroy.
+	 */
+	if (lcd->module) {
+		/*
+		 * Unmap module
+		 */
+		ret = lcd_vmalloc_walk(lcd, va2hva(lcd->module->module_init),
+				lcd->module->init_size, lcd_module_unmap_page);
+		if (ret)
+			LCD_ERR("unmapping module's init, continuing ...");
+		ret = lcd_vmalloc_walk(lcd, va2hva(lcd->module->module_core),
+				lcd->module->core_size, lcd_module_unmap_page);
+		if (ret)
+			LCD_ERR("unmapping module's core, continuing ...");
+		/*
+		 * Delete module
+		 */
+		module_put(lcd->module);
+		ret = do_sys_delete_module(lcd->module->name, 0, 1);
+		if (ret)	
+			LCD_ERR("deleting module");
+	}
+	/*
+	 * Tear down guest virtual address space (the checks allow
+	 * lcd_create to call us at various points)
+	 */
+	if (lcd->gv_paging.root)
+		lcd_mm_gva_destroy(lcd);
+	/*
+	 * Free any remaining pages in the guest physical address space
+	 */
+	lcd_mm_gp_free_all(lcd);
+	/*
+	 * Tear down lcd_arch (ept, ...)
+	 */
+	lcd_arch_destroy(lcd->lcd_arch);
+	/*
+	 * Finish
+	 */
+	kfree(lcd);
+}
+
+static int lcd_setup_initial_thread(struct lcd *lcd);
+
+int lcd_create(char *module_name, struct lcd **out)
+{
+	int ret;
+	struct lcd *lcd;
 
 	/*
-	 * Unmap module (hypervisor / user is responsible for 
-	 * deleting it)
+	 * Alloc and init basic parts of lcd
 	 */
-	lcd_module_addr_free(lcd, info->module);
+	lcd = __lcd_create();
+	if (!lcd) {
+		LCD_ERR("failed to init lcd");
+		ret = -EIO;
+		goto fail1;
+	}
 	/*
-	 * Set status = LCD_STATUS_DEAD
+	 * Load the module
 	 */
-	lcd->status = LCD_STATUS_DEAD;
+	ret = lcd_load_module(lcd, module_name);
+	if (ret) {
+		LCD_ERR("load module");
+		goto fail2;
+	}
 	/*
-	 * If run_ret_val is non-zero, wait until we should stop
+	 * Set up the arch-independent part of the guest physical address
+	 * space, and the entire guest virtual address space.
 	 */
-	if (run_ret_val)
-		lcd_module_kthread_stop();
+	ret = lcd_setup_address_space(lcd);
+	if (ret) {
+		LCD_ERR("set up address space");
+		goto fail3;
+	}
 	/*
-	 * Destroy lcd
+	 * Set up the first lcd_thread
 	 */
+	ret = lcd_setup_initial_thread(lcd);
+	if (ret) {
+		LCD_ERR("set up initial thread");
+		goto fail4;
+	}
+
+	*out = lcd;
+
+	return 0;
+
+fail4:
+fail3:
+fail2:
 	lcd_destroy(lcd);
-	kfree(info);
-	/*
-	 * Pass back the return value (to hypervisor)
-	 */
-	return run_ret_val;
+fail1:
+	return ret;	
 }
 
-static int lcd_module_run_once(struct lcd *lcd)
-{
-	int r;
-	int syscall_id;
+/* LCD THREAD EXECUTION -------------------------------------------------- */
 
-	r = lcd_arch_run(lcd->lcd_arch);
-	if (r < 0) {
+static int lcd_handle_syscall(struct lcd_thread *t)
+{
+	int syscall_id;
+	
+	syscall_id = LCD_ARCH_GET_SYSCALL_NUM(t->lcd_arch_thread);
+	LCD_MSG("got syscall %d", syscall_id);
+
+	switch (syscall_id) {
+	case LCD_SYSCALL_YIELD:
+		return 1;
+		break;
+	default:
+		LCD_ERR("unimplemented syscall %d", syscall_id);
+		return -ENOSYS;
+	}
+}
+
+static int lcd_kthread_run_once(struct lcd_thread *t)
+{
+	int ret;
+
+	ret = lcd_arch_run(t->lcd_arch_thread);
+	if (ret < 0) {
 		LCD_ERR("running lcd");
 		goto out;
 	}
 
-	switch(r) {
+	switch(ret) {
 	case LCD_ARCH_STATUS_PAGE_FAULT:
 		LCD_ERR("page fault");
-		r = -EIO;
+		ret = -ENOSYS;
 		goto out;
 		break;
 	case LCD_ARCH_STATUS_EXT_INTR:
@@ -1474,266 +1450,309 @@ static int lcd_module_run_once(struct lcd *lcd)
 		 * Continue
 		 */
 		LCD_MSG("got external intr");
-		r = 0;
+		ret = 0;
 		goto out;
 	case LCD_ARCH_STATUS_EPT_FAULT:
 		LCD_ERR("ept fault");
-		r = -EIO;
+		ret = -ENOSYS;
 		goto out;
 	case LCD_ARCH_STATUS_CR3_ACCESS:
 		LCD_ERR("cr3 access");
-		r = -EIO;
+		ret = -ENOSYS;
 		goto out;
 	case LCD_ARCH_STATUS_SYSCALL:
-		/*
-		 * Only allow yield syscalls for now
-		 */
-		syscall_id = LCD_ARCH_GET_SYSCALL_NUM(lcd->lcd_arch);
-		LCD_MSG("handling syscall %d", syscall_id);
-		if (syscall_id != LCD_SYSCALL_YIELD) {
-			LCD_ERR("unexpected syscall id %d", syscall_id);
-			r = -EIO;
-			goto out;
-		} else {
-			LCD_MSG("lcd yielded, exiting lcd...");
-			r = 1;
-			goto out;
-		}
+		LCD_MSG("syscall");
+		ret = lcd_handle_syscall(t);
+		goto out;
 	}
+
 out:
-	return r;
+	return ret;
 }
 
-/**
- * Suspends kthread until lcd is marked as running.
- */
-static void lcd_module_kthread_wait(struct lcd *lcd)
+static int lcd_kthread_main(void *data) /* data is NULL */
 {
-	lcd->status = LCD_STATUS_SUSPENDED;
-
-	set_current_state(TASK_INTERRUPTIBLE);
-	while(lcd->status == LCD_STATUS_SUSPENDED) {
-		schedule();
-		set_current_state(TASK_INTERRUPTIBLE);
-	}
-	set_current_state(TASK_RUNNING);
-}
-
-/**
- * The `main' function for the kthread that loads and runs a kernel
- * module in an lcd.
- */
-static int lcd_module_kthread(void *_info)
-{
-	struct lcd_module_load *info;
-	struct lcd *lcd;
-	int r;
-
-	info = (struct lcd_module_load *)_info;
-
-	/*
-	 * Alloc and init lcd
-	 */
-	r = lcd_create(&lcd);
-	if (r) {
-		LCD_ERR("creating lcd");
-		goto fail1;
-	}
-
-	/*
-	 * Load module in lcd
-	 */
-	r = lcd_module_load(lcd, info->module);
-	if (r) {
-		LCD_ERR("module load");
-		goto fail2;
-	}
-
-	/*
-	 * === past this line, all code should use lcd_module_kthread_die ===
-	 */
-
-	/*
-	 * Copy name and pointer to lcd
-	 */
-	strncpy(lcd->name, info->module->name, MODULE_NAME_LEN);
-	current->lcd = lcd;
-
-	/*
-	 * Complete, and wait until we aren't suspended
-	 */
-	complete(&info->done);
-	lcd_module_kthread_wait(lcd);
-	if (lcd->status != LCD_STATUS_RUNNABLE)
-		return lcd_module_kthread_die(lcd, info, -1);
-
-	/*
-	 * Make sure lcd has valid state
-	 */
-	r = lcd_arch_check(lcd->lcd_arch);
-	if (r)
-		return lcd_module_kthread_die(lcd, info, -1);
-
-	/*
-	 * Run loop, check after each iter if we should stop
-	 */
-	for(;;) {
-		r = lcd_module_run_once(lcd);
-		if (r || kthread_should_stop()) {
-			return lcd_module_kthread_die(lcd, info, r);
-		}
-	}
-	
-	/* unreachabe ... */
-
-fail2:
-	lcd_destroy(lcd);
-fail1:
-	/*
-	 * Complete and wait until we should stop, then pass back ret val
-	 */
-	complete(&info->done);
-	lcd_module_kthread_stop();
-	kfree(info);
-	return r;
-}
-
-struct task_struct * lcd_create_as_module(char *module_name)
-{
-	struct task_struct *t;
-	struct lcd_module_load *info;
 	int ret;
+	struct lcd_thread *current_lcd_thread;
 
-	info = kmalloc(sizeof(*info), GFP_KERNEL);
-	if (!info) {
-		LCD_ERR("alloc info");
-		goto fail;
-	}
-
+	current_lcd_thread = current->lcd_thread;
 	/*
-	 * Load module via usermode helper. This call blocks
-	 * and returns the exit status of lcd-modprobe.
+	 * Set my status as running
 	 */
-	ret = request_lcd_module(module_name);
-	if (ret < 0) {
-		LCD_ERR("load module");
-		kfree(info);
-		goto fail;
-	}
-
+	current_lcd_thread->status = LCD_THREAD_RUNNING;
 	/*
-	 * Find loaded module, and inc its ref counter; must hold module mutex
-	 * while finding module.
+	 * Enter run loop, check after each iteration if we should stop
+	 *
+	 * XXX: We're not giving the thread a chance to gracefully exit
+	 * for now (e.g., we could use a special upcall message to signal that 
+	 * it should terminate).
 	 */
-	mutex_lock(&module_mutex);
-	info->module = find_module(module_name);
-	mutex_unlock(&module_mutex);	
-	if (!info->module) {
-		LCD_ERR("couldn't find module");
-		kfree(info);
-		goto fail;
-	}
-	if(!try_module_get(info->module)) {
-		LCD_ERR("incrementing module ref count");
-		kfree(info);
-		goto fail_module;
-	}
-
-	/*
-	 * Spawn hosting kernel thread, and give it the info.
-	 */
-	init_completion(&info->done);
-	t = kthread_create(lcd_module_kthread, info, module_name);
-	if (!t) {
-		LCD_ERR("spawning kthread");
-		kfree(info);
-		goto fail_module_put;
+	for (;;) {
+		ret = lcd_kthread_run_once(current_lcd_thread);
+		if (ret || kthread_should_stop())
+			return ret; /* to microkernel via kthread_stop */
 	}
 	
-	/*
-	 * kthread owns info after this point ...
-	 */
-
-	/*
-	 * Wake kthread up, and wait until it is ready
-	 */
-	wake_up_process(t);
-	ret = wait_for_completion_interruptible(&info->done);
-	if (ret) {
-		LCD_ERR("errno %d waiting for kthread", ret);
-		goto fail_stop;
-	}
-
-	/*
-	 * Confirm the kernel thread has an lcd and is waiting
-	 *
-	 * XXX: Is this vulnerable to memory barrier problems? The
-	 * documentation for the complete routine states there is
-	 * an implied write memory barrier of some kind.
-	 */
-	if (t->lcd && t->lcd->status == LCD_STATUS_SUSPENDED) {
-		return t;
-	} else {
-		LCD_ERR("lcd failed to init");
-		goto fail_stop;
-	}
-
-fail_stop:
-	ret = kthread_stop(t);
-	LCD_MSG("kthread retval = %d", ret);
-fail_module_put:
-	module_put(info->module);
-fail_module:
-	ret = do_sys_delete_module(module_name, 0, 1);
-	if (ret)
-		LCD_ERR("deleting module");
-fail:
-	return NULL;	
+	/* unreachable */
 }
 
-int lcd_run_as_module(struct task_struct *t)
+int lcd_thread_start(struct lcd_thread *t)
 {
 	/*
-	 * Set lcd's status to runnable, and wake up the kthread
+	 * Set lcd's status to runnable, and wake up the kthread (will
+	 * start running lcd_kthread_main).
 	 */
-	t->lcd->status = LCD_STATUS_RUNNABLE;
-	wake_up_process(t);
+	t->status = LCD_THREAD_RUNNABLE;
+	wake_up_process(t->kthread);
 
 	return 0;
 }
 
-void lcd_destroy_as_module(struct task_struct *t, char *module_name)
+int lcd_thread_kill(struct lcd_thread *t)
 {
 	int ret;
-	struct module *m;
-	
 	/*
-	 * If lcd is suspended, kill it. This happens if we want to
-	 * kill the lcd before it starts running for the first time.
+	 * Stop the kernel thread and get return value.
 	 */
-	if (t->lcd->status == LCD_STATUS_SUSPENDED) {
-		t->lcd->status = LCD_STATUS_KILL;
-		wake_up_process(t);
-	}
-
+	ret = kthread_stop(t->kthread);
 	/*
-	 * Tell kthread to stop, and delete the module when it's done.
+	 * Decrement the kthread's reference count. Host kernel will clean
+	 * up the rest.
 	 */
-	ret = kthread_stop(t);
-	LCD_ERR("kthread retval = %d", ret);
-
-	mutex_lock(&module_mutex);
-	m = find_module(module_name);
-	mutex_unlock(&module_mutex);
-	if (!m) {
-		LCD_ERR("finding module");
-		return;
+	put_task_struct(t->kthread);
+	/*
+	 * The LCD still owns the lcd thread's stack, so we won't free it.
+	 *
+	 * Tear down the lcd arch thread
+	 */
+	lcd_arch_destroy_thread(t->lcd_arch_thread);
+	/*
+	 * Remove from LCD's list of threads
+	 */
+	if (mutex_lock_interruptible(&t->lcd->lcd_threads.lock)) {
+		LCD_ERR("interrupted, skipping list removal ...");
+		goto finally;
 	}
-	module_put(m);
-	ret = do_sys_delete_module(module_name, 0, 1);
-	if (ret)
-		LCD_ERR("deleting module");
+	list_del(&t->lcd_threads);
+	mutex_unlock(&t->lcd->lcd_threads.lock);
+
+finally:
+	/*
+	 * Free t
+	 */
+	kfree(t);
+
+	return ret;
 }
+
+/* LCD THREAD CREATE / DESTROY -------------------------------------------- */
+
+/**
+ * Creates a new thread to run in lcd. Thread will begin executing at
+ * guest virtual address pc. It will use the stack (except for the initial
+ * thread, the LCD is responsible for allocating the stack page) whose
+ * top is at stack_gva/stack_gpa. 
+ *
+ * We require both stack_gva/stack_gpa so that the microkernel
+ * doesn't rely on the guest virtual paging hierarchy inside the LCD, to
+ * resolve guest virtual to guest physical. It needs the guest physical so
+ * it can resolve to a host virtual address for the thread's utcb.
+ *
+ * For now, we assume that the LCD doesn't change the guest physical address
+ * of the root guest virtual paging directory.
+ *
+ * The underlying kernel thread won't start until caller does
+ * lcd_thread_start.
+ */
+static int lcd_add_thread(struct lcd *lcd, gva_t pc, gva_t stack_gva,
+			gpa_t stack_gpa, struct lcd_thread **out)
+{
+	struct lcd_thread* t;
+	hpa_t stack_hpa;
+	hva_t stack_hva;
+	int ret;
+	/*
+	 * Resolve stack's guest physical address to host virtual
+	 */
+	ret = lcd_arch_ept_gpa_to_hpa(lcd->lcd_arch, stack_gpa, &stack_hpa);
+	if (ret) {
+		LCD_ERR("looking up stack gpa %lx", gpa_val(stack_gpa));
+		goto fail0;
+	}
+	stack_hva = hpa2hva(stack_hpa);
+	/*
+	 * Alloc lcd_thread
+	 */
+	t = kzalloc(sizeof(*t), GFP_KERNEL); /* status unformed */
+	if (!t) {
+		LCD_ERR("failed to alloc lcd_thread");
+		ret = -ENOMEM;
+		goto fail1;
+	}
+	/*
+	 * Add t to lcd's list
+	 */
+	t->lcd = lcd;
+	INIT_LIST_HEAD(&t->lcd_threads);
+	if (mutex_lock_interruptible(&lcd->lcd_threads.lock)) {
+		LCD_ERR("interrupted, cleaning up...");
+		goto fail2;
+	}
+
+	list_add(&t->lcd_threads, &lcd->lcd_threads.list);
+
+	mutex_unlock(&lcd->lcd_threads.lock);
+	/*
+	 * Set up utcb (at bottom of stack -- masking off lower bits)
+	 */
+	t->utcb = hva2va(stack_hva);
+	t->utcb = (void *)(((u64)t->utcb) & PAGE_MASK);
+	/*
+	 * Alloc corresponding lcd_arch_thread
+	 */
+	t->lcd_arch_thread = lcd_arch_add_thread(lcd->lcd_arch);
+	if (!t->lcd_arch_thread) {
+		LCD_ERR("set up lcd_arch_thread");
+		goto fail3;
+	}
+	/*
+	 * Set up thread's environment
+	 */
+	ret = lcd_arch_set_pc(t->lcd_arch_thread, pc);
+	if (ret) {
+		LCD_ERR("setting program counter");
+		goto fail4;
+	}
+	ret = lcd_arch_set_sp(t->lcd_arch_thread, stack_gva);
+	if (ret) {
+		LCD_ERR("setting stack pointer");
+		goto fail5;
+	}
+	ret = lcd_arch_set_gva_root(t->lcd_arch_thread, 
+				lcd->gv_paging.root_gpa);
+	if (ret) {
+		LCD_ERR("setting guest virtual root address");
+		goto fail6;
+	}
+	/*
+	 * Make sure lcd_arch_thread has valid state
+	 */
+	ret = lcd_arch_check(t->lcd_arch_thread);
+	if (ret) {
+		LCD_ERR("bad lcd_arch_thread state");
+		goto fail7;
+	}
+	/*
+	 * Create a kernel thread (won't run till we wake it up)
+	 */
+	t->kthread = kthread_create(lcd_kthread_main, NULL,
+				"lcd:%s/%d", lcd->name, 
+				lcd->lcd_threads.count++);
+	if (!t->kthread) {
+		LCD_ERR("failed to create kthread");
+		goto fail8;
+	}
+	/*
+	 * Bumpg reference count on kthread
+	 */
+	get_task_struct(t->kthread);
+	/*
+	 * Store back reference
+	 */
+	t->kthread->lcd_thread = t;
+
+	/*
+	 * DONE!
+	 */
+	*out = t;
+
+	return 0;
+
+fail8:
+fail7:
+fail6:
+fail5:
+fail4:
+	lcd_arch_destroy_thread(t->lcd_arch_thread);
+fail3:
+	if (mutex_lock_interruptible(&lcd->lcd_threads.lock)) {
+		LCD_ERR("interrupted in fail, skipping list removal...");
+		goto fail2;
+	}
+
+	list_del(&t->lcd_threads);
+
+	mutex_unlock(&lcd->lcd_threads.lock);
+fail2:	
+	kfree(t);
+fail1:
+fail0:
+	return ret;
+}
+
+static int lcd_setup_initial_thread(struct lcd *lcd)
+{
+	struct lcd_thread *t = NULL;
+	hva_t stack_page;
+	gpa_t stack_page_gpa;
+	gva_t stack_page_gva;
+	gpa_t stack_ptr_gpa;
+	gva_t stack_ptr_gva;
+	int ret;
+	/*
+	 * Allocate a page for the initial thread's stack/utcb
+	 */
+	ret = lcd_mm_gp_gfp(lcd, &stack_page, &stack_page_gpa);
+	if (ret) {
+		LCD_ERR("alloc stack page");
+		goto fail1;
+	}
+	/*
+	 * Stack pointer points to top of stack page
+	 */
+	stack_ptr_gpa = gpa_add(stack_page_gpa, PAGE_SIZE - 1);
+	/*
+	 * Map stack in lcd's guest virtual, right after the guest virtual
+	 * paging memory (ptr at top).
+	 */
+	stack_page_gva = __gva(LCD_GV_MEM_START + LCD_GV_MEM_SIZE);
+	stack_ptr_gva = gva_add(stack_page_gva, PAGE_SIZE - 1);
+	ret = lcd_mm_gva_map(lcd, stack_page_gva, stack_page_gpa);
+	if (ret) {
+		LCD_ERR("failed to map stack in guest virtual");
+		goto fail2;
+	}
+	/*
+	 * Create and add initial thread to lcd.
+	 *
+	 * Initial pc will point to the module's init. Recall that
+	 * gva of the module = hva of the module, for simplicity. The
+	 * code is a bit redundant, but it asserts this fact.
+	 */
+	ret = lcd_add_thread(lcd,
+			__gva(hva_val(va2hva(lcd->module->module_init))),
+			stack_ptr_gva,
+			stack_ptr_gpa,
+			&t);
+	if (ret) {
+		LCD_ERR("failed to make lcd thread");
+		goto fail3;
+	}
+	/*
+	 * Set lcd's initial thread, all done.
+	 */
+	lcd->init_thread = t;
+	return 0;
+
+fail3:
+	lcd_mm_gva_unmap(lcd, stack_page_gva);
+fail2:
+	lcd_mm_gp_free_page(lcd, stack_page_gpa);
+fail1:
+	return ret;
+}
+
+/* IOCTL -------------------------------------------------- */
 
 /**
  * Does insmod syscall on behalf of user code call to ioctl.
@@ -1759,40 +1778,12 @@ static int lcd_init_module(void __user *_mi)
 				mi.param_values, 1);
 }
 
-/* ioctl -------------------------------------------------- */
-
 static long lcd_dev_ioctl(struct file *filp,
 			  unsigned int ioctl, unsigned long arg)
 {
 	long r = -EINVAL;
-	struct lcd_pv_kernel_config conf;
-	struct lcd_blob_info bi;
 
 	switch (ioctl) {
-	case LCD_LOAD_PV_KERNEL:
-		r = copy_from_user(&conf, (int __user *) arg,
-				sizeof(struct lcd_pv_kernel_config));
-		if (r) {
-			r = -EIO;
-			goto out;
-		}
-		/* create LCD with a PV Linux kernel */
-		goto out;
-		break;
-	case LCD_RUN_BLOB:
-		r = copy_from_user(&bi, (void __user *)arg, sizeof(bi));
-		if (r) {
-			printk(KERN_ERR "lcd: error loading blob info\n");
-			r = -EIO;
-			goto out;
-		}
-		r = lcd_run_blob(&bi);
-		if (r) {
-			printk(KERN_ERR "lcd: error running blob\n");
-			goto out;
-		}
-		r = 0;
-		goto out;
 	case LCD_INIT_MODULE:
 		r = lcd_init_module((void __user *)arg);
 		goto out;
@@ -1830,13 +1821,13 @@ static int __init lcd_init(void)
 	printk(KERN_ERR "LCD module loaded\n");
 
 	if ((r = lcd_arch_init())) {
-		printk(KERN_ERR "lcd: failed to initialize vmx\n");
+		LCD_ERR("failed to initialize vmx");
 		return r;
 	}
 
 	r = misc_register(&lcd_dev);
 	if (r) {
-		printk(KERN_ERR "lcd: misc device register failed\n");
+		LCD_ERR("misc device register failed");
 		
 	}
 
@@ -1859,9 +1850,10 @@ static void __exit lcd_exit(void)
 module_init(lcd_init);
 module_exit(lcd_exit);
 
-EXPORT_SYMBOL(lcd_create_as_module);
-EXPORT_SYMBOL(lcd_run_as_module);
-EXPORT_SYMBOL(lcd_destroy_as_module);
+EXPORT_SYMBOL(lcd_create);
+EXPORT_SYMBOL(lcd_destroy);
+EXPORT_SYMBOL(lcd_thread_start);
+EXPORT_SYMBOL(lcd_thread_kill);
 
 /* DEBUGGING ---------------------------------------- */
 
