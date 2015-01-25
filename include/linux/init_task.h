@@ -16,9 +16,9 @@
 
 #ifdef CONFIG_HAVE_LCD
 #include <lcd-domains/lcd-domains.h>
-#define INIT_LCD .lcd = NULL,
+#define INIT_LCD_THREAD .lcd_thread = NULL,
 #else
-#define INIT_LCD
+#define INIT_LCD_THREAD
 #endif
 
 #ifdef CONFIG_SMP
@@ -220,7 +220,7 @@ extern struct task_group root_task_group;
 		[PIDTYPE_SID]  = INIT_PID_LINK(PIDTYPE_SID),		\
 	},								\
 	.thread_group	= LIST_HEAD_INIT(tsk.thread_group),		\
-	INIT_LCD                                                        \
+	INIT_LCD_THREAD                                                 \
 	INIT_IDS							\
 	INIT_PERF_EVENTS(tsk)						\
 	INIT_TRACE_IRQFLAGS						\
