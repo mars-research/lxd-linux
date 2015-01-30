@@ -1,3 +1,7 @@
+
+/* NOT CURRENTLY USED */
+
+
 #include <lcd/cap.h>
 
 // this function will not lock any semaphore.
