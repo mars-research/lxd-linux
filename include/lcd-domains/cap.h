@@ -1,3 +1,7 @@
+
+/* NOT CURRENTLY USED */
+
+
 #ifndef __LCD_CAP_H__
 #define __LCD_CAP_H__
 

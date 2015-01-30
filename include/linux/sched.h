@@ -1038,7 +1038,7 @@ struct task_struct {
 	unsigned int flags;	/* per process flags, defined below */
 	unsigned int ptrace;
 #ifdef CONFIG_HAVE_LCD
-	struct lcd *lcd;
+	struct lcd_thread *lcd_thread;
 #endif
 #ifdef CONFIG_SMP
 	struct llist_node wake_entry;

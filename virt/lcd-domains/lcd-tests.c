@@ -5,14 +5,17 @@
  * ran last in lcd_init.
  */
 
+#include <linux/delay.h>
+
 static int test01(void)
 {
 	struct lcd *lcd;
-	int ret;
+	int ret = 0;
 
-	ret = lcd_create(&lcd);
-	if (ret) {
-		printk(KERN_ERR "lcd test: test01 failed to create lcd\n");
+	lcd = __lcd_create();
+	if (!lcd) {
+		LCD_ERR("failed to create lcd");
+		ret = -1;
 		goto fail;
 	}
 
@@ -27,103 +30,35 @@ fail:
 static int test02(void)
 {
 	struct lcd *lcd;
-	int ret;
-
-	ret = lcd_create(&lcd);
-	if (ret) {
-		printk(KERN_ERR "lcd test: test02 failed to create lcd\n");
-		goto fail1;
-	}
-	
-	ret = lcd_mm_gva_init(lcd, LCD_ARCH_FREE,
-			gpa_add(LCD_ARCH_FREE, 4 * (1 << 20)));
-	if (ret) {
-		printk(KERN_ERR "lcd test: test02 failed to init gva\n");
-		goto fail2;
-	}
-
-	lcd_destroy(lcd);
-
-	return 0;
-
-fail2:
-	lcd_destroy(lcd);
-fail1:
-	return ret;
-}
-
-static int test03(void)
-{
-	struct lcd *lcd;
-	int ret;
+	int ret = 0;
 	gpa_t gpa;
-	hpa_t hpa;
-
-	ret = lcd_create(&lcd);
-	if (ret) {
-		printk(KERN_ERR "lcd test: test03 failed to create lcd\n");
-		goto fail1;
-	}
-	
-	ret = lcd_mm_gva_init(lcd, LCD_ARCH_FREE,
-			gpa_add(LCD_ARCH_FREE, 4 * (1 << 20)));
-	if (ret) {
-		printk(KERN_ERR "lcd test: test03 failed to init gva\n");
-		goto fail2;
-	}
-
-	ret = lcd_mm_gva_alloc(lcd, &gpa, &hpa);
-	if (ret) {
-		printk(KERN_ERR "lcd test: test03 failed to alloc pg mem\n");
-		goto fail3;
-	}
-	
-	ret = 0;
-	goto done;
-
-done:
-	free_page(hva_val(hpa2hva(hpa)));
-	lcd_arch_ept_unmap_range(lcd->lcd_arch, gpa, 1);
-fail3:
-fail2:
-	lcd_destroy(lcd);
-fail1:
-	return ret;
-}
-
-static int test04(void)
-{
-	struct lcd *lcd;
-	int ret;
-	gpa_t gpa;
-	hpa_t hpa;
+	hva_t hva;
 	pmd_t *pmd_entry;
 	pte_t *pt;
 	pte_t *pte_entry;
 
-	ret = lcd_create(&lcd);
-	if (ret) {
-		printk(KERN_ERR "lcd test: test04 failed to create lcd\n");
+	lcd = __lcd_create();
+	if (!lcd) {
+		LCD_ERR("failed to create lcd");
 		goto fail1;
 	}
 	
-	ret = lcd_mm_gva_init(lcd, LCD_ARCH_FREE,
-			gpa_add(LCD_ARCH_FREE, 4 * (1 << 20)));
+	ret = lcd_mm_gv_init(lcd);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test04 failed to init gva\n");
+		LCD_ERR("failed to init gv");
 		goto fail2;
 	}
 
-	ret = lcd_mm_gva_alloc(lcd, &gpa, &hpa);
+	ret = lcd_mm_gv_gfp(lcd, &gpa, &hva);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test04 failed to alloc pg mem\n");
+		LCD_ERR("failed to alloc pg mem");
 		goto fail3;
 	}
 
 	/*
 	 * Map gva = 0x4000 (start of 5th page frame) to gpa = 0x1234000UL
 	 */
-	pt = (pte_t *)hpa2va(hpa);
+	pt = (pte_t *)hva2va(hva);
 	set_pte_gpa(pt + 4, __gpa(0x1234000UL));
 
 	/*
@@ -138,7 +73,7 @@ static int test04(void)
 	ret = lcd_mm_gva_lookup_pte(lcd, __gva(0x4000UL), 
 				pmd_entry, &pte_entry);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test04 failed to lookup pte\n");
+		LCD_ERR("failed to lookup pte");
 		goto fail5;
 	}
 
@@ -146,8 +81,7 @@ static int test04(void)
 	 * Check
 	 */
 	if (gpa_val(pte_gpa(pte_entry)) != 0x1234000UL) {
-		printk(KERN_ERR "lcd test: test04 pte gpa is %lx\n",
-			gpa_val(pte_gpa(pte_entry)));
+		LCD_ERR("pte gpa is %lx\n", gpa_val(pte_gpa(pte_entry)));
 		ret = -1;
 		goto fail6;
 	}
@@ -160,8 +94,7 @@ fail6:
 fail5:
 	kfree(pmd_entry);
 fail4:
-	free_page(hva_val(hpa2hva(hpa)));
-	lcd_arch_ept_unmap_range(lcd->lcd_arch, gpa, 1);
+	lcd_mm_gp_free_page(lcd, gpa);
 fail3:
 fail2:
 	lcd_destroy(lcd);
@@ -169,32 +102,31 @@ fail1:
 	return ret;
 }
 
-static int test05(void)
+static int test03(void)
 {
 	struct lcd *lcd;
-	int ret;
+	int ret = 0;
 	gpa_t gpa;
-	hpa_t hpa;
+	hva_t hva;
 	pud_t *pud_entry;
 	pmd_t *pmd;
 	pmd_t *pmd_entry;
 
-	ret = lcd_create(&lcd);
-	if (ret) {
-		printk(KERN_ERR "lcd test: test05 failed to create lcd\n");
+	lcd = __lcd_create();
+	if (!lcd) {
+		LCD_ERR("failed to create lcd");
 		goto fail1;
 	}
 	
-	ret = lcd_mm_gva_init(lcd, LCD_ARCH_FREE,
-			gpa_add(LCD_ARCH_FREE, 4 * (1 << 20)));
+	ret = lcd_mm_gv_init(lcd);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test05 failed to init gva\n");
+		LCD_ERR("failed to init gva");
 		goto fail2;
 	}
 
-	ret = lcd_mm_gva_alloc(lcd, &gpa, &hpa);
+	ret = lcd_mm_gv_gfp(lcd, &gpa, &hva);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test05 failed to alloc pg mem\n");
+		LCD_ERR("failed to alloc pg mem");
 		goto fail3;
 	}
 
@@ -202,7 +134,7 @@ static int test05(void)
 	 * Populate 5th entry in pmd to point to a (bogus) page table at
 	 * gpa 0x1234000UL.
 	 */
-	pmd = (pmd_t *)hpa2va(hpa);
+	pmd = (pmd_t *)hva2va(hva);
 	set_pmd_gpa(pmd + 4, __gpa(0x1234000UL));
 
 	/*
@@ -217,7 +149,7 @@ static int test05(void)
 	ret = lcd_mm_gva_lookup_pmd(lcd, __gva(0x4UL << PMD_SHIFT), 
 				pud_entry, &pmd_entry);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test05 failed to lookup pmd\n");
+		LCD_ERR("failed to lookup pmd");
 		goto fail5;
 	}
 
@@ -225,8 +157,7 @@ static int test05(void)
 	 * Check
 	 */
 	if (gpa_val(pmd_gpa(pmd_entry)) != 0x1234000UL) {
-		printk(KERN_ERR "lcd test: test05 pte gpa is %lx\n",
-			gpa_val(pmd_gpa(pmd_entry)));
+		LCD_ERR("pte gpa is %lx\n", gpa_val(pmd_gpa(pmd_entry)));
 		ret = -1;
 		goto fail6;
 	}
@@ -239,7 +170,7 @@ fail6:
 fail5:
 	kfree(pud_entry);
 fail4:
-	free_page(hva_val(hpa2hva(hpa)));
+	free_page(hva_val(hva));
 	lcd_arch_ept_unmap_range(lcd->lcd_arch, gpa, 1);
 fail3:
 fail2:
@@ -248,32 +179,31 @@ fail1:
 	return ret;
 }
 
-static int test06(void)
+static int test04(void)
 {
 	struct lcd *lcd;
-	int ret;
+	int ret = 0;
 	gpa_t gpa;
-	hpa_t hpa;
+	hva_t hva;
 	pgd_t *pgd_entry;
 	pud_t *pud;
 	pud_t *pud_entry;
 
-	ret = lcd_create(&lcd);
-	if (ret) {
-		printk(KERN_ERR "lcd test: test06 failed to create lcd\n");
+	lcd = __lcd_create();
+	if (!lcd) {
+		LCD_ERR("failed to create lcd");
 		goto fail1;
 	}
 	
-	ret = lcd_mm_gva_init(lcd, LCD_ARCH_FREE,
-			gpa_add(LCD_ARCH_FREE, 4 * (1 << 20)));
+	ret = lcd_mm_gv_init(lcd);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test06 failed to init gva\n");
+		LCD_ERR("failed to init gv");
 		goto fail2;
 	}
 
-	ret = lcd_mm_gva_alloc(lcd, &gpa, &hpa);
+	ret = lcd_mm_gv_gfp(lcd, &gpa, &hva);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test06 failed to alloc pg mem\n");
+		LCD_ERR("failed to alloc pg mem");
 		goto fail3;
 	}
 
@@ -281,7 +211,7 @@ static int test06(void)
 	 * Populate 5th entry in pud to point to a (bogus) pmd at
 	 * gpa 0x1234000UL.
 	 */
-	pud = (pud_t *)hpa2va(hpa);
+	pud = (pud_t *)hva2va(hva);
 	set_pud_gpa(pud + 4, __gpa(0x1234000UL));
 
 	/*
@@ -296,7 +226,7 @@ static int test06(void)
 	ret = lcd_mm_gva_lookup_pud(lcd, __gva(0x4UL << PUD_SHIFT), 
 				pgd_entry, &pud_entry);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test06 failed to lookup pud\n");
+		LCD_ERR("failed to lookup pud");
 		goto fail5;
 	}
 
@@ -304,8 +234,7 @@ static int test06(void)
 	 * Check
 	 */
 	if (gpa_val(pud_gpa(pud_entry)) != 0x1234000UL) {
-		printk(KERN_ERR "lcd test: test06 pmd gpa is %lx\n",
-			gpa_val(pud_gpa(pud_entry)));
+		LCD_ERR("pmd gpa is %lx\n", gpa_val(pud_gpa(pud_entry)));
 		ret = -1;
 		goto fail6;
 	}
@@ -318,7 +247,7 @@ fail6:
 fail5:
 	kfree(pgd_entry);
 fail4:
-	free_page(hva_val(hpa2hva(hpa)));
+	free_page(hva_val(hva));
 	lcd_arch_ept_unmap_range(lcd->lcd_arch, gpa, 1);
 fail3:
 fail2:
@@ -327,22 +256,21 @@ fail1:
 	return ret;
 }
 
-static int test07(void)
+static int test05(void)
 {
 	struct lcd *lcd;
-	int ret;
+	int ret = 0;
 	gpa_t gpa;
 
-	ret = lcd_create(&lcd);
-	if (ret) {
-		printk(KERN_ERR "lcd test: test07 failed to create lcd\n");
+	lcd = __lcd_create();
+	if (!lcd) {
+		LCD_ERR("failed to create lcd");
 		goto fail1;
 	}
 	
-	ret = lcd_mm_gva_init(lcd, LCD_ARCH_FREE,
-			gpa_add(LCD_ARCH_FREE, 4 * (1 << 20)));
+	ret = lcd_mm_gv_init(lcd);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test07 failed to init gva\n");
+		LCD_ERR("failed to init gv");
 		goto fail2;
 	}
 
@@ -351,7 +279,7 @@ static int test07(void)
 	 */
 	ret = lcd_mm_gva_map(lcd, __gva(0x1234000UL), __gpa(0x5678000UL));
 	if (ret) {
-		printk(KERN_ERR "lcd test: test07 failed to map\n");
+		LCD_ERR("failed to map");
 		goto fail3;
 	}
 
@@ -360,19 +288,20 @@ static int test07(void)
 	 */
 	ret = lcd_mm_gva_to_gpa(lcd, __gva(0x1234000UL), &gpa);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test07 failed to lookup\n");
+		LCD_ERR("failed to lookup");
 		goto fail4;
 	}
 
 	if (gpa_val(gpa) != 0x5678000UL) {
-		printk(KERN_ERR "lcd test: test07 got phys addr %lx\n",
-			gpa_val(gpa));
+		LCD_ERR("got phys addr %lx\n", gpa_val(gpa));
+		ret = -1;
 		goto fail5;
 	}
 
 	ret = lcd_mm_gva_unmap(lcd, __gva(0x1234000UL));
 	if (ret) {
-		printk(KERN_ERR "lcd test: test07 failed to unmap\n");
+		LCD_ERR("failed to unmap");
+		ret = -1;
 		goto fail6;
 	}
 
@@ -390,65 +319,47 @@ fail1:
 	return ret;
 }
 
-static int test08(void)
+static int test06(void)
 {
 	struct lcd *lcd;
-	int ret;
+	int ret = 0;
 	pgd_t *pgd_entry1;
 	pgd_t *pgd_entry2;
-	gpa_t gpa1;
-	gpa_t gpa2;
 
-	ret = lcd_create(&lcd);
-	if (ret) {
-		printk(KERN_ERR "lcd test: test08 failed to create lcd\n");
+	lcd = __lcd_create();
+	if (!lcd) {
+		LCD_ERR("failed to create lcd");
 		goto fail1;
 	}
 	
-	ret = lcd_mm_gva_init(lcd, LCD_ARCH_FREE, 
-			gpa_add(LCD_ARCH_FREE, 2 * PAGE_SIZE));
+	ret = lcd_mm_gv_init(lcd);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test08 failed to init gva\n");
+		LCD_ERR("failed to init gv");
 		goto fail2;
 	}
 
+	/* (should map entry on the fly) */
 	ret = lcd_mm_gva_walk_pgd(lcd, __gva(0x1234000UL), &pgd_entry1);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test08 failed to walk pgd\n");
+		LCD_ERR("failed to walk pgd");
 		goto fail3;
 	}
 
+	/* (should map entry on the fly) */
 	ret = lcd_mm_gva_walk_pgd(lcd, __gva(0x1234000UL), &pgd_entry2);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test08 failed to walk pgd2\n");
+		LCD_ERR("failed to walk pgd2");
 		goto fail4;
 	}
 
 	if (pgd_entry1 != pgd_entry2) {
-		printk(KERN_ERR "lcd test: test08 entries differ\n");
+		LCD_ERR("entries differ");
 		ret = -1;
 		goto fail5;
 	}
 
 	if (!pgd_present(*pgd_entry1) || !pgd_present(*pgd_entry2)) {
-		printk(KERN_ERR "lcd test: test08 entries not present\n");
-		ret = -1;
-		goto fail5;
-	}
-
-	gpa1 = pgd_gpa(pgd_entry1);
-	gpa2 = pgd_gpa(pgd_entry2);
-	if (gpa_val(gpa1) < gpa_val(LCD_ARCH_FREE) || 
-		gpa_val(gpa1) > gpa_val(gpa_add(LCD_ARCH_FREE,2 * PAGE_SIZE))){
-		printk(KERN_ERR "lcd test: test08 bad gpa %lx\n",
-			gpa_val(gpa1));
-		ret = -1;
-		goto fail5;
-	}
-	
-	if (gpa_val(gpa1) != gpa_val(gpa2)) {
-		printk(KERN_ERR "lcd test: test08 two diff gpa's: first = %lx, second %lx\n",
-			gpa_val(gpa1), gpa_val(gpa2));
+		LCD_ERR("entries not present\n");
 		ret = -1;
 		goto fail5;
 	}
@@ -466,19 +377,18 @@ fail1:
 	return ret;
 }
 
-static int test09_help(struct lcd *lcd, unsigned long base)
+static int test07_help(struct lcd *lcd, unsigned long base)
 {
 	unsigned long off;
 	gpa_t actual;
 
 	for (off = 0; off < (1 << 22); off += PAGE_SIZE) {
 		if (lcd_mm_gva_to_gpa(lcd, __gva(base + off), &actual)) {
-			printk(KERN_ERR "lcd test: test09 failed lookup at %lx\n",
-				base + off);
+			LCD_ERR("failed lookup at %lx", base + off);
 			return -1;
 		}
 		if (gpa_val(actual) != base + off) {
-			printk(KERN_ERR "lcd test: test09 expected gpa %lx got %lx\n",
+			LCD_ERR("expected gpa %lx got %lx",
 				base + off,
 				gpa_val(actual));
 			return -1;
@@ -487,22 +397,21 @@ static int test09_help(struct lcd *lcd, unsigned long base)
 	return 0;
 }
 
-static int test09(void)
+static int test07(void)
 {
 	struct lcd *lcd;
-	int ret;
+	int ret = 0;
 	unsigned long base;
 
-	ret = lcd_create(&lcd);
-	if (ret) {
-		printk(KERN_ERR "lcd test: test09 failed to create lcd\n");
+	lcd = __lcd_create();
+	if (!lcd) {
+		LCD_ERR("failed to create lcd");
 		goto fail1;
 	}
 	
-	ret = lcd_mm_gva_init(lcd, LCD_ARCH_FREE,
-			gpa_add(LCD_ARCH_FREE, 4 * (1 << 20)));
+	ret = lcd_mm_gv_init(lcd);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test09 failed to init gva\n");
+		LCD_ERR("failed to init gv");
 		goto fail2;
 	}
 
@@ -511,7 +420,7 @@ static int test09(void)
 	 */
 	ret = lcd_mm_gva_map_range(lcd, __gva(0), __gpa(0), 1024);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test09 failed to map first 4 MBs\n");
+		LCD_ERR("failed to map first 4 MBs");
 		goto fail3;
 	}
 
@@ -520,7 +429,7 @@ static int test09(void)
 	 */
 	ret = lcd_mm_gva_map_range(lcd, __gva(1 << 30), __gpa(1 << 30), 1024);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test09 failed to map 2nd 4 MBs\n");
+		LCD_ERR("failed to map 2nd 4 MBs");
 		goto fail4;
 	}
 
@@ -530,7 +439,7 @@ static int test09(void)
 	ret = lcd_mm_gva_map_range(lcd, __gva(1UL << 39), 
 				__gpa(1UL << 39), 1024);
 	if (ret) {
-		printk(KERN_ERR "lcd test: test09 failed to map 3rd 4 MBs\n");
+		LCD_ERR("failed to map 3rd 4 MBs");
 		goto fail5;
 	}
 
@@ -539,13 +448,13 @@ static int test09(void)
 	 */
 
 	base = 0;
-	if (test09_help(lcd, base))
+	if (test07_help(lcd, base))
 		goto fail6;
 	base = 1 << 30;
-	if (test09_help(lcd, base))
+	if (test07_help(lcd, base))
 		goto fail6;
 	base = 1UL << 39;
-	if (test09_help(lcd, base))
+	if (test07_help(lcd, base))
 		goto fail6;
 
 	ret = 0;
@@ -565,44 +474,51 @@ fail1:
 	return ret;
 }
 
-static int test10(void)
+
+static int test08(void)
 {
-	struct task_struct *t;
-	int r;
+	struct lcd *lcd;
+	int ret;
 
 	/*
 	 * lcd-module-load-test.c is in virt/lcd-domains/
 	 */
 
-	/*
-	 * Create it
-	 */
-	t = lcd_create_as_module("lcd_module_load_test");
-	if (!t) {
-		LCD_ERR("create");
+	ret = lcd_create("lcd_module_load_test", &lcd);
+	if (ret) {
+		LCD_ERR("creating lcd");
 		goto fail1;
 	}
-	
+
 	/*
-	 * Run it (once)
+	 * Run init thread
 	 */
-	r = lcd_run_as_module(t);
-	if (r) {
+	ret = lcd_thread_start(lcd->init_thread);
+	if (ret) {
 		LCD_ERR("run");
 		goto fail2;
 	}
 
+	LCD_MSG("test module sleeping for 100 ms.");
+	msleep(100);
+
 	/*
 	 * Tear it down
 	 */
-	lcd_destroy_as_module(t, "lcd_module_load_test");
+	ret = lcd_thread_kill(lcd->init_thread);
+	LCD_MSG("lcd_module_load_test ret val = %d", ret);
+	lcd_destroy(lcd);
+
 	return 0;
 
 fail2:
-	lcd_destroy_as_module(t, "lcd_module_load_test");
+	lcd_thread_kill(lcd->init_thread);
+	lcd_destroy(lcd);
 fail1:
 	return -1;
 }
+
+
 
 static void lcd_tests(void)
 {
@@ -622,10 +538,6 @@ static void lcd_tests(void)
 		return;
 	if (test08())
 		return;
-	if (test09())
-		return;
-	if (test10())
-		return;
-	printk(KERN_ERR "lcd-domains: all tests passed!\n");
+	LCD_MSG("all tests passed!");
 	return;
 }
