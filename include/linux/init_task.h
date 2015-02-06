@@ -13,11 +13,10 @@
 #include <linux/seqlock.h>
 #include <net/net_namespace.h>
 #include <linux/sched/rt.h>
-#include <lcd-domains/lcd-domains.h>
 
-#ifdef CONFIG_LCD_PROTOTYPE || CONFIG_HAVE_LCD || CONFIG_LCD_PROTOTYPE
+#ifdef CONFIG_HAVE_LCD
 #define INIT_LCD(tsk) \
-	.lcd = NULL,  
+	.lcd = NULL, .cptr_cache = NULL,	
 #else
 #define INIT_LCD(tsk)
 #endif
@@ -173,7 +172,6 @@ extern struct task_group root_task_group;
 	.usage		= ATOMIC_INIT(2),				\
 	.flags		= PF_KTHREAD,					\
 	.prio		= MAX_PRIO-20,					\
-	INIT_LCD(tsk)                                                   \
 	.static_prio	= MAX_PRIO-20,					\
 	.normal_prio	= MAX_PRIO-20,					\
 	.policy		= SCHED_NORMAL,					\
@@ -222,11 +220,7 @@ extern struct task_group root_task_group;
 		[PIDTYPE_SID]  = INIT_PID_LINK(PIDTYPE_SID),		\
 	},								\
 	.thread_group	= LIST_HEAD_INIT(tsk.thread_group),		\
-<<<<<<< HEAD
-	INIT_LCD_THREAD                                                 \
-=======
 	INIT_LCD(tsk)							\
->>>>>>> decomposition
 	INIT_IDS							\
 	INIT_PERF_EVENTS(tsk)						\
 	INIT_TRACE_IRQFLAGS						\

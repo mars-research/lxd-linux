@@ -207,8 +207,6 @@ static void account_kernel_stack(struct thread_info *ti, int account)
 
 void free_task(struct task_struct *tsk)
 {
-	if (tsk->lcd_thread)
-		put_lcd_thread(&tsk->lcd_thread);
 	account_kernel_stack(tsk->stack, -1);
 	arch_release_thread_info(tsk->stack);
 	free_thread_info(tsk->stack);

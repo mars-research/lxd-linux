@@ -53,8 +53,9 @@ struct sched_param {
 #include <linux/uidgid.h>
 #include <linux/gfp.h>
 
-#ifdef CONFIG_LCD_PROTOTYPE
-#include <lcd-prototype/lcd.h>
+#ifdef CONFIG_HAVE_LCD
+struct lcd;
+struct cptr_cache;
 #endif
 
 #include <asm/processor.h>
@@ -1041,8 +1042,9 @@ struct task_struct {
 	atomic_t usage;
 	unsigned int flags;	/* per process flags, defined below */
 	unsigned int ptrace;
-#ifdef CONFIG_LCD_CSPACE || CONFIG_HAVE_LCD || CONFIG_LCD_PROTOTYPE
-	struct lcd *lcd_thread;
+#ifdef CONFIG_HAVE_LCD
+	struct lcd *lcd;
+	struct cptr_cache *cptr_cache;
 #endif
 #ifdef CONFIG_SMP
 	struct llist_node wake_entry;
