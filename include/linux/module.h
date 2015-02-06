@@ -21,6 +21,9 @@
 #include <linux/percpu.h>
 #include <asm/module.h>
 
+/* Pour lcd's */
+#include <lcd-prototype/lcd.h>
+
 /* In stripped ARM and x86-64 modules, ~ is surprisingly rare. */
 #define MODULE_SIG_STRING "~Module signature appended~\n"
 
@@ -279,6 +282,9 @@ struct module
 
 	/* Startup function. */
 	int (*init)(void);
+
+	/* Startup for lcd's */
+	int (*gmain)(int, cptr_t *);
 
 	/* If this is non-NULL, vfree after init() returns */
 	void *module_init;

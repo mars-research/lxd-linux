@@ -166,4 +166,8 @@ source "drivers/ipack/Kconfig"
 
 source "drivers/reset/Kconfig"
 
+source "drivers/lcd-prototype/Kconfig"
+
+source "drivers/lcd-cspace/Kconfig"
+
 endmenu
