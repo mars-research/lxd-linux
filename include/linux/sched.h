@@ -53,6 +53,11 @@ struct sched_param {
 #include <linux/uidgid.h>
 #include <linux/gfp.h>
 
+#ifdef CONFIG_HAVE_LCD
+struct lcd;
+struct cptr_cache;
+#endif
+
 #include <asm/processor.h>
 
 struct exec_domain;
@@ -1038,7 +1043,8 @@ struct task_struct {
 	unsigned int flags;	/* per process flags, defined below */
 	unsigned int ptrace;
 #ifdef CONFIG_HAVE_LCD
-	struct lcd_thread *lcd_thread;
+	struct lcd *lcd;
+	struct cptr_cache *cptr_cache;
 #endif
 #ifdef CONFIG_SMP
 	struct llist_node wake_entry;
