@@ -34,8 +34,6 @@ obj-$(CONFIG_DMADEVICES)	+= dma/
 obj-$(CONFIG_VIRTIO)		+= virtio/
 obj-$(CONFIG_XEN)		+= xen/
 
-#obj-$(CONFIG_LCD)		+= lcd/
-
 # regulators early, since some subsystems rely on them to initialize
 obj-$(CONFIG_REGULATOR)		+= regulator/
 

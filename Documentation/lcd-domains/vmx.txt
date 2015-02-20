@@ -84,7 +84,6 @@ Host physical addresses need to be stored in the EPT.
 
 Guest physical addresses need to be stored in the guest virtual page tables.
 
-
 ==============================
 LOCKING
 ==============================

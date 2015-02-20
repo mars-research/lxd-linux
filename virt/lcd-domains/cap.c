@@ -1,956 +1,1142 @@
+/**
+ * cap.c - capability subsystem
+ *
+ * Authors:
+ *     Muktesh Khole <mukteshkhole86@gmail.com>
+ *     Anton Burtsev <aburtsev@flux.utah.edu>
+ *     Charles Jacobsen <charlesj@cs.utah.edu>
+ * Copyright: University of Utah
+ *
+ * See Documentation/lcd-domains/cap.txt for extensive info.
+ */
+#include <linux/slab.h>
+#include <linux/delay.h>
+#include <lcd-domains/types.h>
+#include "internal.h"
 
-/* NOT CURRENTLY USED */
-
-
-#include <lcd/cap.h>
-
-// this function will not lock any semaphore.
-// assumption is that cdt and cspace are already locked.
-bool lcd_cap_delete_internal_lockless(struct cte *cap, bool *last_reference)
+static inline struct lcd * cspace_to_lcd(struct cspace *cspace)
 {
-	struct cte *table;
-	struct cap_derivation_tree *p_cdt, *cdt, *c_cdt, *prev_cdt = NULL;
-	*last_reference = false;
-  
- 
-	if (cap == NULL)
-	{
-		LCD_PANIC("lcd_cap_delete_internal: Invalid Input\n");
-		return false;
-	}
-
-	cdt = cap->cap.cdt_node;
-	p_cdt = cdt->parent_ptr;
-	c_cdt = cdt->child_ptr;
-	if (p_cdt == NULL && c_cdt == NULL && cdt->next == NULL && cdt->prev == NULL)
-		*last_reference = true;
-  
-	// update parent pointer
-	while (c_cdt != NULL)
-	{
-		prev_cdt = c_cdt;
-		c_cdt->parent_ptr = p_cdt;
-		c_cdt = c_cdt->next;
-	}
-	c_cdt = cdt->child_ptr;
-  
-	// update sibling pointers
-	if (c_cdt == NULL)
-	{
-		if (cdt->prev != NULL)
-		{
-			cdt->prev->next = cdt->next;
-		}
-		if (cdt->next != NULL)
-		{
-			cdt->next->prev = cdt->prev;
-		}
-	}
-	else
-	{
-		if (cdt->prev != NULL)
-		{
-			cdt->prev->next = c_cdt;
-			c_cdt->prev = cdt->prev;
-			cdt->prev = NULL;
-		}
-		if (cdt->next != NULL)
-		{
-			prev_cdt->next = cdt->next;
-			cdt->next->prev = c_cdt;
-			cdt->next = NULL;
-		}
-	}
-    
-	// update child pointer
-	if (p_cdt->child_ptr == cdt)
-	{
-		if (c_cdt != NULL)
-		{
-			p_cdt->child_ptr = c_cdt;
-		}
-		else
-		{
-			p_cdt->child_ptr = cdt->next;
-		}
-	}
-  
-	// delete the capability
-	kfree(cdt);
-	cap->ctetype = lcd_type_free;
-	table = cap - cap->index;
-	cap->slot.next_free_cap_slot = table[0].slot.next_free_cap_slot;
-	table[0].slot.next_free_cap_slot = cap->index;
-	return true;
+	return container_of(cspace, struct lcd, cspace);
 }
 
-bool lcd_cap_delete_internal(struct cte *cap, bool *last_reference)
+/* CDT CACHE -------------------------------------------------- */
+
+struct cdt_cache_t {
+	struct mutex lock;
+	struct kmem_cache *cdt_root_cache;
+};
+
+static struct cdt_cache_t cdt_cache;
+
+/**
+ * Allocates a new cdt root node using the cdt cache.
+ */
+struct cdt_root_node * get_cdt_root(void)
 {
-	struct cap_space *cspace;
-	struct cte *node;
-	bool done = false;
-	if (cap == NULL || last_reference == NULL)
-		return false;
-	*last_reference = false;
-	node = cap - cap->index;
-	if (node[0].ctetype != lcd_type_free)
-		return false;
-	cspace = node[0].slot.cspace;
-	if (cspace == NULL)
-		return false;
-  
-	while (!done)
-	{
-		// lock the cspace
-		if (down_trylock(&(cspace->sem_cspace)) == 0)
-		{
-			lcd_cap_delete_internal_lockless(cap, last_reference);
-			done = true;
-		}
-		else
-		{
-			msleep_interruptible(1);
-		}
+	int ret;
+	struct cdt_root_node *cdt_node = NULL;
+	ret = mutex_lock_interruptible(&cdt_cache.lock);
+	if (ret) {
+		LCD_ERR("interrupted");
+		goto out;
 	}
-	return true;
+
+	cdt_node = kmem_cache_alloc(cdt_cache.cdt_root_cache, 0);
+	cdt_node->state = ALLOCATION_VALID;
+	mutex_init(&cdt_node->lock);
+
+	mutex_unlock(&cdt_cache.lock);
+
+out:	
+	return cdt_node;
 }
 
-uint32_t lcd_cap_delete_capability(struct task_struct *tcb, cap_id cid)
+void free_cdt_root(struct cdt_root_node *cdt_node)
 {
-	struct cte *cap;
-	bool last_reference = false;
-	struct semaphore *sem_cdt_backup;
-	if (tcb == NULL || cid <= 0)
-	{
-		LCD_PANIC("lcd_cap_delete_capability: Invalid Input\n");
-		return -1;
+	int ret;
+	ret = mutex_lock_interruptible(&cdt_cache.lock);
+	if (ret) {
+		LCD_ERR("interrupted");
+		goto out;
 	}
-  
-	cap = lcd_cap_lookup_capability(tcb, cid, true);
-	if (cap == NULL)
-	{
-		LCD_PANIC("lcd_cap_delete_capability: Capability not found\n");
-		return -1;
-	}
-	sem_cdt_backup = cap->cap.cdt_node->sem_cdt;
-	lcd_cap_delete_internal(cap, &last_reference);
-	up(sem_cdt_backup);
-	if (last_reference == true)
-	{
-		// TBD: this is the place where we free the object associated with teh capability.
-		// for now we just release the sem_cdt semaphore.
-		kfree(sem_cdt_backup);
-	}
-	return 0;
-}
 
-uint32_t lcd_cap_revoke_capability(struct task_struct *tcb, cap_id cid)
-{
-	struct cte *cap;
-	struct cap_derivation_tree *cdt, *c_cdt;
-	struct kfifo cap_q;
-	struct semaphore *sem_cdt_backup;
-	int size = sizeof(struct cte);
-	bool dummy = false, last_reference = false;
-  
-	if (tcb == NULL || cid <= 0)
-	{
-		LCD_PANIC("lcd_cap_delete_capability: Invalid Input\n");
-		return -1;
-	}
-  
-	if (kfifo_alloc(&cap_q, sizeof(struct cte) * 512, GFP_KERNEL) != 0)
-	{
-		LCD_PANIC("lcd_cap_revoke_capability: Fifo allocation failed, aborting\n");
-		return -1;
-	}
-  
-	cap = lcd_cap_lookup_capability(tcb, cid, true);
-	if (cap == NULL)
-	{
-		LCD_PANIC("lcd_cap_delete_capability: Capability not found\n");
-		return -1;
-	}
-	cdt = cap->cap.cdt_node;
-	sem_cdt_backup = cap->cap.cdt_node->sem_cdt;
-	if (cdt->parent_ptr == NULL && cdt->next == NULL && cdt->prev == NULL)
-		last_reference = true;
-    
-	kfifo_in(&cap_q, cap, size);
-  
-	while (!kfifo_is_empty(&cap_q))
-	{
-		kfifo_out(&cap_q, cap, size);
-		if (cap == NULL || cap->ctetype != lcd_type_capability)
-			continue;
-		cdt = cap->cap.cdt_node;
-		c_cdt = cdt->child_ptr;
-		while (c_cdt != NULL)
-		{
-			kfifo_in(&cap_q, c_cdt->cap, size);
-			c_cdt = c_cdt->next;
-		}
-		lcd_cap_delete_internal(cap, &dummy);
-	}
-	up(sem_cdt_backup);
-	// with revoke the entire tree is deleted. Now if the root of the tree had not parent,
-	// or no siblings then this was the true last_reference so we now remove the cdt semaphore.
-	if (last_reference)
-	{ 
-		kfree(sem_cdt_backup);
-	}
-	return 0;
-}
+	cdt_node->state = ALLOCATION_REMOVED;	
+	kmem_cache_free(cdt_cache.cdt_root_cache, cdt_node);
 
+	mutex_unlock(&cdt_cache.lock);
 
-void lcd_cap_destroy_cspace(struct task_struct *tcb)
-{
-	struct cte *cnode, *node, level_separator;
-	struct kfifo cnode_q;
-	int size = sizeof(struct cte);
-	struct cap_space *cspace;
-	int depth_count = 0, i;
-	struct semaphore *sem_cdt_backup;
-	bool cspace_locked = false, table_visited = false, last_reference = false;
-  
-	if (tcb == NULL)
-	{
-		ASSERT(false, "lcd_cap_destroy_cspace: Invalid Input\n");
-		return;
-	}
-	cspace = tcb->cspace;
-
-	if (kfifo_alloc(&cnode_q, sizeof(struct cte) * 512, GFP_KERNEL) != 0)
-	{
-		ASSERT(false, "lcd_cap_destroy_cspace: Failed to allcoate kfifo, cspace cannot be destroyed\n");
-		return;
-	}
-	if (cspace->root_cnode.cnode.table != NULL)
-		kfifo_in(&cnode_q, &(cspace->root_cnode), size);
-	level_separator.ctetype = lcd_type_separator;
-	kfifo_in(&cnode_q, &level_separator, size);
-  
-	while (!kfifo_is_empty(&cnode_q) && depth_count < MAX_DEPTH)
-	{
-		if (cspace_locked || down_trylock(&(cspace->sem_cspace)) == 0)
-		{
-			cspace_locked = true;
-			cspace->root_cnode.ctetype = lcd_type_invalid;
-			if (!table_visited)
-			{
-				kfifo_out(&cnode_q, cnode, size);
-				if (cnode->ctetype == lcd_type_separator)
-				{
-					depth_count++;
-					if (kfifo_is_empty(&cnode_q))
-					{
-						up(&(cspace->sem_cspace));
-						cspace_locked = false;
-						break;
-					}
-					else
-					{
-						kfifo_in(&cnode_q, &level_separator, size);
-						continue;
-					}
-				}
-				node = cnode->cnode.table;
-				if (node == NULL)
-				{
-					// we may have a cycle or the tables are corrupted
-					up(&(cspace->sem_cspace));
-					cspace_locked = false;
-					break;
-				}
-				// push all its cnode to cnode_q
-				for (i = CNODE_SLOTS_START; i < MAX_SLOTS; i++)
-				{
-					if (node[i].ctetype == lcd_type_cnode)
-					{
-						if (node[i].cnode.table != NULL)
-							kfifo_in(&cnode_q, &(node[i]), size);
-					}
-				}
-				table_visited = true;
-				i = 1;
-			} // if (!table_visited)
-			for (; i < CNODE_SLOTS_START; i++)
-			{
-				if (node[i].ctetype == lcd_type_free)
-					continue;
-				// try to get the CDT lock ... recipe for deadlock- Revoke, Delete and delete_internal
-				// access the locks in the order CDT Lock and then CSPACE lock, but this function
-				// tries to access them in order CSPACE and then CDT. Be very careful while modifying
-				// this function or the lock access patterns in this and the related functions.
-				if (down_trylock(node[i].cap.cdt_node->sem_cdt) == 0)
-				{
-					sem_cdt_backup = node[i].cap.cdt_node->sem_cdt;
-					last_reference = false;
-					lcd_cap_delete_internal_lockless(&(node[i]), &last_reference);
-					up(sem_cdt_backup);
-					if (last_reference == true)
-					{
-						// TBD: this is the place where we can free the object associated with the cap.
-						// for now just free sem_cdt.
-						kfree(node[i].cap.cdt_node->sem_cdt);
-					}
-				}
-				else
-				{
-					up(&(cspace->sem_cspace));
-					cspace_locked = false;
-					break;
-				}
-			}
-			if (i == CNODE_SLOTS_START)
-			{
-				kfree(node);
-				table_visited = false;
-			}
-			else
-			{
-				msleep_interruptible(1);
-			}
-			if (kfifo_is_empty(&cnode_q) || depth_count >= MAX_DEPTH)
-			{
-				up(&(cspace->sem_cspace));
-				cspace_locked = false;
-			}
-		} // if down_trylock(cspace->sem_cspace)
-	} // while (!kfifo_is_empty(&cnode_q) && depth_count < MAX_DEPTH)
-	kfifo_free(&cnode_q);
-	kfree(cspace);
-	tcb->cspace = NULL;
+out:
 	return;
 }
 
-cap_id lcd_cap_grant_capability(struct task_struct *stcb, cap_id src_cid, struct task_struct *dtcb, lcd_cap_rights crights)
-{
-	cap_id cid = 0;
-	struct cap_space *src_cspace, *dst_cspace;
-	struct cte *src_cte = NULL, *dst_cte = NULL;
-	bool done = false;
-	struct cap_derivation_tree *dst_cdt_node = kmalloc(sizeof(struct cap_derivation_tree), GFP_KERNEL);
-	if (dst_cdt_node == NULL)
-	{
-		ASSERT(false, "lcd_cap_grant: Failed to allocate cdt node");
-		return 0;
-	}
+/* CSPACES -------------------------------------------------- */
 
-	if (stcb == NULL || dtcb == NULL || src_cid <= 0)
-	{
-		ASSERT(false, "lcd_cap_grant: Invalid Inputs\n");
-		kfree(dst_cdt_node);
-		return 0;
+static int make_empty_cnode_table(struct cspace *cspace, uint8_t level,
+				struct cnode_table **new_out)
+{
+	struct cnode_table *new;
+	int i;
+	/*
+	 * Allocate
+	 */
+	new = kmem_cache_zalloc(cspace->cnode_table_cache, 0);
+	if (!new)
+		goto fail1;
+	/*
+	 * Mark all cnodes in new table as free, and init spin lock.
+	 * We delay some of the other set up until the cnode is
+	 * actually used.
+	 */
+	for (i = 0; i < LCD_CNODE_TABLE_NUM_SLOTS; i++) {
+		new->cnode[i].type = LCD_CAP_TYPE_FREE;
+		INIT_LIST_HEAD(&new->cnode[i].children);
+		INIT_LIST_HEAD(&new->cnode[i].siblings);
+		mutex_init(&new->cnode[i].lock);
 	}
-	src_cspace = stcb->cspace;
-	dst_cspace = dtcb->cspace;
-	while (!done)
-	{
-		struct cap_derivation_tree *src_cdt_node;
-		struct cap_derivation_tree *cdtnode;
-    
-		// Lookup the source TCB to get a pointer to capability and keep the cdt locked.
-		src_cte = lcd_cap_lookup_capability(stcb, src_cid, true);
-		if (src_cte == NULL || src_cte->ctetype != lcd_type_capability)
-		{
-			LCD_PANIC("lcd_cap_grant_capability: Invalid Capability\n");
-			if (src_cte != NULL)
-				up(src_cte->cap.cdt_node->sem_cdt);
-			kfree(dst_cdt_node);
-			return 0;
-		}
-    
-		if  ((src_cte->cap.crights & CAPRIGHTS_GRANT) == 0)
-		{
-			LCD_PANIC("lcd_cap_grant_capability: Source does not have grant permissions\n");
-			up(src_cte->cap.cdt_node->sem_cdt);
-			kfree(dst_cdt_node);
-			return 0;
-		}
-    
-		src_cdt_node = src_cte->cap.cdt_node;
-		cdtnode = src_cdt_node->child_ptr;
-		// lock the destination cspace
-		if (down_trylock(&(dst_cspace->sem_cspace)) == 0)
-		{
-			if (dst_cspace->root_cnode.ctetype == lcd_type_invalid)
-			{
-				LCD_PANIC("lcd_cap_grant_capability: Destroy may be in progress, aborting operation\n");
-				up(&(dst_cspace->sem_cspace));
-				up(src_cte->cap.cdt_node->sem_cdt);
-				kfree(dst_cdt_node);
-				return 0;
-			}
-      
-			// get a free slot in destination.
-			if (cid == 0)
-			{
-				cid = lcd_cap_lookup_freeslot(dst_cspace, &dst_cte);
-			}
-			if (dst_cte == NULL || dst_cte->ctetype != lcd_type_free)
-			{
-				LCD_PANIC("lcd_cap_grant_capability: No free slot\n");
-				up(&(dst_cspace->sem_cspace));
-				up(src_cte->cap.cdt_node->sem_cdt);
-				kfree(dst_cdt_node);
-				return 0;
-			}
-      
-			// add the capability to destination.
-			dst_cte->cap.crights = (crights & src_cte->cap.crights);
-			dst_cte->cap.hobject = src_cte->cap.hobject;
-			dst_cdt_node->sem_cdt = src_cte->cap.cdt_node->sem_cdt;
-			dst_cte->cap.cdt_node = dst_cdt_node;
-    
-			src_cdt_node->child_ptr = dst_cdt_node;
-			dst_cdt_node->parent_ptr = src_cdt_node;
-			dst_cdt_node->child_ptr  = NULL;
-			dst_cdt_node->next = cdtnode;
-			dst_cdt_node->prev = NULL;
-      
-			if (cdtnode)
-			{
-				cdtnode->prev = dst_cdt_node;
-			}
-			dst_cte->ctetype = lcd_type_capability;
-			done = true;
-			up(&(dst_cspace->sem_cspace));
-			up(src_cte->cap.cdt_node->sem_cdt);
-			break;
-		}
-		up(src_cte->cap.cdt_node->sem_cdt);
-		if (!done)
-			msleep_interruptible(1);
-	}
-	return cid;
+	
+	new->table_level = level;
+
+	/*
+	 * Add to cspace's list of cnode tables. (This is used when we
+	 * tear down the whole cspace. For now, we don't greedily free
+	 * cnode tables as they become empty, so we don't delete them from
+	 * the list until the cspace is destroyed.)
+	 */
+	list_add(&new->table_list, &cspace->table_list);
+
+	*new_out = new;
+
+	return 0;
+fail1:
+	return -ENOMEM;
 }
 
-uint32_t lcd_cap_get_rights(struct task_struct *tcb, cap_id cid, lcd_cap_rights *rights)
+/**
+ * Initializes the cspace's fields.
+ */
+int __lcd_cap_init_cspace(struct cspace *cspace)
 {
-	struct cte       *cap;
-  
-	if (tcb == NULL || tcb->cspace == NULL || cid == 0 || rights == NULL)
-	{
-		ASSERT(false, "lcd_get_cap_rights: Invalid Inputs\n");
-		return -1;
+	int ret;
+
+	mutex_init(&cspace->lock);
+
+	/*
+	 * Initialize the cnode table cache
+	 */
+	cspace->cnode_table_cache = KMEM_CACHE(cnode_table, 0);
+	if(!cspace->cnode_table_cache) {
+		LCD_ERR("failed to allocate cnode_table slab");
+		return -ENOMEM;
 	}
-	cap = lcd_cap_lookup_capability(tcb, cid, false);
-	if (cap == NULL || cap->ctetype != lcd_type_capability)
-	{
-		ASSERT(false, "lcd_get_cap_rights: Invalid capability identifier\n");
-		return -1;
+
+	/*
+	 * Initialize list of cnode tables
+	 */
+	INIT_LIST_HEAD(&cspace->table_list);
+
+	/*
+	 * Initialize the root cnode table
+	 */
+	ret = make_empty_cnode_table(cspace, 0, &cspace->cnode_table);
+	if (ret) {
+		LCD_ERR("error initializing root cnode table");
+		return ret;
 	}
-	*rights = cap->cap.crights;
+
+	cspace->state = ALLOCATION_VALID;
+	
 	return 0;
 }
 
-// does not lock the cspace caller responsbile for the same.
-// Given a task_struct and a capability identifier, will return the pointer to the 
-// capability table entry associated with that identifier within the cspace of the thread.
-struct cte * lcd_cap_lookup_capability(struct task_struct *tcb, cap_id cid, bool keep_locked)
+static int update_cnode_table(struct cspace *cspace, 
+			struct cnode_table *old, unsigned long level_id, 
+			bool alloc, struct cnode_table **new)
 {
-	struct cte *cap = NULL, *node = NULL;
-	struct cap_space *cspace;
-	cap_id id = cid;
-	int index = 0;
-	int mask = (~0);
-    
-	// check if input is valid
-	if (tcb == NULL || cid == 0)
-	{
-		ASSERT(false, "lcd_lookup_capability: Invalid Inputs\n");
-		return NULL;
+	unsigned long index;
+	/*
+	 * The first half of the slots contain caps, the second half table
+	 * pointers. Skip over cap slots by adding half the number of slots
+	 * to level_id.
+	 */
+	index = level_id + (LCD_CNODE_TABLE_NUM_SLOTS >> 1);
+
+	if (old->cnode[index].type == LCD_CAP_TYPE_CNODE) {
+		/*
+		 * Slot contains a cnode that points to the next table.
+		 */
+		*new = old->cnode[index].object;
+
+		return 0; /* signal we are not done yet */
+
+	} else if (old->cnode[index].type == LCD_CAP_TYPE_FREE && alloc) {
+		/*
+		 * The cnode is free, and we can alloc.
+		 *
+		 * Allocate and init a new cnode table
+		 */
+		make_empty_cnode_table(cspace, old->table_level + 1, new);
+		/*
+		 * Set up cnode that points to it
+		 */
+		old->cnode[index].type = LCD_CAP_TYPE_CNODE;
+		old->cnode[index].object = *new;
+
+		return 0; /* signal we are not done yet */
+	} else {
+		/*
+		 * cnode free, invalid, etc.
+		 */
+		return -EINVAL; /* signal error in look up */
+
 	}
-	cspace = tcb->cspace;
-  
-	mask = mask << (CNODE_INDEX_BITS);
-	mask = ~mask;
-  
-	if (cspace == NULL || cspace->root_cnode.cnode.table == NULL)
-	{
-		ASSERT(false, "lcd_lookup_capability: Invalid/Corrupted cspace\n");
-		return NULL;
-	}
-	node = cspace->root_cnode.cnode.table;
-  
-	while (id > 0)
-	{
-		index = (int)(id) & mask;
-		id = id >> (CNODE_INDEX_BITS);
-		if (node[index].ctetype == lcd_type_capability && id == 0)
-		{
-			// delete/revoke could be accessing the same node
-			// try to lock it and confirm if still valid.
-			if (down_interruptible(node[index].cap.cdt_node->sem_cdt) == 0)
-			{
-				if (node[index].ctetype == lcd_type_capability)
-				{
-					cap = &node[index];
-				}
-				else
-				{
-					up(node[index].cap.cdt_node->sem_cdt);
-				}
-				if (!keep_locked)
-					up(node[index].cap.cdt_node->sem_cdt);
-			}
-			break;
-		}
-		else if (node[index].ctetype == lcd_type_cnode && id != 0)
-		{
-			node = node[index].cnode.table;
-		}
-		else
-		{
-			ASSERT(false, "lcd_lookup_capability: Invalid Capability Identifier\n");
-			break;
-		}
-	}
-  
-	return cap;
 }
 
-cap_id lcd_cap_create_capability(struct task_struct *tcb, void * hobject, lcd_cap_rights crights)
+static int find_cnode(struct cspace *cspace, struct cnode_table *old, 
+		unsigned long level_id, bool alloc, struct cnode **cnode)
 {
-	struct cap_space *cspace;
-	struct cte       *cap;
-	cap_id           cid;
-	struct cap_derivation_tree *cdtnode;
-  
-	if (tcb == NULL)
-	{
-		LCD_PANIC("lcd_cap_create_capability: Invalid Input\n");
-		return 0;
+	/*
+	 * The first slots contain capabilities
+	 */
+	if (old->cnode[level_id].type != LCD_CAP_TYPE_FREE && !alloc) {
+		/*
+		 * cnode contains an object. We want to catch the case when
+		 * we expected to alloc.
+		 */
+		*cnode = &old->cnode[level_id];
+
+		return 1; /* signal we found the slot and are done */
+
+	} else if (old->cnode[level_id].type == LCD_CAP_TYPE_FREE && alloc) {
+		/*
+		 * cnode is empty, but we expected that (alloc is true).
+		 *
+		 * Initialize it.
+		 */
+		*cnode = &old->cnode[level_id];
+		mutex_init(&(*cnode)->lock);
+		(*cnode)->cspace = cspace;
+		
+		return 1; /* signal we found the slot and are done */
+	} else {
+		return -EINVAL; /* signal an error in look up */
 	}
-	cspace = tcb->cspace;
-  
-	if (cspace == NULL || cspace->root_cnode.cnode.table == NULL)
-	{
-		LCD_PANIC("lcd_cap_create_capability: Invalid TCB\n");
-		return 0;
-	}
-  
-	cdtnode = kmalloc(sizeof(struct cap_derivation_tree), GFP_KERNEL);
-	if (cdtnode == NULL)
-	{
-		LCD_PANIC("lcd_cap_create_capability: CDT Node allocation failed\n");
-		return 0;
-	}
-  
-	cdtnode->sem_cdt = kmalloc(sizeof(struct semaphore), GFP_KERNEL);
-	if (cdtnode == NULL)
-	{
-		LCD_PANIC("lcd_cap_create_capability: CDT Semaphore allocation failed\n");
-		kfree(cdtnode);
-		return 0;
-	}
-  
-	if (down_interruptible(&(cspace->sem_cspace)))
-	{
-		if (cspace->root_cnode.ctetype == lcd_type_invalid)
-		{
-			LCD_PANIC("lcd_cap_create_capability: Destroy may be in progress, operation aborted\n");
-			up(&(cspace->sem_cspace));
-			kfree(cdtnode->sem_cdt);
-			kfree(cdtnode);
-			return 0;
-		}
-		cid = lcd_cap_lookup_freeslot(cspace, &cap);
-		if (cid == 0)
-		{
-			LCD_PANIC("lcd_cap_create_capability: No Free Slot found\n");
-			kfree(cdtnode->sem_cdt);
-			kfree(cdtnode);
-			up(&(cspace->sem_cspace));
-			return 0;
-		}
-    
-		cap->ctetype = lcd_type_capability;  
-		cap->cap.crights = crights;
-		cap->cap.hobject = hobject;
-		sema_init(cdtnode->sem_cdt, 1);
-		cap->cap.cdt_node = cdtnode;
-		cap->cap.cdt_node->cap = cap;
-		cap->cap.cdt_node->child_ptr  = NULL;
-		cap->cap.cdt_node->parent_ptr = NULL;
-		cap->cap.cdt_node->prev = NULL;
-		cap->cap.cdt_node->next = NULL;
-		up(&(cspace->sem_cspace));
-	}
+}
+
+static int get_level_index(int table_level, unsigned long index, 
+			unsigned long *level_id)
+{
+	int more_levels;
+	/*
+	 * Right shift to set of bits for the level
+	 */
+	index >>= (LCD_CNODE_TABLE_NUM_SLOTS * table_level);
+	/*
+	 * Determine if we need to follow a table pointer
+	 */
+	more_levels = index & (LCD_CNODE_TABLE_NUM_SLOTS >> 1);
+	/*
+	 * Calculate index in this level
+	 */
+	*level_id = index & ((LCD_CNODE_TABLE_NUM_SLOTS >> 1) - 1);
+
+	return more_levels;
+}
+
+static int walk_one_level(struct cspace *cspace, cptr_t c, bool alloc, 
+			struct cnode_table *old, struct cnode_table **new, 
+			struct cnode **cnode)
+{
+	int more_levels;
+	unsigned long level_id;
+
+	more_levels = get_level_index(old->table_level, cptr_val(c), &level_id);
+	if (more_levels)
+		return update_cnode_table(cspace, old, level_id, alloc, new);
 	else
-	{
-		LCD_PANIC("lcd_cap_create_capability: Signal interrupted cspace lock acquire\n");
-		kfree(cdtnode->sem_cdt);
-		kfree(cdtnode);
-	}
-	return cid;
+		return find_cnode(cspace, old, level_id, alloc, cnode);
 }
 
-struct cap_space * lcd_cap_create_cspace(void *objects[], lcd_cap_rights rights[])
+/**
+ * Finds the cnode in cspace indexed by cptr c. If alloc is true,
+ * allocates cnode tables on the fly while looking up c.
+ *
+ * ** Expects the cspace to be locked by the caller. **
+ */
+static int __lcd_cnode_lookup(struct cspace *cspace, cptr_t c, bool alloc,
+		struct cnode **cnode) 
+{
+
+	int ret;
+	struct cnode_table *old;
+	struct cnode_table *new;
+
+	if(cptr_val(c) >= LCD_MAX_CAPS) 
+		return -EINVAL;
+
+	/*
+	 * Initialize to root cnode table
+	 */
+	old = cspace->cnode_table;
+	do {
+		/*
+		 * Walk one level. Table gets updated to the next level's
+		 * table, and cnode will be non-NULL and point to the final
+		 * cnode when we get there.
+		 *
+		 * walk_one_level returns 1 when we find the cnode, 0 when we
+		 * should keep going, and < 0 on error.
+		 */
+		ret = walk_one_level(cspace, c, alloc, old, &new, cnode);
+		old = new;
+	} while (!ret);
+
+	/*
+	 * only return non zero if we had an error
+	 */
+	return (ret < 0 ? ret : 0);
+}
+
+static int __lcd_cnode_get__(struct cspace *cspace, cptr_t c, 
+			bool alloc, struct cnode **cnode)
+{
+	int ret;
+
+	/*
+	 * Look up and lock cnode
+	 */
+
+	ret = mutex_lock_interruptible(&cspace->lock);
+	if (ret) {
+		LCD_ERR("interrupted");
+		goto fail1;
+	}
+
+	if (cspace->state != ALLOCATION_VALID) {
+		LCD_ERR("cspace state is not valid, state is %d", 
+			cspace->state);
+		ret = -EIDRM;
+		goto fail2;
+	}
+	ret = __lcd_cnode_lookup(cspace, c, alloc, cnode);
+	if(ret) {
+		LCD_ERR("failed to create/find cnode");
+		ret = -ENOMEM;
+		goto fail2;
+	}
+	
+	ret = mutex_lock_interruptible(&(*cnode)->lock);
+	if (ret) {
+		LCD_ERR("interrupted");
+		goto fail2;
+	}
+
+	mutex_unlock(&cspace->lock);
+
+fail2:
+	mutex_unlock(&cspace->lock);
+fail1:
+	return ret;
+}
+
+int __lcd_cnode_get(struct cspace *cspace, cptr_t c, struct cnode **cnode)
+{
+	return __lcd_cnode_get__(cspace, c, false, cnode);
+}
+
+void __lcd_cnode_put(struct cnode *cnode)
+{
+	mutex_unlock(&cnode->lock);
+}
+
+int __lcd_cap_insert(struct cspace *cspace, cptr_t c, void *object, 
+		enum lcd_cap_type type) 
+{
+	struct cnode *cnode;
+	int ret;
+	/*
+	 * Get cnode
+	 */
+	ret = __lcd_cnode_get__(cspace, c, true, &cnode);
+	if (ret)
+		return ret;
+	/*
+	 * Set data
+	 */
+	cnode->cspace = cspace;
+	cnode->object = object; 	
+	cnode->type   = type;
+	/*
+	 * Set up cdt
+	 */
+	cnode->cdt_root = get_cdt_root();
+	cnode->cdt_root->cnode = cnode;
+	/*
+	 * Page specific info
+	 */
+	cnode->is_mapped = 0;
+	/*
+	 * Release cnode
+	 */
+	__lcd_cnode_put(cnode);
+
+	return 0; 
+}
+
+static void free_cnode_object(struct cspace *cspace, struct cnode *cnode)
+{
+	struct lcd *lcd;
+	switch (cnode->type) {
+	case LCD_CAP_TYPE_SYNC_EP:
+		/*
+		 * No lcd's should be in endpoint's queues. Safe to delete it.
+		 */
+		__lcd_sync_endpoint_destroy(cnode->object);
+		break;
+	case LCD_CAP_TYPE_PAGE:
+		/*
+		 * No lcd's should have page mapped. Safe to delete it.
+		 */
+		__lcd_page_destroy(cnode->object);
+		break;
+	case LCD_CAP_TYPE_KPAGE:
+		/*
+		 * No lcd's should have page mapped
+		 */
+		__lcd_kpage_destroy(cnode->object);
+		break;
+	case LCD_CAP_TYPE_LCD:
+		/*
+		 * No lcd's have capability to the lcd. Safe to tear it down.
+		 *
+		 * SPECIAL CASE: If the lcd deleting the last capability is the
+		 * lcd itself, we need to release the lock on the lcd cnode
+		 * so that the lcd can tear down its own cspace. This call
+		 * will not return (the kthread will stop and exit).
+		 */
+		lcd = cnode->object; /* being paranoid to avoid NULL deref in
+				      * case the calling lcd is the same as the
+				      * lcd to be deleted
+				      */
+		if (unlikely(cspace_to_lcd(cspace) == current->lcd)) {
+			cnode->type = LCD_CAP_TYPE_FREE;
+			__lcd_cnode_put(cnode);
+		}
+		__lcd_destroy(lcd);
+		break;
+	default:
+		/* we don't expect to see invalid, free, or cnode types here */
+		LCD_ERR("unexpected cnode type %d", cnode->type);
+		BUG();
+		break;
+	}
+}
+
+static void update_microkernel(struct cspace *cspace, struct cnode *cnode)
+{
+	switch (cnode->type) {
+	case LCD_CAP_TYPE_SYNC_EP:
+		__lcd_sync_endpoint_check(cspace_to_lcd(cspace), 
+					cnode->object);
+		break;
+	case LCD_CAP_TYPE_PAGE:
+		__lcd_page_check(cspace_to_lcd(cspace), cnode->object,
+				cnode->is_mapped, cnode->where_mapped);
+		break;
+	case LCD_CAP_TYPE_KPAGE:
+		__lcd_kpage_check(cspace_to_lcd(cspace), cnode->object,
+				cnode->is_mapped, cnode->where_mapped);
+		break;
+	case LCD_CAP_TYPE_LCD:
+		__lcd_check(cspace_to_lcd(cspace), cnode->object);
+		break;
+	default:
+		/* we don't expect to see invalid, free, or cnode types here */
+		LCD_ERR("unexpected cnode type %d", cnode->type);
+		BUG();
+		break;
+	}
+}
+
+/**
+ * Does actual removal from cdt. Returns non-zero if cnode is the last one
+ * in the cdt.
+ *
+ * ** Expects cnode and cdt_root to be locked, in that order. **
+ */
+static int do_delete_from_cdt(struct cnode *cnode, 
+			struct cdt_root_node *cdt_root)
+{
+	int last_node = 0;
+	/*
+	 * Make the cnode's children the children of cnode's parent by
+	 * putting them in the cnode's siblings list. (Note that
+	 * list_splice does the right thing when children or siblings is
+	 * empty.)
+	 */
+	list_splice_init(&cnode->children, &cnode->siblings);
+	/*
+	 * If cnode was the root cnode of the cdt, update the cdt's root.
+	 */
+	if (cdt_root->cnode == cnode) {
+		/*
+		 * See if anyone is in siblings - this will include cnode's
+		 * children since we spliced lists. list_first_entry will
+		 * look at the next list item, not the current cnode.
+		 */
+		if (!list_empty(&cnode->siblings)) {
+			cdt_root->cnode = list_first_entry(&cnode->siblings, 
+							struct cnode, siblings);
+		} else {
+			last_node = 1;
+			cdt_root->cnode = NULL;
+		}
+	}
+	/*
+	 * Remove cnode from list of siblings (won't break if siblings is
+	 * empty).
+	 */
+	list_del_init(&cnode->siblings);
+
+	return last_node;
+}  
+
+/**
+ * Tries to lock cdt and remove cnode from it. Returns non-zero if 
+ * cnode successfully deleted.
+ */
+static int try_delete_cnode(struct cspace *cspace, struct cnode *cnode)
+{
+	int last_node;
+	struct cdt_root_node *cdt_node;
+
+	/*
+	 * Try to lock the cdt
+	 */
+	if (!mutex_trylock(&cnode->cdt_root->lock)) {
+		/*
+		 * Tell caller to retry
+		 */
+		return 0;
+	}
+
+	/*
+	 * Get the cdt
+	 */
+	cdt_node = cnode->cdt_root;
+	/*
+	 * Delete the cnode from the cdt
+	 */
+	last_node = do_delete_from_cdt(cnode, cdt_node);
+	if (last_node)
+		cdt_node->state = ALLOCATION_MARKED_FOR_DELETE;
+	/*
+	 * Unlock cdt
+	 */
+	mutex_unlock(&cdt_node->lock);
+
+	/* Order of what follows is important */
+
+	/*
+	 * Update microkernel state to reflect rights change (e.g., if we're
+	 * deleting a cnode for an endpoint, we need to ensure the lcd isn't
+	 * in the endpoint's queues).
+	 */
+	update_microkernel(cspace, cnode);
+
+	if (last_node) {
+		/*
+		 * No lcd's have a reference to the object anymore. Time to
+		 * tear it down.
+		 *
+		 * Delete the cdt
+		 */
+		free_cdt_root(cdt_node);
+		/*
+		 * Tear down the object.
+		 *
+		 * SPECIAL CASE: If deleting an lcd, and the calling lcd is
+		 * the lcd to be deleted, this call does not return.
+		 */
+		free_cnode_object(cspace, cnode);
+	}
+
+	/*
+	 * Mark cnode as free, null out fields.
+	 *
+	 * XXX: We could possibly free up the cnode table if all of its cnodes
+	 * are free. For now, they just hang around and will be freed when
+	 * the whole cspace is torn down.
+	 */
+	cnode->type = LCD_CAP_TYPE_FREE;
+	cnode->object = NULL;
+	cnode->cdt_root = NULL;
+	cnode->is_mapped = 0;
+	/*
+	 * Signal we are done
+	 */
+	return 1;
+}
+
+void __lcd_cap_delete(struct cspace *cspace, cptr_t c)
+{
+	struct cnode *cnode; 
+	int done;
+	int ret;
+
+	/*
+	 * This entire thing has to go in a loop - we need to release
+	 * the lock on cnode and try again until we can lock the cdt.
+	 */
+	do {
+		/*
+		 * Look up cnode
+		 */
+		ret = __lcd_cnode_get(cspace, c, &cnode);
+		if (ret) {
+			LCD_ERR("error getting cnode");
+			goto out1;
+		}
+
+		/*
+		 * If the cnode is already marked as free, just return.
+		 *
+		 * (The cnode may not have been free the first time we tried
+		 * to delete it, but when we reattempted, it was freed by 
+		 * someone else.)
+		 */
+		if (cnode->type == LCD_CAP_TYPE_FREE) {
+			LCD_MSG("cnode already free");
+			goto out2;
+		}
+	
+		/*
+		 * If cnode is invalid or has type cnode (points to another 
+		 * cnode table), ignore and return.
+		 */
+		if (cnode->type == LCD_CAP_TYPE_INVALID ||
+			cnode->type == LCD_CAP_TYPE_CNODE) {
+			LCD_MSG("ignoring attempt to delete invalid cnode");
+			goto out2;
+		}
+
+		/*
+		 * Delete the cnode
+		 */
+		done = try_delete_cnode(cspace, cnode);
+
+		/*
+		 * Release cnode
+		 */
+		__lcd_cnode_put(cnode);
+
+		if (!done) {
+			/*
+			 * Someone else is using the cdt; wait 1 ms for him
+			 * to finish.
+			 */
+			msleep(1);
+		}
+
+	} while (!done);
+		
+
+	return;
+
+out2:
+	__lcd_cnode_put(cnode);
+out1:
+	return;
+}
+
+static int try_grant(struct cspace *cspacedst, struct cnode *cnodesrc, 
+		struct cnode *cnodedst)
+{
+	/*
+	 * Try to lock the cdt containing source cnode (dest cnode should
+	 * not be in a cdt)
+	 */
+	if (!mutex_trylock(&cnodesrc->cdt_root->lock)) {
+		/*
+		 * Tell caller to retry
+		 */
+		return 0;
+	}
+
+	/*
+	 * Add dest cnode to source's children in cdt
+	 */
+	list_add(&cnodedst->siblings, &cnodesrc->children);
+
+	/*
+	 * Unlock cdt
+	 */
+	mutex_unlock(&cnodesrc->cdt_root->lock);
+
+	/*
+	 * Set dest cnode's fields with source's
+	 */
+	cnodedst->type     = cnodesrc->type;
+	cnodedst->object   = cnodesrc->object;
+	cnodedst->cspace   = cspacedst;
+	cnodedst->cdt_root = cnodesrc->cdt_root;
+
+	return 1;
+}
+
+int __lcd_cap_grant(struct cspace *cspacesrc, cptr_t c_src,
+		struct cspace *cspacedst, cptr_t c_dst)
+{
+	struct cnode *cnodesrc, *cnodedst;
+	int done;
+	int ret;
+
+	/*
+	 * This entire thing has to go in a loop - we need to release
+	 * the lock on (at least) the source cnode and try again until we can 
+	 * lock the cdt containing the source cnode.
+	 */
+
+	do {
+		/*
+		 * Look up source
+		 */
+		ret = __lcd_cnode_get(cspacesrc, c_src, &cnodesrc);
+		if (ret) {
+			LCD_ERR("couldn't get source cnode");
+			goto fail1;
+		}
+		/*
+		 * Look up dest
+		 *
+		 * XXX: It may be possible to get a deadlock here:
+		 *
+		 *   Thread 1: lcd_cap_grant(cspace1, cptr1, cspace2, cptr2)
+		 *
+		 *   Thread 2: lcd_cap_grant(cspace2, cptr2, cspace1, cptr1)
+		 *
+		 * But perhaps not ... Since grant happens during send/recv,
+		 * this would mean thread1 would have to be a sender and 
+		 * receiver at the same time, which shouldn't be allowed.
+		 */
+		ret = __lcd_cnode_get__(cspacedst, c_dst, true, &cnodedst);
+		if (ret) {
+			LCD_ERR("couldn't get dest cnode");
+			goto fail2;
+		}
+		/*
+		 * Make sure source is neither invalid, free, or a cnode, and
+		 * dest is free.
+		 */
+		if (cnodesrc->type == LCD_CAP_TYPE_FREE ||
+			cnodesrc->type == LCD_CAP_TYPE_INVALID ||
+			cnodesrc->type == LCD_CAP_TYPE_CNODE) {
+			LCD_ERR("bad source cnode, type = %d", cnodesrc->type);
+			ret = -EINVAL;
+			goto fail3;
+		}
+		if (cnodedst->type != LCD_CAP_TYPE_FREE) {
+			LCD_ERR("bad dest cnode, type = %d", cnodedst->type);
+			ret = -EINVAL;
+			goto fail3;
+		}
+		/*
+		 * Try to grant
+		 */
+		done = try_grant(cspacedst, cnodesrc, cnodedst);
+
+		/*
+		 * Release both cnodes
+		 */
+		__lcd_cnode_put(cnodedst);
+		__lcd_cnode_put(cnodesrc);
+
+		if (!done) {
+			/*
+			 * Someone is trying to use the cdt; wait 1 ms for
+			 * him to finish.
+			 */
+			msleep(1);
+		}
+
+	} while (!done);
+
+	return 0;
+
+fail3:
+	__lcd_cnode_put(cnodedst);
+fail2:
+	__lcd_cnode_put(cnodesrc);
+fail1:
+	return ret;
+}
+
+int __lcd_cap_grant_page(struct cspace *cspacesrc, cptr_t c_src,
+			struct cspace *cspacedst, cptr_t c_dst, gpa_t gpa)
+{
+	struct cnode *cnode;
+	int ret;
+	/*
+	 * Do regular grant
+	 */
+	ret = __lcd_cap_grant(cspacesrc, c_src, cspacedst, c_dst);
+	if (ret) {
+		LCD_ERR("grant");
+		goto fail1;
+	}
+	/*
+	 * Look up cnode, and set info
+	 */
+	ret = __lcd_cnode_get(cspacedst, c_dst, &cnode);
+	if (ret) {
+		LCD_ERR("cnode get");
+		goto fail2;
+	}
+	/*
+	 * Ensure it is a page
+	 */
+	if (cnode->type != LCD_CAP_TYPE_PAGE &&
+		cnode->type != LCD_CAP_TYPE_KPAGE) {
+		LCD_ERR("not a page");
+		ret = -EINVAL;
+		goto fail3;
+	}
+	/*
+	 * Set mapping info
+	 */
+	cnode->is_mapped = 1;
+	cnode->where_mapped = gpa;
+	/*
+	 * Put cnode
+	 */
+	__lcd_cnode_put(cnode);
+
+	return 0;
+
+fail3:
+	__lcd_cnode_put(cnode);
+fail2:
+	__lcd_cap_delete(cspacedst, c_dst);
+fail1:
+	return ret;
+}
+
+static int try_revoke(struct cspace *cspace, struct cnode *cnode)
+{
+	struct cnode *child;
+	struct cdt_root_node *cdt_root;
+	int ret;
+	/*
+	 * Try to lock the cdt containing cnode
+	 */
+	if (!mutex_trylock(&cnode->cdt_root->lock)) {
+		/*
+		 * Tell caller to retry
+		 */
+		return 0;
+	}
+
+	cdt_root = cnode->cdt_root;
+
+	/*
+	 * Do a depth-first revoke on cnode's ancestors. If e.g. a child
+	 * has any children, they will be shifted into cnode's children via
+	 * do_delete_from_cdt. This is why we're using a loop to iterate
+	 * over cnode's children, since the list is changing in a peculiar
+	 * way.
+	 *
+	 * XXX: We need to ensure that for all objects - endpoints, pages,
+	 * lcd's - it is ok to have the cdt, cnode, and child cnode locked
+	 * while we update the microkernel state (e.g., unmap a page since
+	 * the rights to it are being revoked). We know there is at least
+	 * one reference (cnode) to the object, so it won't be deleted.
+	 *
+	 * endpoints - should be ok: since we only need to remove the lcd
+	 * from the queues if necessary, and this won't require locking
+	 * any cspaces, cnodes, cdts.
+	 *
+	 * pages - should be ok: revocation could mean unmapping the page
+	 * in the lcd who owns child, but this won't require locking any
+	 * cspace, cnodes, cdts.
+	 *
+	 * lcd's - should be ok: since all *current* operations on lcd's
+	 * are short lived and aren't reasonable to try to cancel, there's no 
+	 * microkernel state that needs to be updated.
+	 */
+	while (!list_empty(&cnode->children)) {
+		child = list_first_entry(&cnode->children, struct cnode,
+					siblings);
+		/*
+		 * Lock child. (If someone has the lock but it is trying to
+		 * lock the cdt, they will relinquish.)
+		 */
+		ret = mutex_lock_interruptible(&child->lock);
+		if (ret) {
+			LCD_ERR("interrupted");
+			goto fail1;
+		}
+		/*
+		 * If the child is in the cdt, its type should match cnode's
+		 * type (it shouldn't be invalid, free, or a cnode).
+		 */
+		BUG_ON(child->type != cnode->type);
+		/*
+		 * Delete from cdt. 
+		 */
+		do_delete_from_cdt(child, cdt_root);
+		/*
+		 * Update microkernel state to reflect rights change 
+		 */
+		update_microkernel(child->cspace, cnode);
+		/*
+		 * Mark cnode as free, null out fields.
+		 */
+		child->type = LCD_CAP_TYPE_FREE;
+		child->object = NULL;
+		child->cdt_root = NULL;
+		child->is_mapped = 0;
+		/*
+		 * Unlock child
+		 */
+		mutex_unlock(&child->lock);
+	}
+
+	/*
+	 * Unlock cdt
+	 */
+	mutex_unlock(&cnode->cdt_root->lock);
+	/*
+	 * Signal we are done
+	 */
+	return 1;
+fail1:
+	return ret;
+}
+
+int __lcd_cap_revoke(struct cspace *cspace, cptr_t c)
+{
+	struct cnode *cnode;
+	int ret;
+	/*
+	 * This whole thing needs to go in a loop - we need to release the
+	 * cnode and keep trying until we can lock the cdt that contains it.
+	 */
+	do {
+		/*
+		 * Try to get parent cnode
+		 */
+		ret = __lcd_cnode_get(cspace, c, &cnode);
+		if (ret) {
+			LCD_ERR("couldn't get parent cnode");
+			goto fail1;
+		}
+		/*
+		 * Check if cnode is neither invalid, free, nor a cnode (must
+		 * contain a capability to a microkernel object)
+		 */
+		if (cnode->type == LCD_CAP_TYPE_FREE ||
+			cnode->type == LCD_CAP_TYPE_INVALID ||
+			cnode->type == LCD_CAP_TYPE_CNODE) {
+			LCD_ERR("cannot revoke on cnode type %d", cnode->type);
+			ret = -EINVAL;
+			goto fail2;
+		}
+		/*
+		 * Try to do full recursive revoke
+		 */
+		ret = try_revoke(cspace, cnode);
+		/*
+		 * Release cnode
+		 */
+		__lcd_cnode_put(cnode);
+
+		if (!ret) {
+			/*
+			 * Someone is using the cdt containing cnode; wait
+			 * 1 ms for him to finish, and try again.
+			 */
+			msleep(1);
+		}
+
+	} while (!ret);
+
+	return (ret < 0 ? ret : 0);
+
+fail2:
+	__lcd_cnode_put(cnode);
+fail1:
+	return ret;
+}
+
+static void cnode_tear_down(struct cnode *cnode, struct cspace *cspace)
+{
+	int ret;
+	int done;
+
+	do {
+		/*
+		 * Lock cnode
+		 */
+		ret = mutex_lock_interruptible(&cnode->lock);
+		if (ret) {
+			LCD_ERR("interrupted, skipping this cnode");
+			goto out1;
+		}
+		/*
+		 * If the cnode is already marked as free, just return.
+		 */
+		if (cnode->type == LCD_CAP_TYPE_FREE)
+			goto out2;
+		/*
+		 * Delete the cnode
+		 */
+		done = try_delete_cnode(cspace, cnode);
+
+		/*
+		 * Release cnode
+		 */
+		mutex_unlock(&cnode->lock);
+
+		if (!done) {
+			/*
+			 * Someone else is using the cdt; wait 1 ms for him
+			 * to finish.
+			 */
+			msleep(1);
+		}
+
+	} while (!done);
+
+	return;
+
+out2:
+	mutex_unlock(&cnode->lock);
+out1:
+	return;
+}
+
+static void cnode_table_tear_down(struct cnode_table *t, struct cspace *cspace)
 {
 	int i;
-	bool success = false;
-	struct cte *table;
-	struct cap_derivation_tree *cdtnode;
-	struct task_struct *tcb = objects[LCD_CapInitThreadTCB];
-	struct cap_space *cspace = kmalloc(sizeof(struct cap_space), GFP_KERNEL);
-  
-	if (cspace == NULL)
-	{
-		LCD_PANIC("lcd_cap_create_cspace: Failed to allocate memory for cspace\n");
-		return NULL;
-	}
-	cspace->root_cnode.cnode.table = NULL;
-	if (tcb == NULL)
-	{
-		LCD_PANIC("lcd_create_cspace: LCD_CapInitThreadTCB cannot be NULL\n");
-		goto create_cspace_safe_exit;
-	}
-	if ((sizeof(objects)/sizeof(objects[0]) != LCD_CapFirstFreeSlot) ||
-		(sizeof(rights)/sizeof(rights[0]) != LCD_CapFirstFreeSlot))
-	{
-		LCD_PANIC("lcd_create_cspace: Invalid inputs, size of arrays should be equal to LCD_CapFirstFreeSlot\n");
-		goto create_cspace_safe_exit;
-	}
-  
-	// initialize semaphore
-	sema_init(&(cspace->sem_cspace), 1);
-	if (down_interruptible(&(cspace->sem_cspace)))
-	{
-		// allocate memory for the first cnode.
-		cspace->root_cnode.ctetype = lcd_type_cnode;
-		cspace->root_cnode.cnode.cnode_id = 0;
-		cspace->root_cnode.cnode.table_level = 0;
-		cspace->root_cnode.cnode.table = kmalloc(PAGE_SIZE, GFP_KERNEL);
-		if (cspace->root_cnode.cnode.table == NULL)
-		{
-			LCD_PANIC("lcd_cap_create_cspace: Failed to allocate cnode table\n");
-			goto create_cspace_safe_exit;
-		}
+	struct cnode *cnode;
 
-		table = cspace->root_cnode.cnode.table;
-		table[0].ctetype = lcd_type_free;
-		// Get the intitial capabilities into the cspace.
-		for (i = 1; i < LCD_CapFirstFreeSlot; i++)
-		{
-			table[i].cap.hobject = objects[i];
-			table[i].cap.crights = rights[i];
-			if (objects[i] == NULL)
-			{
-				table[i].ctetype = lcd_type_invalid;
-				continue;
-			}
-			table[i].ctetype = lcd_type_capability;
-			cdtnode = kmalloc(sizeof(struct cap_derivation_tree), GFP_KERNEL);
-			if (cdtnode == NULL)
-			{
-				LCD_PANIC("lcd_cap_create_cspace: Failed to allocate cdt node\n");
-				goto create_cspace_safe_exit;
-			}
-			cdtnode->cap = &(cspace->root_cnode.cnode.table[i]);
-			cdtnode->sem_cdt = kmalloc(sizeof(struct semaphore), GFP_KERNEL);
-			if (cdtnode->sem_cdt == NULL)
-			{
-				LCD_PANIC("lcd_cap_create_cspace: Failed to allocate cdt semaphore\n");
-				goto create_cspace_safe_exit;
-			}
-			sema_init(cdtnode->sem_cdt, 1);
-			cdtnode->parent_ptr = NULL;
-			cdtnode->child_ptr = NULL;
-			cdtnode->next = NULL;
-			cdtnode->prev = NULL;
-			table[i].cap.cdt_node = cdtnode;
-		}
+	/*
+	 * Loop over cap slots (first half), and tear down each cnode
+	 */
+	for (i = 0; i < (LCD_CNODE_TABLE_NUM_SLOTS >> 1); i++) {
 
-		// initialize the free list
-		success = lcd_cap_initialize_freelist(cspace, cspace->root_cnode.cnode.table, true);
-		up(&(cspace->sem_cspace));
-		if (!success)
-		{
-			LCD_PANIC("lcd_cap_create_cspace: Failed to initialize free list\n");
-			goto create_cspace_safe_exit;
-		}
+		cnode = &t->cnode[i];
+
+		cnode_tear_down(cnode, cspace);
+
 	}
-	else
-	{
-		LCD_PANIC("lcd_cap_create_cspace: Failed to acquire cspace lock\n");
-		goto create_cspace_safe_exit;
-	}
-  
-	tcb->cspace = cspace;
-	return cspace;
-  
-create_cspace_safe_exit:
-	if (cspace)
-	{
-		if (cspace->root_cnode.cnode.table)
-		{
-			for (i = 1; i < LCD_CapFirstFreeSlot; i++)
-			{
-				if (cspace->root_cnode.cnode.table[i].cap.cdt_node != NULL)
-				{
-					if (cspace->root_cnode.cnode.table[i].cap.cdt_node->sem_cdt != NULL)
-					{
-						kfree(cspace->root_cnode.cnode.table[i].cap.cdt_node->sem_cdt);
-					}
-					kfree(cspace->root_cnode.cnode.table[i].cap.cdt_node);
-				}
-			}
-			kfree(cspace->root_cnode.cnode.table);
-			cspace->root_cnode.cnode.table = NULL;
-		}
-		kfree(cspace);
-		tcb->cspace = NULL;
-	}
-	return NULL;
+
+	return;
 }
 
-// does not lock the cspace.
-// First entry of every cnode table will be the head of the free slots available
-// in the table. This function will just populate the free list.
-bool lcd_cap_initialize_freelist(struct cap_space *cspace, struct cte *cnode, bool bFirstCNode)
+static void cspace_tear_down(struct cspace *cspace)
 {
-	int startid = 1;
-	int i;
-  
-	if (cnode == NULL || cspace == NULL)
-		return false;
-  
-	if (bFirstCNode)
-	{
-		startid = LCD_CapFirstFreeSlot;
+	struct list_head *cursor, *next;
+	struct cnode_table *t;
+
+	/*
+	 * We marked the cspace as being deleted, so no one can change
+	 * the radix tree (e.g., add new cnode tables). So it's safe to
+	 * iterate over them. If we are able to free all contained cnodes,
+	 * then it is also ok to free the cnode_table and remove it from
+	 * the list.
+	 *
+	 * We iterate over each one and look at the cap slots (the cnode
+	 * slots are either free or point to other tables).
+	 */
+
+	list_for_each_safe(cursor, next, &cspace->table_list) {
+
+		t = list_entry(cursor, struct cnode_table, table_list);
+		/*
+		 * Tear down the table
+		 */
+		cnode_table_tear_down(t, cspace);
+		/*
+		 * Delete it from list and free it
+		 */
+		list_del(&t->table_list);
+		kmem_cache_free(cspace->cnode_table_cache, t);
 	}
-  
-	cnode[0].ctetype = lcd_type_invalid;
-	cnode[0].slot.cspace = cspace;
-	cnode[0].ctetype = lcd_type_free;
-	cnode[0].index = 0;
-	cnode[0].slot.next_free_cap_slot = startid;
-	cnode[startid].ctetype = lcd_type_free;
-	for (i = startid; i < CNODE_SLOTS_START - 1; i++)
-	{
-		cnode[i].slot.next_free_cap_slot = i + 1;
-		cnode[i+1].ctetype = lcd_type_free;
-		cnode[i].index = i;
-	}
-	cnode[i].slot.next_free_cap_slot = 0;
-	cnode[i].index = i;
-  
-	startid = CNODE_SLOTS_START;
-	cnode[0].slot.next_free_cnode_slot = startid;
-	cnode[startid].ctetype = lcd_type_free;
-	for (i = CNODE_SLOTS_START; i < MAX_SLOTS - 1; i++)
-	{
-		cnode[i].slot.next_free_cnode_slot = i + 1;
-		cnode[i].index = i;
-		cnode[i+1].ctetype = lcd_type_free;
-	}
-	cnode[i].slot.next_free_cnode_slot = 0;
-	cnode[i].index = i;
-	return true;
+
+	return;
 }
 
-// Removes the free_slot from free list.
-struct cte * lcd_cap_reserve_slot(struct cte *cnode, cap_id *cid, int free_slot)
+void __lcd_cap_destroy_cspace(struct cspace *cspace)
 {
-	struct cte *node = cnode->cnode.table;
-	ASSERT(node[free_slot].ctetype == lcd_type_free, "Free List is corrupted\n");
-	// a valid empty slot
-	node[0].slot.next_free_cap_slot = node[free_slot].slot.next_free_cap_slot;
-	lcd_set_bits_at_level(cnode, cid, free_slot);
-	return &node[free_slot];
+	int ret;
+	/*
+	 * Lock the cspace, and mark it as being deleted. This will prevent
+	 * any insert's, delete's, revoke's, etc. from trying to traverse
+	 * the cnode table tree.
+	 */
+	ret = mutex_lock_interruptible(&cspace->lock);
+	if (ret) {
+		LCD_ERR("interrupted");
+		goto fail1;
+	}
+	/*
+	 * Confirm cspace is valid (this check is probably not necessary
+	 * since we can't race on cspace tear down, but maybe it will be
+	 * in the future ...)
+	 */
+	if (cspace->state != ALLOCATION_VALID) {
+		LCD_ERR("cspace already freed?");
+		goto fail2;
+	}
+	/*
+	 * Mark it as being deleted
+	 */
+	cspace->state = ALLOCATION_MARKED_FOR_DELETE;
+	/*
+	 * Unlock cspace
+	 */
+	mutex_unlock(&cspace->lock);
+	/*
+	 * Start tearing it down
+	 */
+	cspace_tear_down(cspace);
+
+	return;
+
+fail2:
+	mutex_unlock(&cspace->lock);
+fail1:
+	return;
 }
 
+/* INIT / EXIT -------------------------------------------------- */
 
-// free slot will be booked for the caller.
-// ie. it will not longer be free once this function returns it.
-// naming convention:
-// cnode = struct cte entry in the table, which points to another table.
-// node = pointer the the array of struct cte entries/capability table i.e. cnode->cnode.table
-cap_id lcd_cap_lookup_freeslot(struct cap_space *cspace, struct cte **cap)
+static int cap_tests(void);
+
+int __lcd_cap_init(void)
 {
-	cap_id cid = 0, cnode_id;
-	bool found = false;
-	int i = 0;
-	int size = sizeof(struct cte);
-	struct kfifo cnode_q;
-  
-	if (cspace == NULL || cspace->root_cnode.cnode.table == NULL || cap == NULL)
-	{
-		LCD_PANIC("lcd_cap_lookup_freeslot: Invalid Inputs\n");
-		return 0;
-	}
-  
-	if (kfifo_alloc(&cnode_q, sizeof(struct cte) * 512, GFP_KERNEL) != 0)
-	{
-		LCD_PANIC("lcd_cap_lookup_freeslot: Failed to allocate FIFO buffer\n");
-		return 0;
+	/*
+	 * Initialize cdt cache
+	 */
+	mutex_init(&cdt_cache.lock);
+	cdt_cache.cdt_root_cache = KMEM_CACHE(cdt_root_node, 0);
+	if(!cdt_cache.cdt_root_cache) {
+		LCD_ERR("failed to initialize cdt_root_node allocator");
+		return -ENOMEM;
 	}
 
-	kfifo_in(&cnode_q, &(cspace->root_cnode), size);
-  
-	while (!found && !kfifo_is_empty(&cnode_q))
-	{
-		int free_cap_slot = 0, free_cnode_slot = 0;
-		struct cte *node = NULL, *cnode = NULL;
-    
-		kfifo_out(&cnode_q, cnode, size);
-		if (cnode == NULL)
-		{
-			break;
-		}
-    
-		node = cnode->cnode.table;
-    
-		free_cap_slot   = node[0].slot.next_free_cap_slot;
-		free_cnode_slot = node[0].slot.next_free_cnode_slot;
-    
-		if (free_cap_slot != 0 && free_cap_slot < CNODE_SLOTS_START)
-		{
-			*cap = lcd_cap_reserve_slot(cnode, &cid, free_cap_slot);
-			break;
-		}
-    
-		if (free_cnode_slot != 0 && free_cnode_slot >= CNODE_SLOTS_START && free_cnode_slot < MAX_SLOTS)
-		{
-			// there is no slot free for capability
-			// 1. Check if free slots are available at next level
-			for (i = CNODE_SLOTS_START; i < free_cnode_slot; i++)
-			{
-				struct cte * next_cnode = &node[i];
-				struct cte *next_node = node[i].cnode.table; 
-				free_cap_slot = next_node[0].slot.next_free_cap_slot;
-				if (free_cap_slot != 0 && free_cap_slot < CNODE_SLOTS_START)
-				{
-					*cap = lcd_cap_reserve_slot(next_cnode, &cid, free_cap_slot);
-					found = true;
-					break;
-				}
-			}
-			if (found)
-				break;
-      
-			// we will have to allocate a new cnode
-			node[free_cnode_slot].cnode.table = kmalloc(PAGE_SIZE, GFP_KERNEL);
-			if (node[free_cnode_slot].cnode.table == NULL)
-			{
-				LCD_PANIC("lcd_cap_lookup_freeslot: Not able to allocate cnode\n");
-				break;
-			}
-			node[0].slot.next_free_cnode_slot = node[free_cnode_slot].slot.next_free_cnode_slot;
-			node[free_cnode_slot].ctetype = lcd_type_cnode;
-			lcd_cap_initialize_freelist(cspace, node[free_cnode_slot].cnode.table, false);
-			node[free_cnode_slot].cnode.table_level = cnode->cnode.table_level + 1;
-			lcd_set_bits_at_level(cnode, &cnode_id, free_cnode_slot);
-			node[free_cnode_slot].cnode.cnode_id = cnode_id;
-      
-			cnode = &node[free_cnode_slot];
-			node = node[free_cnode_slot].cnode.table;
-			free_cap_slot = node[0].slot.next_free_cap_slot;
-			if (free_cap_slot != 0 && free_cap_slot < CNODE_SLOTS_START)
-			{
-				*cap = lcd_cap_reserve_slot(cnode, &cid, free_cap_slot);
-			}
-			break;
-		} // found a free cnode slot
-		else 
-		{
-			// nothing is free in this cnode 
-			// kep lookin at all its children
-			for (i = CNODE_SLOTS_START; i < MAX_SLOTS; i++)
-			{
-				kfifo_in(&cnode_q, &node[i], size);
-			}
-		}
-	} // while (!kfifo_is_empty())
-	kfifo_free(&cnode_q);
-	return cid;
+	/*
+	 * Run cap tests
+	 */
+	if (cap_tests())
+		return -1;
+
+	return 0;
 }
 
-cap_id lcd_cap_mint_capability(struct task_struct *tcb, cap_id cid, lcd_cap_rights rights)
+void __lcd_cap_exit(void)
 {
-	cap_id id = 0;
-	struct cap_space *cspace;
-	struct cte *src_cte = NULL, *dst_cte = NULL;
-	struct cap_derivation_tree *cdt;
-	struct cap_derivation_tree *dst_cdt;
-	bool done = false;
-  
-	if (tcb == NULL || cid == 0)
-	{
-		LCD_PANIC("lcd_cap_mint_capability: Invalid Inputs\n");
-		return 0;
-	}
-	cspace = tcb->cspace;
-  
-  
-	dst_cdt = kmalloc(sizeof(struct cap_derivation_tree), GFP_KERNEL);
-	if (dst_cdt == NULL)
-	{
-		LCD_PANIC("lcd_cap_mint_capability: Failed to allocate memory for cdt node\n");
-		return 0;
-	}
-	while (!done)
-	{
-		// keep the source cdt locked.
-		src_cte = lcd_cap_lookup_capability(tcb, cid, true);
-		if (src_cte == NULL || src_cte->ctetype != lcd_type_capability)
-		{
-			LCD_PANIC("lcd_cap_mint_capability: Invalid Capability\n");
-			if (src_cte != NULL)
-				up(src_cte->cap.cdt_node->sem_cdt);
-			kfree(dst_cdt);
-			return 0;
-		}
-		cdt = src_cte->cap.cdt_node;
-		if (down_trylock(&(cspace->sem_cspace)) == 0)
-		{
-			if (cspace->root_cnode.ctetype == lcd_type_invalid)
-			{
-				LCD_PANIC("lcd_cap_mint_capability: Destroy may be in progress, aborting operation\n");
-				up(&(cspace->sem_cspace));
-				up(cdt->sem_cdt);
-				kfree(dst_cdt);
-				return 0;
-			}
-      
-			// get a free slot in destination.
-			if (id == 0)
-			{
-				id = lcd_cap_lookup_freeslot(cspace, &dst_cte);
-			}
-			if (dst_cte == NULL || dst_cte->ctetype != lcd_type_free)
-			{
-				LCD_PANIC("lcd_cap_mint_capability: No free slot\n");
-				up(&(cspace->sem_cspace));
-				up(cdt->sem_cdt);
-				kfree(dst_cdt);
-				return 0;
-			}
-      
-			// add the capability in cspace and cdt node as a sibling.
-			dst_cte->cap.crights = (rights & src_cte->cap.crights);
-			dst_cte->cap.hobject = src_cte->cap.hobject;
-			dst_cdt->sem_cdt = cdt->sem_cdt;
-			dst_cte->cap.cdt_node = dst_cdt;
-    
-			dst_cdt->next = cdt->next;
-			if (cdt->next != NULL)
-				cdt->next->prev = dst_cdt;
-			cdt->next = dst_cdt;
-			dst_cdt->prev = cdt;
-			dst_cdt->child_ptr  = NULL;
-			dst_cdt->parent_ptr = cdt->parent_ptr;
-      
-			dst_cte->ctetype = lcd_type_capability;
-			done = true;
-			up(&(cspace->sem_cspace));
-		}
-		up(cdt->sem_cdt);
-		if (!done)
-			msleep_interruptible(1);
-	}  
-  
-	return id;
+	kmem_cache_destroy(cdt_cache.cdt_root_cache);
 }
+
+#include "tests/cap-tests.c"
