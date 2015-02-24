@@ -342,6 +342,7 @@ struct task_struct *kthread_create_on_cpu(int (*threadfn)(void *data),
 	kthread_park(p);
 	return p;
 }
+EXPORT_SYMBOL(kthread_create_on_cpu);
 
 static void __kthread_unpark(struct task_struct *k, struct kthread *kthread)
 {
@@ -374,6 +375,7 @@ void kthread_unpark(struct task_struct *k)
 	if (kthread)
 		__kthread_unpark(k, kthread);
 }
+EXPORT_SYMBOL(kthread_unpark);
 
 /**
  * kthread_park - park a thread created by kthread_create().
