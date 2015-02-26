@@ -1042,10 +1042,6 @@ struct task_struct {
 	atomic_t usage;
 	unsigned int flags;	/* per process flags, defined below */
 	unsigned int ptrace;
-#ifdef CONFIG_HAVE_LCD
-	struct lcd *lcd;
-	struct cptr_cache *cptr_cache;
-#endif
 #ifdef CONFIG_SMP
 	struct llist_node wake_entry;
 	int on_cpu;
@@ -1423,6 +1419,10 @@ struct task_struct {
 #if defined(CONFIG_BCACHE) || defined(CONFIG_BCACHE_MODULE)
 	unsigned int	sequential_io;
 	unsigned int	sequential_io_avg;
+#endif
+#ifdef CONFIG_HAVE_LCD
+	struct lcd *lcd;
+	struct cptr_cache *cptr_cache;
 #endif
 };
 

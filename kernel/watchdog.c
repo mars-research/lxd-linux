@@ -316,6 +316,9 @@ static enum hrtimer_restart watchdog_timer_fn(struct hrtimer *hrtimer)
 		printk(KERN_EMERG "BUG: soft lockup - CPU#%d stuck for %us! [%s:%d]\n",
 			smp_processor_id(), duration,
 			current->comm, task_pid_nr(current));
+		
+		trigger_all_cpu_backtrace();
+
 		print_modules();
 		print_irqtrace_events(current);
 		if (regs)
