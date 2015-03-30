@@ -21,6 +21,14 @@ config LCD_INTEL
 config HAVE_LCD
        bool
 
+config LAZY_THC
+       bool "CONFIG LAZY THC"
+       default y
+       depends on LCD_DOMAINS
+       ---help---
+       LAZY ASYNC Implementation
+
+
 config LCD_MODULE_LOAD_TEST
        tristate
        depends on LCD_DOMAINS

@@ -56,6 +56,7 @@ struct sched_param {
 #ifdef CONFIG_HAVE_LCD
 struct lcd;
 struct cptr_cache;
+struct ptstate_t;
 #endif
 
 #include <asm/processor.h>
@@ -1045,6 +1046,7 @@ struct task_struct {
 #ifdef CONFIG_HAVE_LCD
 	struct lcd *lcd;
 	struct cptr_cache *cptr_cache;
+	struct ptstate_t *ptstate; /* per thread state */
 #endif
 #ifdef CONFIG_SMP
 	struct llist_node wake_entry;
