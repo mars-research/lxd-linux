@@ -407,6 +407,4 @@ config OID_REGISTRY
 config UCS2_STRING
         tristate
 
-source "lib/thc/Kconfig"
-
 endmenu
