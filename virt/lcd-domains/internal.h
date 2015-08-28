@@ -16,7 +16,7 @@
  * --------------------------------------------------
  */
 
-#define LCD_DEBUG 0
+#define LCD_DEBUG_LVL 0
 
 #define LCD_ERR(msg...) __lcd_err(__FILE__, __LINE__, msg)
 static inline void __lcd_err(char *file, int lineno, char *fmt, ...)
@@ -45,6 +45,25 @@ static inline void __lcd_warn(char *file, int lineno, char *fmt, ...)
 	vprintk(fmt, args);
 	va_end(args);
 }
+
+#define LCD_DEBUG_ERR  1
+#define LCD_DEBUG_WARN 2
+#define LCD_DEBUG_MSG  3
+
+#define LCD_DEBUG(lvl, msg...) {					\
+	if (lvl <= LCD_DEBUG_LVL)					\
+		__lcd_debug(__FILE__, __LINE__, msg);			\
+	}
+		
+static inline void __lcd_debug(char *file, int lineno, char *fmt, ...)
+{
+	va_list args;
+	printk(KERN_ERR "lcd-domains: %s:%d: debug: ", file, lineno);
+	va_start(args, fmt);
+	vprintk(fmt, args);
+	va_end(args);
+}
+
 
 /*
  * --------------------------------------------------
@@ -331,6 +350,9 @@ int __klcd_enter(void);
 void __klcd_exit(void);
 int __klcd_page_zalloc(struct lcd *klcd, cptr_t c, hpa_t *hpa_out,
 		hva_t *hva_out);
+int __klcd_pages_zalloc(struct lcd *klcd, cptr_t *slots, 
+			hpa_t *hp_base_out, hva_t *hv_base_out,
+			unsigned order);
 int __lcd_create(struct lcd *caller, cptr_t slot, gpa_t stack);
 int __lcd_create__(struct lcd **out);
 int __lcd_config(struct lcd *caller, cptr_t lcd, gva_t pc, gva_t sp, 
