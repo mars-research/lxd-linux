@@ -6,7 +6,6 @@
 
 #include <linux/mm_types.h>
 #include <linux/bug.h>
-
 /*
  * On almost all architectures and configurations, 0 can be used as the
  * upper ceiling to free_pgtables(): on many architectures it has the same
