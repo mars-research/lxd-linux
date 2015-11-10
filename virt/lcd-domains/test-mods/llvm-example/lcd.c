@@ -40,8 +40,11 @@ static int func2(void)
 static void loop(cptr_t chnl)
 {
 	int ret;
+	int counter = 0;
 
 	for (;;) {
+
+		counter++;
 
 		/* Invoke receive on ipc channel. */
 		ret = lcd_recv(chnl);
@@ -96,6 +99,10 @@ static void loop(cptr_t chnl)
 				lcd_r0());
 			lcd_exit(-EINVAL); /* Never returns. */
 		}
+
+		/* HACK: After two messages, we just quit. */
+		if (counter >= 2)
+			lcd_exit(0); /* Never returns. */
 	}
 }
 
