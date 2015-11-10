@@ -11,6 +11,14 @@ config LCD_DOMAINS
        ---help---
        Light-weight Capability Domains for Linux.
 
+config LCD_COMPILE_FOR_SMACK
+       bool "Compile test modules for SMACK model checker"
+       depends on LCD_DOMAINS
+       default n
+       ---help---
+       For any test modules configured for it, build them as LLVM bitcode
+       to be run through SMACK model checker.
+
 config HAVE_LCD
        bool
 
@@ -179,6 +187,28 @@ config LCD_TEST_MOD_GLUE_EXAMPLE_BOOT
        default m
 
 endif
+
+# --------------------------------------------------
+
+config LCD_TEST_MOD_LLVM_EXAMPLE
+       bool "Example for how to build for LLVM/SMACK"
+       depends on LCD_DOMAINS
+       default y
+       select LCD_TEST_MOD_LLVM_EXAMPLE_BOOT
+       select LCD_TEST_MOD_LLVM_EXAMPLE_LCD
+       ---help---
+       Shows how to set up modules and a conditional build for
+       LLVM/SMACK.
+     
+config LCD_TEST_MOD_LLVM_EXAMPLE_BOOT
+       tristate
+       depends on LCD_TEST_MOD_LLVM_EXAMPLE
+       default m
+
+config LCD_TEST_MOD_LLVM_EXAMPLE_LCD
+       tristate
+       depends on LCD_TEST_MOD_LLVM_EXAMPLE
+       default m
 
 # --------------------------------------------------
 

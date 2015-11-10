@@ -22,6 +22,12 @@
 
 /* LCD REG ACCESS -------------------------------------------------- */
 
+#ifdef CONFIG_LCD_COMPILE_FOR_SMACK
+
+struct lcd_utcb *lcd_get_utcb(void);
+
+#else /* !CONFIG_LCD_COMPILE_FOR_SMACK */
+
 static inline struct lcd_utcb * lcd_get_utcb(void)
 {
 	struct lcd_utcb *out;
@@ -36,6 +42,8 @@ static inline struct lcd_utcb * lcd_get_utcb(void)
 		::);
 	return out;
 }
+
+#endif /* CONFIG_LCD_COMPILE_FOR_SMACK */
 
 #define LCD_MK_REG_ACCESS(idx)						\
 static inline u64 lcd_r##idx(void)					\
@@ -284,10 +292,18 @@ void lcd_printk(char *fmt, ...);
 
 /* BOOT INFO -------------------------------------------------- */
 
+#ifdef CONFIG_LCD_COMPILE_FOR_SMACK
+
+struct lcd_boot_info * lcd_get_boot_info(void);
+
+#else /* !CONFIG_LCD_COMPILE_FOR_SMACK */
+
 static inline struct lcd_boot_info * lcd_get_boot_info(void)
 {
 	return (struct lcd_boot_info *)gva_val(LCD_BOOT_PAGES_GVA);
 }
+
+#endif /* CONFIG_LCD_COMPILE_FOR_SMACK */
 
 /* DATA STORE -------------------------------------------------- */
 
