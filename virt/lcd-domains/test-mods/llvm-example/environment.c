@@ -95,7 +95,6 @@ int lcd_reply(void)
 void lcd_printk(char *fmt, ...) 
 {
 	va_list args;
-	char *p;
 
 	va_start(args, fmt);
 	/* Just use the libc version, vprintf will remain an undefined

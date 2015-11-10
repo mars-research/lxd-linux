@@ -10,14 +10,31 @@ ifdef CONFIG_LCD_COMPILE_FOR_SMACK
 
 # Building for SMACK.
 
-# Use whole program llvm, dragonegg, etc.
-export LLVM_COMPILER=dragonegg
-export LLVM_DRAGONEGG_PLUGIN=/usr/lib/gcc/x86_64-linux-gnu/4.6/plugin/dragonegg.so
-
+# Use whole program llvm, clang, etc.
+export LLVM_COMPILER=clang
 export CC=wllvm
 
 # Compile and link main.o and environment.o to close off environment.
-lcd-test-mod-llvm-example-lcd-y              += main.o environment.o
+lcd-test-mod-llvm-example-lcd-y              += smack_main.o environment.o
+
+# Tell clang not to complain
+CFLAGS_REMOVE_lcd.o := -fno-delete-null-pointer-checks \
+					       -mpreferred-stack-boundary=3 \
+					       -maccumulate-outgoing-args \
+					       -fconserve-stack \
+					       -DCC_HAVE_ASM_GOTO
+
+CFLAGS_REMOVE_smack_main.o := -fno-delete-null-pointer-checks \
+					       -mpreferred-stack-boundary=3 \
+					       -maccumulate-outgoing-args \
+					       -fconserve-stack \
+					       -DCC_HAVE_ASM_GOTO
+
+CFLAGS_REMOVE_environment.o := -fno-delete-null-pointer-checks  \
+					       -mpreferred-stack-boundary=3 \
+					       -maccumulate-outgoing-args \
+					       -fconserve-stack \
+					       -DCC_HAVE_ASM_GOTO
 
 else
 

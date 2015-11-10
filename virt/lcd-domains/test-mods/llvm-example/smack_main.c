@@ -1,3 +1,6 @@
+
+#include <linux/kernel.h>
+
 int __noreturn llvm_example_lcd_init(void);
 
 int main(void)
