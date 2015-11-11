@@ -21,13 +21,29 @@ int klcd_enter(void)
 		LCD_ERR("cptr cache init");
 		goto fail1;
 	}
+	/*
+	 * Initialize cspace, message buffer, and so on, for
+	 * non-isolated thread.
+	 */
 	ret = __klcd_enter();
 	if (ret) {
 		LCD_ERR("enter");
 		goto fail2;
 	}
+	/*
+	 * Create a call sync endpoint (this will be used in
+	 * a call/reply interaction)
+	 */
+	ret = __lcd_create_sync_endpoint(current->lcd, LCD_CPTR_CALL_ENDPOINT);
+	if (ret) {
+		LCD_ERR("creating call endpoint");
+		goto fail3;
+	}
 
 	return 0;
+
+fail3:
+	__klcd_exit();
 fail2:
 	lcd_destroy_cptr();
 fail1:
@@ -41,7 +57,8 @@ void klcd_exit(int retval)
 	 */
 
 	/*
-	 * Exit from lcd mode
+	 * Exit from lcd mode. Destroys cspace (frees any objects),
+	 * message buffer, and so on.
 	 */
 	__klcd_exit();
 	/*

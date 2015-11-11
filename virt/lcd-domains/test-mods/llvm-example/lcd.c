@@ -16,7 +16,7 @@ static int func1(int a, int b)
 	c = a + b;
 
 	/* BUG: ptr not initialized. */
-	*ptr = c;
+//	*ptr = c;
 
 	return 17;
 }
@@ -26,7 +26,7 @@ static int func2(void)
 	int arr[2];
 
 	/* BUG: array out of bounds error */
-	arr[10] = 59;
+//	arr[10] = 59;
 
 	return 29;
 }

@@ -219,6 +219,7 @@ void lcd_free_memcg_kmem_pages(unsigned long addr, unsigned int order);
  * Create a synchronous endpoint, capability stored in slot_out.
  */
 int lcd_create_sync_endpoint(cptr_t *slot_out);
+int __lcd_create_sync_endpoint(cptr_t slot);
 /**
  * Synchronous send. Set message registers using lcd_set_r0(), lcd_set_r1(), 
  * etc. before calling.

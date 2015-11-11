@@ -89,7 +89,7 @@ static int boot_main(void)
 		goto fail8;
 	}
 	
-	if (lcd_r0() != 0) {
+	if (lcd_r0() != 17) {
 		LIBLCD_ERR("FUNC1 rpc failed");
 		goto fail9;
 	}
@@ -104,7 +104,7 @@ static int boot_main(void)
 		goto fail8;
 	}
 	
-	if (lcd_r0() != 0) {
+	if (lcd_r0() != 29) {
 		LIBLCD_ERR("FUNC2 rpc failed");
 		goto fail9;
 	}

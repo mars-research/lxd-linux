@@ -87,6 +87,8 @@ kernel source,
             -- order is important!
             -- this should automatically update the grub boot menu
 
+    [ 5 ] sudo make headers_install INSTALL_HDR_PATH=/usr/include/temp
+
 
 Step 2 - Patched Modprobe Setup
 -------------------------------

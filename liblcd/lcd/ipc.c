@@ -4,6 +4,15 @@
 
 #include <lcd-domains/liblcd-hacks.h>
 
+int __lcd_create_sync_endpoint(cptr_t slot)
+{
+	/*
+	 * Get new endpoint
+	 */
+	lcd_set_cr0(slot);
+	return LCD_DO_SYSCALL(LCD_SYSCALL_SYNC_EP);
+}
+
 int lcd_create_sync_endpoint(cptr_t *slot_out)
 {
 	int ret;
@@ -15,11 +24,7 @@ int lcd_create_sync_endpoint(cptr_t *slot_out)
 		LIBLCD_ERR("cptr alloc");
 		goto fail1;
 	}
-	/*
-	 * Get new endpoint
-	 */
-	lcd_set_cr0(*slot_out);
-	ret = LCD_DO_SYSCALL(LCD_SYSCALL_SYNC_EP);
+	ret = __lcd_create_sync_endpoint(*slot_out);
 	if (ret) {
 		LIBLCD_ERR("create sync ep syscall");
 		goto fail2;
