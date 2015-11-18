@@ -1,3 +1,6 @@
+#ifndef LCD_DOMAINS_LIBLCD_CONFIG_H
+#define LCD_DOMAINS_LIBLCD_CONFIG_H
+
 /*
  * Ensure we use the right config
  */
@@ -75,3 +78,4 @@
 #define __MM_INTERNAL_H
 #endif
 
+#endif /* LCD_DOMAINS_LIBLCD_CONFIG_H */

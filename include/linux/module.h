@@ -377,7 +377,7 @@ struct module
 #endif
 };
 #ifndef MODULE_ARCH_INIT
-#define MODULE_ARCH_INIT {}
+#define MODULE_ARCH_INIT { 0 }
 #endif
 
 extern struct mutex module_mutex;
