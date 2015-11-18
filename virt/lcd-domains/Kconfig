@@ -178,6 +178,8 @@ config LCD_TEST_MOD_GLUE_EXAMPLE_BOOT
        depends on LCD_TEST_MOD_GLUE_EXAMPLE && ISOLATE_GLUE_EXAMPLE
        default m
 
+endif
+
 # --------------------------------------------------
 
 config LCD_TEST_MOD_PMFS
@@ -188,6 +190,7 @@ config LCD_TEST_MOD_PMFS
        default y
        select LCD_TEST_MOD_PMFS_BOOT
        select LCD_TEST_MOD_PMFS_LCD
+       select LCD_TEST_MOD_PMFS_VFS
        ---help---
        Isolation of PMFS file system.
 
@@ -201,7 +204,12 @@ config LCD_TEST_MOD_PMFS_LCD
        depends on LCD_TEST_MOD_PMFS
        default m
 
-endif
+config LCD_TEST_MOD_PMFS_VFS
+       tristate
+       depends on LCD_TEST_MOD_PMFS
+       default m
+
+
 
 # --------------------------------------------------
 
