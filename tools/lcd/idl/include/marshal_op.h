@@ -149,6 +149,8 @@ const char* access_register_mapping(int register_index);
 const char* store_register_mapping(int register_index);
 
 class Type;
+class FunctionPointer;
+class Parameter;
 class IntegerType;
 class ProjectionType;
 class ProjectionField;
@@ -159,6 +161,7 @@ class Rpc;
 class File;
 class TypeVisitor;
 class CCSTCompoundStatement;
+class ReturnVariable;
 
 class Registers
 {
@@ -175,127 +178,56 @@ class Registers
 class Marshal_type
 {
  public:
-  virtual const char* get_name() = 0;
-  virtual void set_name(const char *name) = 0;
   virtual void set_register(int r) = 0;
   virtual int get_register() = 0;
-  virtual Type* get_type() = 0;
-  virtual CCSTCompoundStatement* accept(TypeVisitor *worker) = 0;
 };
 
 class Marshal_projection : public Marshal_type
 {
-  std::vector<Marshal_type*> fields_;
-  const char* param_name_;
-  ProjectionType *pt_;
  public:
-  Marshal_projection(ProjectionType *pt, std::vector<Marshal_type*> fields) { this->pt_ = pt; this->param_name_ = ""; this->fields_ = fields; }
-  virtual void set_name(const char *name) { this->param_name_ = name; }
-  virtual void set_register( int r) { printf("Assert();"); }
-  virtual int get_register() { printf("Assert();"); }
-  std::vector<Marshal_type*> fields() { return this->fields_; }
-  virtual Type* get_type() { return (Type*) this->pt_; }
-  virtual const char* get_name() { return this->param_name_; }
-  virtual CCSTCompoundStatement* accept(TypeVisitor *worker);
+  Marshal_projection();
+  virtual void set_register( int r);
+  virtual int get_register();
 };
 
 class Marshal_integer : public Marshal_type
 {
   int register_;
-  const char *param_name_;
-  IntegerType *it_;
  public:
-  Marshal_integer(IntegerType *it, int r) { this->it_ = it; this->param_name_ = ""; this->register_ = r; }
-  virtual void set_register(int r) { this->register_ = r; }
-  virtual int get_register() { return this->register_; }
-  virtual void set_name(const char *name) { this->param_name_ = name; }
-  virtual const char* get_name() { return this->param_name_; }
-  virtual Type* get_type() { return (Type*) this->it_; }
-  virtual CCSTCompoundStatement* accept(TypeVisitor *worker);
-};
+  Marshal_integer(int r);
+  virtual void set_register(int r);
+  virtual int get_register();};
 
 class Marshal_void : public Marshal_type
 {
-  VoidType *vt_;
-  const char *param_name_;
  public:
-  Marshal_void(VoidType *vt) { this->vt_ = vt; }
-  virtual void set_register(int r) { printf("Assert();"); }
-  virtual int get_register() { printf("Assert();"); }
-  virtual void set_name(const char *name) { this->param_name_ = name; }
-  virtual const char* get_name() { return this->param_name_; }
-  virtual Type* get_type() { return (Type*) this->vt_; }
-  virtual CCSTCompoundStatement* accept(TypeVisitor *worker);
+  Marshal_void();
+  virtual void set_register(int r);
+  virtual int get_register();
 };
 
 class Marshal_typedef : public Marshal_type
 {
   Marshal_type *true_type_;
-  Typedef *t_;
-  const char *param_name_;
  public:
-  Marshal_typedef(Typedef *t, Marshal_type *type) {this->t_ = t; this->true_type_ = type;}
-  virtual void set_register(int r) { true_type_->set_register(r); }
-  virtual int get_register() { return true_type_->get_register(); }
-  virtual void set_name(const char *name) { this->param_name_ = name; 
-    this->true_type_->set_name(name); }
-  virtual Type* get_type() { return (Type*) this->t_; }
-  virtual const char* get_name() { return this->param_name_; }
-  virtual CCSTCompoundStatement* accept(TypeVisitor *worker);
+  Marshal_typedef(Marshal_type *type);
+  virtual void set_register(int r);
+  virtual int get_register();
 };
 
-class Marshal_pointer : public Marshal_type
+
+class MarshalPrepareVisitor
 {
-  Marshal_type *m_type_;
-  const char *param_name_;
-  PointerType *pt_;
+  Registers *registers_;
  public:
-  Marshal_pointer(PointerType *pt, Marshal_type *pointer_type) { this->pt_ = pt; this->m_type_ = pointer_type; }
-  virtual void set_register(int r) { m_type_->set_register(r); }
-  virtual int get_register() { return m_type_->get_register(); }
-  virtual void set_name(const char *name) 
-  {
-    char* pointer_param_name = (char*) malloc(sizeof(char)*(strlen(name)+5));
-    sprintf(pointer_param_name, "%s_tmp", name);
-    this->m_type_->set_name(pointer_param_name); 
-    this->param_name_ = name; }
-  virtual const char* get_name() { 
-    return this->param_name_; }
-  Marshal_type* get_m_type() { return this->m_type_; }
-  virtual Type* get_type() { return (Type*) this->pt_; }
-  virtual CCSTCompoundStatement* accept(TypeVisitor *worker);
+  MarshalPrepareVisitor(Registers *r);
+  Marshal_type* visit(FunctionPointer *fp);
+  Marshal_type* visit(Typedef *td);
+  Marshal_type* visit(VoidType *vt);
+  Marshal_type* visit(IntegerType *it);
+  Marshal_type* visit(ProjectionType *pt);
 };
 
-class TypeVisitor
-{
- public:
-  virtual CCSTCompoundStatement* visit(Marshal_projection *data) = 0;
-  virtual CCSTCompoundStatement* visit(Marshal_integer *data) = 0;
-  virtual CCSTCompoundStatement* visit(Marshal_void *data) = 0;
-  virtual CCSTCompoundStatement* visit(Marshal_typedef *data) = 0;
-  virtual CCSTCompoundStatement* visit(Marshal_pointer *data) = 0;
-};
 
-class MarshalTypeVisitor : public TypeVisitor
-{
- public:
-  MarshalTypeVisitor() {}
-  virtual CCSTCompoundStatement* visit(Marshal_projection *data);
-  virtual CCSTCompoundStatement* visit(Marshal_integer *data);
-  virtual CCSTCompoundStatement* visit(Marshal_void *data);
-  virtual CCSTCompoundStatement* visit(Marshal_typedef *data);
-  virtual CCSTCompoundStatement* visit(Marshal_pointer *data);
-};
-
-class UnmarshalTypeVisitor : public TypeVisitor
-{
- public:
-  UnmarshalTypeVisitor() {}
-  virtual CCSTCompoundStatement* visit(Marshal_projection *data);
-  virtual CCSTCompoundStatement* visit(Marshal_integer *data);
-  virtual CCSTCompoundStatement* visit(Marshal_void *data);
-  virtual CCSTCompoundStatement* visit(Marshal_typedef *data);
-  virtual CCSTCompoundStatement* visit(Marshal_pointer *data);
-};
 
 #endif

@@ -1,137 +1,24 @@
 #include "lcd_ast.h"
 #include <stdio.h>
 
-Typedef::Typedef(const char* alias, Type* type)
-{
-  this->alias_ = alias;
-  this->type_ = type; // need to allocate?
-}
 
-Marshal_type* Typedef::accept(MarshalVisitor *worker, Registers *data)
+Rpc::Rpc(ReturnVariable *return_value, char* name, std::vector<Parameter* > parameters)
 {
-  return worker->visit(this, data);
-}
-
-const char* Typedef::alias()
-{
-  return this->alias_;
-}
-
-VoidType::VoidType()
-{
-}
-
-Marshal_type* VoidType::accept(MarshalVisitor *worker, Registers *data)
-{
-  return worker->visit(this, data);
-}
-
-IntegerType::IntegerType(PrimType type, bool un, int size)
-{
-  this->type_ = type;
-  this->unsigned_ = un;
-  this->size_ = size;
-}
-
-Marshal_type* IntegerType::accept(MarshalVisitor* worker, Registers *data)
-{
-  return worker->visit(this, data);
-}
-
-PrimType IntegerType::int_type()
-{
-  return this->type_;
-}
-
-bool IntegerType::is_unsigned()
-{
-  return unsigned_;
-}
-
-PointerType::PointerType(Type* type)
-{
-  this->type_ = type;
-}
-
-Marshal_type* PointerType::accept(MarshalVisitor* worker, Registers *data)
-{
-  return worker->visit(this, data);
-}
-
-ProjectionField::ProjectionField(bool in, bool out, bool alloc, bool bind, Type* field_type, const char* field_name)
-{
-  this->in_ = in; this->out_ = out; this->alloc_ = alloc; this->bind_ = bind; this->field_type_ = field_type; this->field_name_ = field_name;
-}
-
-bool ProjectionField::in()
-{
-  return this->in_;
-}
-
-bool ProjectionField::out()
-{
-  return this->out_;
-}
-
-bool ProjectionField::alloc()
-{
-  return this->alloc_;
-}
-
-bool ProjectionField::bind()
-{
-  return this->bind_;
-}
-
-Marshal_type* ProjectionField::accept(MarshalVisitor* worker, Registers *data)
-{
-  return worker->visit(this, data);
-}
-
-ProjectionType::ProjectionType(const char* id, const char* real_type, std::vector<ProjectionField*> fields)
-{
-  this->id_ = id; this->real_type_ = real_type; this->fields_ = fields;
-}
-
-Marshal_type* ProjectionType::accept(MarshalVisitor* worker, Registers *data)
-{
-  return worker->visit(this, data);
-}
-
-const char* ProjectionType::id()
-{
-  return this->id_;
-}
-
-// may never be used
-const char* ProjectionType::real_type()
-{
-  return this->real_type_;
-}
-
-Parameter::Parameter(Type* type, const char* name)
-{
-  this->type_ = type;
+  this->explicit_return_ = return_value;
   this->name_ = name;
+  this->parameters_ = parameters;
+  this->symbol_table_ = new SymbolTable();
+  
+  for(std::vector<Parameter*>::iterator it = parameters.begin(); it != parameters.end(); it ++)
+    {
+      Parameter *p = (Parameter*) *it;
+      this->symbol_table_->insert(p->identifier());
+    }
 }
 
-Marshal_type* Parameter::accept(MarshalVisitor* worker, Registers *data)
+ReturnVariable* Rpc::return_variable()
 {
-  return worker->visit(this, data);
-}
-
-const char* Parameter::name()
-{
-  return this->name_;
-}
-
-
-
-Rpc::Rpc(Type* return_type, char* name, std::vector<Parameter* > parameters)
-{
-  this->explicit_ret_type_ = return_type;
-  this->name_ = name;
-  this->params_ = parameters;
+  return this->explicit_return_;
 }
 
  char* Rpc::name()
@@ -139,10 +26,12 @@ Rpc::Rpc(Type* return_type, char* name, std::vector<Parameter* > parameters)
   return name_;
 }
 
+/*
 Marshal_type* Rpc::accept(MarshalVisitor* worker, Registers *data)
 {
   return worker->visit(this, data);
 }
+*/
 
 const char* Rpc::callee_name()
 {
@@ -160,22 +49,66 @@ const char* Rpc::enum_name()
 
 std::vector<Parameter*> Rpc::parameters()
 {
-  return params_;
+  return parameters_;
 }
 
-File::File(const char* verbatim, FileScope* fs, std::vector<Rpc* > rpc_definitions)
+void Rpc::prepare_marshal()
 {
-  this->verbatim_ = verbatim;
-  this->scope_ = fs;
-  this->rpc_defs_ = rpc_definitions;
+  MarshalPrepareVisitor *worker = new MarshalPrepareVisitor(new Registers());
+  
+  // marshal prepare for parameters as long as they are in or out
+  for(std::vector<Parameter*>::iterator it = this->parameters_.begin(); it != this->parameters_.end(); it ++) {
+    Parameter* p = *it;
+    if(p->in() || p->out()) {
+      p->prepare_marshal(worker);
+    }
+  }
+  
+  // marshal prepare for return value
+  this->explicit_return_->prepare_marshal(worker);
 }
 
-Marshal_type* File::accept(MarshalVisitor* worker, Registers *data)
+Module::Module(std::vector<Rpc*> rpc_definitions, std::vector<GlobalVariable*> globals, LexicalScope *ls)
 {
-  return worker->visit(this, data);
+  this->module_scope_ = ls;
+  this->rpc_definitions_ = rpc_definitions;
+  this->globals_ = globals;
 }
 
-std::vector<Rpc*> File::rpc_defs()
+std::vector<Rpc*> Module::rpc_definitions()
 {
-  return this->rpc_defs_;
+  return this->rpc_definitions_;
 }
+
+std::vector<GlobalVariable*> Module::globals()
+{
+  return this->globals_;
+}
+
+LexicalScope* Module::module_scope()
+{
+  return this->module_scope_;
+}
+
+void Module::prepare_marshal()
+{
+  for(std::vector<Rpc*>::iterator it = this->rpc_definitions_.begin(); it != this->rpc_definitions_.end(); it ++) {
+    Rpc *r = *it;
+    r->prepare_marshal();
+  }
+}
+
+Project::Project(LexicalScope *scope, std::vector<Module*> modules)
+{
+  this->project_scope_ = scope;
+  this->project_modules_ = modules;
+}
+
+void Project::prepare_marshal()
+{
+  for(std::vector<Module*>::iterator it = this->project_modules_.begin(); it != this->project_modules_.end(); it ++) {
+    Module *m = *it;
+    m->prepare_marshal();
+  }
+}
+
