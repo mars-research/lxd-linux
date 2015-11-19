@@ -273,7 +273,15 @@ void lcd_free_cptr(cptr_t c);
  * Print a message to the host kernel log. Almost all printk escapes are
  * supported.
  */
+#ifndef CONFIG_LCD_COMPILE_FOR_SMACK
+
 void lcd_printk(char *fmt, ...);
+
+#else /* !CONFIG_COMPILE_FOR_SMACK */
+
+#define lcd_printk(fmt...) do { } while(0);
+
+#endif
 
 #define LIBLCD_ERR(msg...) do {						\
 		lcd_printk("error @ %s:%d: ", __FILE__, __LINE__);	\
