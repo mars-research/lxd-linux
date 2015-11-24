@@ -17,7 +17,6 @@ source "fs/ext4/Kconfig"
 config FS_XIP
 # execute in place
 	bool
-	depends on EXT2_FS_XIP || PMFS_XIP || LCD_TEST_MOD_PMFS
 	default y
 
 source "fs/jbd/Kconfig"

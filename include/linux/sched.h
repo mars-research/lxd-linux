@@ -53,10 +53,9 @@ struct sched_param {
 #include <linux/uidgid.h>
 #include <linux/gfp.h>
 
-#ifdef CONFIG_HAVE_LCD
+/* For LCDs */
 struct lcd;
 struct cptr_cache;
-#endif
 
 #include <asm/processor.h>
 
@@ -1420,10 +1419,8 @@ struct task_struct {
 	unsigned int	sequential_io;
 	unsigned int	sequential_io_avg;
 #endif
-#ifdef CONFIG_HAVE_LCD
 	struct lcd *lcd;
 	struct cptr_cache *cptr_cache;
-#endif
 };
 
 /* Future-safe accessor for struct task_struct's cpus_allowed. */

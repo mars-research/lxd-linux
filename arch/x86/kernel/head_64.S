@@ -512,8 +512,6 @@ ENTRY(phys_base)
 
 #include "../../x86/xen/xen-head.S"
 
-#include "../../x86/lcdguest/lcd-head.S"
-	
 	.section .bss, "aw", @nobits
 	.align PAGE_SIZE
 ENTRY(idt_table)
