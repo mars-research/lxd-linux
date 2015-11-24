@@ -338,6 +338,12 @@ static void lcd_free_dptr(struct dptr_cache *dptr_cache, dptr_t d)
 
 /* DATA STORE -------------------------------------------------- */
 
+/*
+ * This is used in a hack to make the cnode table slab caches
+ * work. See init cspace routine.
+ */
+static u64 dstore_id = 0;
+
 static int make_empty_dstore_node_table(struct dstore *dstore, 
 					uint8_t level,
 					struct dstore_node_table **new_out)
@@ -361,7 +367,6 @@ static int make_empty_dstore_node_table(struct dstore *dstore,
 		INIT_LIST_HEAD(&new->dstore_node[i].siblings);
 		mutex_init(&new->dstore_node[i].lock);
 	}
-	
 	new->table_level = level;
 
 	/*
@@ -386,6 +391,7 @@ int lcd_dstore_init_dstore(struct dstore **out)
 {
 	int ret;
 	struct dstore *dstore;
+	char name[32];
 
 	/*
 	 * Alloc
@@ -411,9 +417,20 @@ int lcd_dstore_init_dstore(struct dstore **out)
 	INIT_LIST_HEAD(&dstore->table_list);
 
 	/*
-	 * Initialize the dstore node table cache
+	 * Initialize the dstore node table cache. We can't use the
+	 * KMEM_CACHE macro because we need to use unique names. This
+	 * is kind of hacky right now. (If you don't use a unique name,
+	 * you might get an error/crash when you destroy the kmem cache
+	 * for multiple lcd's. This is because slabs are tied to sysfs, and
+	 * it complains when it tries to remove slabs with the same name.)
 	 */
-	dstore->dstore_node_table_cache = KMEM_CACHE(dstore_node_table, 0);
+	snprintf(name, 32, "dstore%llu", dstore_id);
+	dstore->dstore_node_table_cache = kmem_cache_create(
+		name,
+		sizeof(struct dstore_node_table),
+		__alignof__(struct dstore_node_table),
+		0,
+		NULL);
 	if(!dstore->dstore_node_table_cache) {
 		LIBLCD_ERR("failed to allocate dstore_node_table slab");
 		ret = -ENOMEM;
@@ -439,6 +456,11 @@ int lcd_dstore_init_dstore(struct dstore **out)
 	}
 
 	*out = dstore;
+
+	/*
+	 * Inc dstore id for next time
+	 */
+	dstore_id++;
 	
 	return 0;
 
@@ -521,7 +543,6 @@ static int find_dstore_node(struct dstore *dstore,
 		*dstore_node = &old->dstore_node[level_id];
 		mutex_init(&(*dstore_node)->lock);
 		(*dstore_node)->dstore = dstore;
-		
 		return 1; /* signal we found the slot and are done */
 	} else {
 		/*
@@ -623,7 +644,6 @@ static int __lcd_dstore_node_get__(struct dstore *dstore, dptr_t d,
 	/*
 	 * Look up and lock dstore node
 	 */
-
 	ret = mutex_lock_interruptible(&dstore->lock);
 	if (ret) {
 		LIBLCD_ERR("interrupted");
@@ -641,13 +661,11 @@ static int __lcd_dstore_node_get__(struct dstore *dstore, dptr_t d,
 		ret = -ENOMEM;
 		goto fail2;
 	}
-	
 	ret = mutex_lock_interruptible(&(*dstore_node)->lock);
 	if (ret) {
 		LIBLCD_ERR("interrupted");
 		goto fail2;
 	}
-
 	mutex_unlock(&dstore->lock);
 
 	return 0;
@@ -719,6 +737,7 @@ int lcd_dstore_get(struct dstore *dstore, dptr_t d, int tag,
 	/*
 	 * Get cnode
 	 */
+
 	ret = __lcd_dstore_node_get__(dstore, d, false, &dstore_node);
 	if (ret) {
 		LIBLCD_ERR("error getting dstore node");
@@ -1097,3 +1116,4 @@ EXPORT_SYMBOL(lcd_dstore_delete);
 EXPORT_SYMBOL(lcd_dstore_destroy);
 EXPORT_SYMBOL(lcd_dstore_get);
 EXPORT_SYMBOL(lcd_dstore_put);
+EXPORT_SYMBOL(lcd_dstore_node_object);

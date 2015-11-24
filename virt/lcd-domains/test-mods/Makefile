@@ -16,3 +16,4 @@ obj-$(CONFIG_LCD_TEST_MOD_CREATE_KLCD)  += create-klcd/
 
 obj-$(CONFIG_LCD_TEST_MOD_GLUE_EXAMPLE) += glue-example/
 
+obj-$(CONFIG_LCD_TEST_MOD_PMFS)         += pmfs/
