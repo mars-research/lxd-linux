@@ -56,9 +56,6 @@ struct sched_param {
 /* For LCDs */
 struct lcd;
 struct cptr_cache;
-#ifdef CONFIG_LAZY_THC
-struct ptstate_t;
-#endif
 
 #include <asm/processor.h>
 
@@ -1044,9 +1041,6 @@ struct task_struct {
 	atomic_t usage;
 	unsigned int flags;	/* per process flags, defined below */
 	unsigned int ptrace;
-#ifdef CONFIG_LAZY_THC
-	struct ptstate_t *ptstate; /* per thread state */
-#endif
 #ifdef CONFIG_SMP
 	struct llist_node wake_entry;
 	int on_cpu;
