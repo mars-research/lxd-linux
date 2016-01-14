@@ -8,6 +8,8 @@
 #####
 # 1) Generate bounds.h
 
+ccflags-y := -fno-ipa-sra -fno-ipa-cp
+
 bounds-file := include/generated/bounds.h
 
 always  := $(bounds-file)

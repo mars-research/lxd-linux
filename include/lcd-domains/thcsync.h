@@ -33,6 +33,7 @@ struct thc_latch {
 void thc_latch_init(struct thc_latch *l);
 
 static inline void thc_latch_acquire(struct thc_latch *l) {
+  printk(KERN_ERR "IN LATCH ACQUIRE\n");
 #ifdef _MSC_VER
     C_ASSERT(sizeof(l->c) == sizeof(LONG));
     while (InterlockedCompareExchange(reinterpret_cast<volatile long*>(&l->c), 1L, 0L) == 1) {

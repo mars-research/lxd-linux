@@ -7,6 +7,7 @@
 //#include <stdlib.h>
 #include <lcd-domains/types.h>
 #include <linux/sched.h>
+#include <linux/types.h>
 
 #ifndef BARRELFISH
 typedef int errval_t;
@@ -105,6 +106,7 @@ void thc_done(void);
 									\
     _awe.status     = LAZY_AWE;						\
     _awe.lazy_stack = NULL;						\
+    /*_awe.pts        = NULL;*/						\
     _awe.pts        = NULL;						\
 									\
     /* Define nested function containing the body */			\
@@ -255,6 +257,9 @@ void THCScheduleBack(awe_t *awe_ptr);
 // Finish the current AWE, returning to the scheduler.
 void THCFinish(void);
 
+//Yields and saves awe_ptr to correspond to the provided id number
+void THCYieldAndSave(uint32_t id_num);
+
 // Finish the current AWE, creating a new AWE from its continuation, and
 // passing this immediately to the scheduler.
 void THCYield(void);
@@ -264,6 +269,10 @@ void THCYield(void);
 // if awe_ptr runs on the same thread as the caller.  It puts the continuation
 // to THCYieldTo on the run-queue.)
 void THCYieldTo(awe_t *awe_ptr);
+
+//Same as THCYieldTo except that an id number is provided to locate a particular
+//awe that was set to correspond to this id_num.
+void THCYieldToId(uint32_t id_num);
 
 // Cancellation actions.  These are executed in LIFO order when cancellation 
 // occurs.  Once cancellation has been requested, it is assumed that no

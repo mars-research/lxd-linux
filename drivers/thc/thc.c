@@ -29,11 +29,13 @@
 #include <lcd-domains/thc.h>
 #include <lcd-domains/thcsync.h>
 #include <lcd-domains/thcinternal.h>
+#include <lcd-domains/awe-mapper.h>
 #endif
 
 #ifdef linux
 #include <asm/page.h>
 #include <linux/slab.h>
+#include <linux/types.h>
 //#include <pthread.h>
 #endif
 
@@ -127,8 +129,10 @@ static void InitPTS(void) {
 
 static void thc_pts_lock(PTState_t *t) {
 #ifndef NDEBUG
+  printk(KERN_ERR "DEREFFING LOCK\n");
   t->lock++;
 #endif
+  printk(KERN_ERR "DEREFFING LATCH\n");
   thc_latch_acquire(&t->latch);
 }
 
@@ -951,6 +955,13 @@ static void thc_yield_with_cont(void *a, void *arg) {
   thc_dispatch(awe->pts);
 }
 
+//Yields and saves awe_ptr to correspond to the provided id number
+void THCYieldAndSave(uint32_t id_num)
+{
+  CALL_CONT_LAZY_AND_SAVE((void*)&thc_yield_with_cont, id_num, NULL);
+}
+EXPORT_SYMBOL(THCYieldAndSave);
+
 void THCYield(void) {
   CALL_CONT_LAZY((void*)&thc_yield_with_cont, NULL);
 }
@@ -983,10 +994,29 @@ static void thc_yieldto_with_cont(void *a, void *arg) {
   thc_awe_execute_0(awe);
 }
 
-void THCYieldTo(awe_t *awe_ptr) {
+void THCYieldToId(uint32_t id_num) {
+  awe_t *awe_ptr = (awe_t *)awe_mapper_get_awe_ptr(id_num);
+  awe_mapper_remove_id(id_num);
+  printk(KERN_ERR "PTS ADDRESS: %lx\n", (unsigned long) awe_ptr->pts);
+  printk(KERN_ERR "AWE PTR IN YIELD TO IS: %lx\n", (unsigned long) awe_ptr);
   if (PTS() == awe_ptr->pts) {
+  printk(KERN_ERR "IN IF\n");
     CALL_CONT_LAZY((void*)&thc_yieldto_with_cont, (void*)awe_ptr);
   } else {
+    printk(KERN_ERR "IN ELSE\n");
+    THCSchedule(awe_ptr);
+  }
+}
+EXPORT_SYMBOL(THCYieldToId);
+
+void THCYieldTo(awe_t *awe_ptr) {
+  printk(KERN_ERR "PTS ADDRESS: %lx\n", (unsigned long) awe_ptr->pts);
+  printk(KERN_ERR "AWE PTR IN YIELD TO IS: %lx\n", (unsigned long) awe_ptr);
+  if (PTS() == awe_ptr->pts) {
+  printk(KERN_ERR "IN IF\n");
+    CALL_CONT_LAZY((void*)&thc_yieldto_with_cont, (void*)awe_ptr);
+  } else {
+    printk(KERN_ERR "IN ELSE\n");
     THCSchedule(awe_ptr);
   }
 }
@@ -1329,7 +1359,8 @@ static void *thc_alloc_new_stack_0(void) {
 //#include <errno.h>
 
 static void *thc_alloc_new_stack_0(void) {
-  void *res = kmalloc(STACK_COMMIT_BYTES + STACK_GUARD_BYTES, GFP_KERNEL);
+  char *res = kmalloc(STACK_COMMIT_BYTES + STACK_GUARD_BYTES, GFP_KERNEL);
+  //void *res = kmalloc(STACK_COMMIT_BYTES + STACK_GUARD_BYTES, GFP_KERNEL);
   if (res == NULL)
 	  printk(KERN_ERR "lcd async stack allocation failed\n");
 

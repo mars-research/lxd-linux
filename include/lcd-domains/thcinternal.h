@@ -4,7 +4,6 @@
 #define _THC_INTERNAL_H_
 
 /***********************************************************************/
-
 typedef struct ptstate_t PTState_t;
 typedef struct thcstack_t thcstack_t;
 typedef struct finish_t finish_t;
@@ -356,7 +355,7 @@ extern int _end_text_nx;
 #endif
 
 /***********************************************************************/
-
+#if 0
 #define SCHEDULE_CONT(_AWE_PTR, NESTED_FUNC)			\
   ({								\
     KILL_CALLEE_SAVES();					\
@@ -367,15 +366,22 @@ extern int _end_text_nx;
     "push %%rbx\n\t" \
 	"movq %0, %%rbx\n\t" \
 	:"=r"(savedRAX) \
-	:"r"(_AWE_PTR) \
+	:"r"(_AWE_PTR) : "rbx" \
     ); \
     NESTED_FUNC(FORCE_ARGS_STACK_CALL _AWE_PTR);               \
 	__asm__ __volatile__( \
 	"movq %%rbx, %0\n\t" \
     "pop %%rbx\n\t" \
 	"movq %0, %%rbx\n\t" \
-	:"=r"(savedRAX) \
+	:"=r"(savedRAX) : : "rbx" \
     ); \
+  })
+#endif
+
+#define SCHEDULE_CONT(_AWE_PTR, NESTED_FUNC)			\
+  ({								\
+    KILL_CALLEE_SAVES();					\
+    NESTED_FUNC(FORCE_ARGS_STACK_CALL _AWE_PTR);               \
   })
 
 #define CALL_CONT(_FN,_ARG)                                     \
@@ -386,6 +392,20 @@ extern int _end_text_nx;
     KILL_CALLEE_SAVES();                                        \
     _thc_callcont(&_awe, (THCContFn_t)(_FN), (_ARG));           \
   } while (0)
+
+
+
+#define CALL_CONT_LAZY_AND_SAVE(_FN,_IDNUM,_ARG)                \
+  do {                                                          \
+    awe_t _awe;                                                 \
+    _awe.status     = LAZY_AWE;					\
+    _awe.lazy_stack = NULL;					\
+    awe_mapper_set_id((_IDNUM), &_awe);				\
+    KILL_CALLEE_SAVES();                                        \
+    _thc_callcont(&_awe, (THCContFn_t)(_FN), (_ARG));           \
+  } while (0)
+
+
 
 
 #define CALL_CONT_LAZY(_FN,_ARG)                                \
