@@ -11,6 +11,7 @@
  */
 
 #include <linux/bug.h>
+#include <linux/string.h>
 #include <lcd-domains/awe-mapper.h>
 #define AWE_TABLE_COUNT 64
 
@@ -33,7 +34,11 @@ static uint32_t allocated_marker = 0;
 /*
  * Initilaizes awe mapper.
  */
-void awe_mapper_init(void){/*Does nothing for now.*/}
+void awe_mapper_init(void)
+{
+	used_slots = 0;
+	memset(&awe_table[0], 0, sizeof(void*) * AWE_TABLE_COUNT);
+}
 
 
 

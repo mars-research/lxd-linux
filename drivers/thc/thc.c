@@ -1264,6 +1264,7 @@ static void thc_init(void) {
 */
 
 void thc_init(void) {
+  awe_mapper_init();
   thc_start_rts();
   PTS()->idle_fn = IdleFn;
   PTS()->idle_args = NULL;
@@ -1279,6 +1280,7 @@ static void thc_done(void) {
 */
 
 void thc_done(void) {
+  awe_mapper_uninit();
   thc_end_rts();
 }
 EXPORT_SYMBOL(thc_done);
