@@ -272,7 +272,10 @@ void THCYieldTo(awe_t *awe_ptr);
 
 //Same as THCYieldTo except that an id number is provided to locate a particular
 //awe that was set to correspond to this id_num.
-void THCYieldToId(uint32_t id_num);
+//id_to is the id that corresponds to the awe that should be yielded to.
+//id_from is the id that corresponds to the awe that should save the
+//current context.
+void THCYieldToId(uint32_t id_to, uint32_t id_from);
 
 // Cancellation actions.  These are executed in LIFO order when cancellation 
 // occurs.  Once cancellation has been requested, it is assumed that no

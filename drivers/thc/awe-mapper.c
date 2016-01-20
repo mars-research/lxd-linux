@@ -71,7 +71,7 @@ uint32_t awe_mapper_create_id(void)
     } 
     while( is_slot_allocated(next_id) );
 
-    awe_table[next_id] = &allocated_marker;
+    awe_table[next_id] = (void*)0xdeadbeef;//&allocated_marker;
 
     used_slots++;
 
@@ -94,7 +94,7 @@ void awe_mapper_remove_id(uint32_t id)
     
     awe_table[id] = NULL;
 }
-
+EXPORT_SYMBOL(awe_mapper_remove_id);
 
 
 /*

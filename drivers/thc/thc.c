@@ -994,15 +994,19 @@ static void thc_yieldto_with_cont(void *a, void *arg) {
   thc_awe_execute_0(awe);
 }
 
-void THCYieldToId(uint32_t id_num) {
-  awe_t *awe_ptr = (awe_t *)awe_mapper_get_awe_ptr(id_num);
-  awe_mapper_remove_id(id_num);
+void THCYieldToId(uint32_t id_to, uint32_t id_from) {
+  awe_t *awe_ptr = (awe_t *)awe_mapper_get_awe_ptr(id_to);
   printk(KERN_ERR "PTS ADDRESS: %lx\n", (unsigned long) awe_ptr->pts);
   printk(KERN_ERR "AWE PTR IN YIELD TO IS: %lx\n", (unsigned long) awe_ptr);
   if (PTS() == awe_ptr->pts) {
   printk(KERN_ERR "IN IF\n");
-    CALL_CONT_LAZY((void*)&thc_yieldto_with_cont, (void*)awe_ptr);
-  } else {
+    CALL_CONT_LAZY_AND_SAVE((void*)&thc_yieldto_with_cont, id_from, (void*)awe_ptr);
+  }
+  //NOTE: for multiple threads, the code in the 'else' 
+  //probably needs to be changed so that
+  // using IDs for AWEs is threadsafe. For LCDs, this should be fine
+  //as long as we are assuming our single threaded model. 
+  else {
     printk(KERN_ERR "IN ELSE\n");
     THCSchedule(awe_ptr);
   }
