@@ -827,6 +827,7 @@ void _thc_endfinishblock(finish_t *fb, void *stack) {
     printk(KERN_ERR "lcd async endfinishblock count is zero\n");
   } else {
     // Non-zero first time, add ourselves as the waiting AWE.
+    printk(KERN_ERR "FB COUNT IS: %d\n", (int)fb->count);
     printk(KERN_ERR "lcd async endfinishblock has pending AWE\n");
     CALL_CONT_LAZY((unsigned char*)&_thc_endfinishblock0, fb);
   }
@@ -967,6 +968,39 @@ void THCYield(void) {
 }
 EXPORT_SYMBOL(THCYield);
 
+static void remove_awe_from_list(awe_t* awe)
+{
+  	PTState_t *pts = awe->pts;
+  	//if awe is on front of queue
+	int isHead = (awe == &((pts->aweHead).next));
+	int isTail = (awe == &((pts->aweTail).prev));
+	if(isHead)
+	{
+		pts->aweHead.next = awe->next;
+  		pts->curr_lazy_stack = awe->lazy_stack;
+  		pts->current_fb = awe->current_fb;
+  		awe->next->prev = &(pts->aweHead);
+	}
+	if(isTail)
+	{
+		pts->aweTail.prev = awe->prev;
+		pts->curr_lazy_stack = awe->lazy_stack;
+		pts->current_fb = awe->current_fb;
+		awe->prev->next = &(pts->aweTail);
+	}
+	if(!isHead && !isTail)
+	{
+		if(awe->next)
+		{
+			awe->next->prev = awe->prev;
+		}
+		if(awe->prev)
+		{
+			awe->prev->next = awe->next;
+		}
+	}
+}
+
 __attribute__ ((unused))
 static void thc_yieldto_with_cont(void *a, void *arg) {
   awe_t *last_awe = (awe_t*)a; 
@@ -991,6 +1025,7 @@ static void thc_yieldto_with_cont(void *a, void *arg) {
   awe->pts->curr_lazy_stack = awe->lazy_stack;
   awe->pts->current_fb = awe->current_fb;
 
+  remove_awe_from_list(awe);
   thc_awe_execute_0(awe);
 }
 
