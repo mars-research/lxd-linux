@@ -132,66 +132,7 @@ CCSTCompoundStatement* dispatch_loop_body(std::vector<Rpc*> rps)
  */
 CCSTCompoundStatement* callee_body(Rpc *r)
 {
-  // unmarshal parameters based on marshal data.
-  // which says where params are stored.
-  
-  std::vector<CCSTDeclaration*> declarations;
-  std::vector<CCSTStatement*> statements;
-  
-  // loop through params, declare a tmp and pull out marshal value
-  std::vector<Parameter*> params = r->parameters();
-  std::vector<char*> param_names;
-
-  std::vector<CCSTAssignExpr*> unmarshalled_args;
-  for(std::vector<Parameter*>::iterator it = params.begin(); it != params.end(); it ++)
-    {
-      Parameter *p = (Parameter*) *it;
-      
-      statements.push_back(unmarshal_variable(p));
-      CCSTPrimaryExprId *t = new CCSTPrimaryExprId(p->identifier());
-      unmarshalled_args.push_back(t);
-    }
-
-  // make real call and get return value if there is one
-  ReturnVariable *rv = r->return_variable();
-
-  /* redo everything after this? at least read through */
-
-  if(rv->type()->num() != 5) // not void
-    {
-      /*
-      Marshal_type *ret_info = r->explicit_ret_marshal_info();
-
-      CCSTPointer *p = 0x0;
-      if(r->explicit_return_type()->num() == 3)
-	p = new CCSTPointer();
-
-      std::vector<CCSTDecSpecifier*> ret_type = type(r->explicit_return_type());
-      std::vector<CCSTInitDeclarator*> inits;
-      inits.push_back(new CCSTInitDeclarator(new CCSTDeclarator(p, new CCSTDirectDecId(ret_info->get_name()))
-					      , new CCSTInitializer( new CCSTPostFixExprAssnExpr(new CCSTPrimaryExprId(r->name()) , unmarshalled_args))));
-
-      std::vector<CCSTDeclaration*> cd;
-      std::vector<CCSTStatement*> cs;
-      
-      cd.push_back(new CCSTDeclaration(ret_type, inits));
-      MarshalTypeVisitor *visitor = new MarshalTypeVisitor();
-      cs.push_back(ret_info->accept(visitor));
-      statements.push_back(new CCSTCompoundStatement(cd, cs));
-      */
-    }
-  else
-    {
-      statements.push_back(new CCSTPostFixExprAssnExpr(new CCSTPrimaryExprId(r->name()) ,unmarshalled_args));
-    }
-  
-  // implicit returns
-  // just loop through parameters
-
-  std::vector<CCSTAssignExpr*> empty_args;
-  statements.push_back(new CCSTPostFixExprAssnExpr(new CCSTPrimaryExprId("reply") , empty_args));
-  
-  return new CCSTCompoundStatement(declarations, statements);
+  printf("callee body todo\n");
 }
 
 
@@ -284,7 +225,25 @@ CCSTFile* generate_server_source(Module *m)
       }
     }
   }
+  
+  // print trampoline structs
+  std::vector<Rpc*> rpcs = m->rpc_definitions();
+  for(std::vector<Rpc*>::iterator it = rpcs.begin(); it != rpcs.end(); it ++) {
+    Rpc *r = *it;
+    if (r->function_pointer_defined()) {
+      int err;
+      Type *t = r->current_scope()->lookup(hidden_args_name(r->name()), &err);
+      Assert(t != 0x0, "Error: failure looking up type\n");
+      ProjectionType *pt = dynamic_cast<ProjectionType*>(t);
+      Assert(t != 0x0, "Error: dynamic cast to projection type failed!\n");
 
+      std::vector<CCSTDecSpecifier*> specifier;
+      specifier.push_back(struct_declaration(pt));
+      std::vector<CCSTInitDeclarator*> empty;
+      definitions.push_back(new CCSTDeclaration(specifier, empty));
+    }
+  }
+  
 
   // globals.
   std::vector<GlobalVariable*> globals = m->globals();
@@ -349,6 +308,7 @@ CCSTFile* generate_server_source(Module *m)
 	 definitions.push_back( function_definition(function_declaration(r_tmp)
 						    ,caller_body(r_tmp)));
        } else {
+	 printf("doing callee_declaration\n");
 	 definitions.push_back( function_definition(callee_declaration(r_tmp)
 						    ,callee_body(r_tmp)));
        }
@@ -360,32 +320,3 @@ CCSTFile* generate_server_source(Module *m)
    printf("in server source gen\n");
    return c_file;
 }
-
-
-// one
-
-/*
-CCSTCompoundStatement* create_callee_body(Rpc *r)
-{
-  std::vector<Parameter*> parameters = r->parameters();
-  for(std::vector<Parameter*>::iterator it = parameters.begin(); it != parameters.end(); it ++) {
-    Parameter *p = (Parameter*) *it;
-    if(p->alloc()) {
-      AllocateVariableVisitor *worker = new AllocateVariableVisitor();
-      p->type()->accept(worker); // allocates space if needed. 
-    } else { // if not alloc must be bind?
-      // grab from some function. 
-    }
-
-    UnmarshalVariableVisitor *worker = new UnmarshalVariableVisitor();
-    p->accept(worker);
-    
-  }
-
-  // make real call.
-  
-  // for each implicit return, marshal
-
-  // marshal explicit return
-  
-  } */
