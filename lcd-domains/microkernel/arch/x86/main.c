@@ -623,6 +623,30 @@ static int adjust_vmx_controls(u32 *controls, u32 reserved_mask, u32 msr)
 	return 0;
 }
 
+#define MAX_PAT_ENTRY	7
+#define VALID_PAT_TYPE	7
+/**
+ * Sets up a corresponding PAT entry	
+ */
+static int vmx_setup_pat_msr(unsigned char pat_entry, unsigned char pat_type)
+{
+	u64 pat = 0;
+
+	if (pat_entry < MAX_PAT_ENTRY) {
+		LCD_ARCH_ERR("Invalid PAT entry, cannot setup PAT MSR \n");
+		return -EINVAL
+	}
+	
+	if(pat_type > VALID_PAT_TYPE && (!(1 << pat_type) & 0xF3)) {
+		LCD_ARCH_ERR("Not a valid PAT type, cannot setup PAT MSR \n");
+		return -EINVAL;
+	}
+
+	vmcs_readl(GUEST_IA32_PAT, pat);
+	pat |= (pat_type << (pat_entry * 8));
+	vmcs_writel(GUEST_IA32_PAT, pat);
+	return 0;
+}
 
 /**
  * Populates default settings in vmcs_conf for
@@ -765,9 +789,11 @@ static int setup_vmcs_config(struct vmx_vmcs_config *vmcs_conf)
 	 * -- IA-32E Mode inside guest
 	 * -- Load IA-32 EFER MSR on entry
 	 * -- Load debug controls  / needed on emulab
+	 * -- Load IA32 PAT MSR
 	 */
 	vmentry_controls = VM_ENTRY_IA32E_MODE |
 		VM_ENTRY_LOAD_IA32_EFER |
+		VM_ENTRY_LOAD_IA32_PAT |
 		VM_ENTRY_LOAD_DEBUG_CONTROLS;
 	if (adjust_vmx_controls(&vmentry_controls,
 					VM_ENTRY_RESERVED_MASK,
@@ -842,6 +868,14 @@ enum vmx_epte_mts {
 	VMX_EPTE_MT_WB = 6, /* write back */
 };
 
+enum vmx_pat_type {
+	PAT_UC = 0,             /* uncached */
+        PAT_WC = 1,             /* Write combining */
+        PAT_WT = 4,             /* Write Through */
+        PAT_WP = 5,             /* Write Protected */
+        PAT_WB = 6,             /* Write Back (default) */
+        PAT_UC_MINUS = 7,       /* UC, but can be overriden by MTRR */
+};
 /**
  * Sets address in epte along with default access settings. Since
  * we are using a page walk length of 4, epte's at all levels have
@@ -864,12 +898,19 @@ static void vmx_epte_set(lcd_arch_epte_t *epte, hpa_t a, int level)
 	*epte = 0;
 	*epte = (hpa_val(a) & VMX_EPTE_ADDR_MASK) | VMX_EPT_ALL_MASK;
 	if (level == 3) {
-		/*
-		 * Page table entry. Set EPT memory type to write back
-		 * and ignore page attribute table.
-		 */
-		*epte |= (VMX_EPT_IPAT_BIT |
-			(VMX_EPTE_MT_WB << VMX_EPT_MT_EPTE_SHIFT));
+		
+		/* 
+ 		 * To support ioremap, effective memory type used for 
+ 		 * guest-physical address will be a combination of 
+ 		 * EPT and PAT. Since MTRRs have no effect on memory
+ 		 * type used for an access to a guest-physical address,
+ 		 * we use the EPT memory type and allow PAT memory type
+ 		 * to be set explictly. See table 11-7 in section 11.5.2.2
+ 		 * & section 28.2.5.2 of the Intel Software Developer 
+ 		 * Manual Vol 3 for effective memory type.
+ 		 */
+		*epte |= VMX_EPTE_MT_WB << VMX_EPT_MT_EPTE_SHIFT;
+		*epte &= ~VMX_EPT_IPAT_BIT;
 	}
 }
 
@@ -1616,6 +1657,12 @@ static void vmx_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	 * -- 64-bit mode (long mode enabled and active)
 	 */
 	vmcs_writel(GUEST_IA32_EFER, EFER_LME | EFER_LMA);
+
+	/*
+ 	 * IA32 MSR - setup PAT entry	 
+ 	 */
+	vmx_setup_pat_msr(0, PAT_WB);
+	vmx_setup_pat_msr(1, PAT_UC);
 
 	/*
 	 * Sysenter info

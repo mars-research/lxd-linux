@@ -307,7 +307,15 @@ static inline hpa_t hva2hpa(hva_t hva)
  *                   +---------------------------+ 0xFFFF FFFF FFFF FFFF
  *                   |         Unusable          |
  *                   +---------------------------+ 0x0000 FFFF FFFF FFFF
- *                   |                           |
+ *                   |	        Free		 |
+ *                   | 				 |
+ *                   +---------------------------+ 0x0000 E8FF FFFF FFFF
+ *                   |				 |
+ *		     |	     Ioremap space	 |
+ *		     |		(32 TB)		 |
+ *		     |				 |
+ *		     +---------------------------+ 0x0000 C900 0000 0000	
+ *		     |				 |
  *                   :           Free            :
  *                   |                           |
  *                   +---------------------------+ 0x0000 0000 0150 8000
@@ -347,10 +355,17 @@ static inline hpa_t hva2hpa(hva_t hva)
  * list returned from the module loader, so that relinking is unnecessary.
  * 
  *                   +---------------------------+ 0xFFFF FFFF FFFF FFFF
- *  The module       |                           |
- *  gets mapped      |        Upper Part         |
- *  somewhere in     :       (mostly free)       :
- *  here  -------->  |                           |
+ *		     |	      	Unused	 	 |
+ *		     |		(free)		 |
+ *		     +---------------------------+ 0x0000 E8FF FFFF FFFF
+ *		     |				 |
+ *		     |	     Ioremap Space	 |
+ *		     :	        (32 TB)		 :
+ *		     |				 |
+ *  The module       +---------------------------+ 0x0000 C900 0000 0000
+ *  gets mapped      |                           |
+ *  somewhere in     :         	Unused	 	 :
+ *  here  -------->  |          (free)           |
  *                   |                           |
  *                   +---------------------------+ 0x0000 0000 0150 8000
  *                   |                           |
@@ -394,12 +409,16 @@ static inline hpa_t hva2hpa(hva_t hva)
 #define LCD_STACK_GPA gpa_add(LCD_UTCB_GPA, LCD_UTCB_SIZE + LCD_UTCB_STACK_GAP)
 #define LCD_STACK_SIZE ((1 << LCD_STACK_PAGES_ORDER) * (4 << 10))
 #define LCD_MODULE_GPA gpa_add(LCD_STACK_GPA, LCD_STACK_SIZE)
+/* Unused area in between heap and ioremap space */
+#define LCD_IOREMAP_GPA_BASE __gpa(0xc9UL << 40)
+#define LCD_IOREMAP_GPA_SIZE (1UL << 45) /* 32 TB set aside for ioremap */
 
 /* guest virtual addresses */
 #define LCD_GV_PAGING_MEM_GVA __gva(gpa_val(LCD_GV_PAGING_MEM_GPA))
 #define LCD_BOOT_PAGES_GVA __gva(gpa_val(LCD_BOOT_PAGES_GPA))
 #define LCD_UTCB_GVA __gva(gpa_val(LCD_UTCB_GPA))
 #define LCD_STACK_GVA __gva(gpa_val(LCD_STACK_GPA))
+#define LCD_IOREMAP_GVA __gva(gpa_val(LCD_IOREMAP_GPA))
 
 #define LCD_NUM_BOOT_CPTRS 8
 
@@ -468,9 +487,6 @@ struct lcd_boot_info {
  * LCD_MODULE_NAME_MAX.
  */
 #define LCD_MPATH_SIZE 256
-
-#define LCD_TEST_MODS_PATH \
-	"/local/disk2/xcap-git/lcd-domains/test-mods"
 
 #define LCD_DIR(subpath) \
 	LCD_TEST_MODS_PATH "/" subpath

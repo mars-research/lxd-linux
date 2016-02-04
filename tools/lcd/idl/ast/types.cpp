@@ -1,47 +1,181 @@
 #include "lcd_ast.h"
 
-/* function pointer type*/
+const char* new_name(const char* name, const char* suffix)
+{
+  int length = strlen(name);
+  int length2 = strlen(suffix);
+  char *new_str = (char*) malloc(sizeof(char)*(length+length2+1));
+  
+  std::ostringstream total;
+  total << name << suffix;
+  strncpy(new_str, total.str().c_str(), length+length2+1);
+  return new_str;
+}
 
-FunctionPointer::FunctionPointer(const char *id, ReturnVariable *return_var, std::vector<FPParameter*> parameters)
+/* function pointer type*/
+const char* container_name(const char* name)
+{
+  return new_name(name, "_container");
+}
+
+const char* hidden_args_name(const char* name)
+{
+  return new_name(name, "_hidden_args");
+}
+
+Function::Function(const char *id, ReturnVariable *return_var, std::vector<Parameter*> parameters, LexicalScope *ls)
 {
   this->identifier_  = id;
   this->return_var_ = return_var;
   this->parameters_  = parameters;
+  this->current_scope_ = ls;
 }
 
-Marshal_type* FunctionPointer::accept(MarshalPrepareVisitor *worker)
+Marshal_type* Function::accept(MarshalPrepareVisitor *worker)
 {
   return worker->visit(this);
 }
 
-CCSTTypeName* FunctionPointer::accept(TypeNameVisitor *worker)
+CCSTTypeName* Function::accept(TypeNameVisitor *worker)
 {
   return worker->visit(this);
 }
 
-CCSTStatement* FunctionPointer::accept(TypeVisitor *worker, Variable *v)
+CCSTStatement* Function::accept(TypeVisitor *worker, Variable *v)
 {
   return worker->visit(this, v);
 }
 
-int FunctionPointer::num()
+int Function::num()
 {
   printf("num todo for function pointer\n");
-  return -2;
+  return 7;
 }
 
-const char* FunctionPointer::name()
+const char* Function::name()
 {
   return this->identifier_;
 }
 
+void Function::resolve_types(LexicalScope *ls)
+{
+  return;
+}
+
+void Function::create_trampoline_structs(LexicalScope *ls)
+{
+  return;
+}
+
+Rpc* Function::to_rpc(ProjectionType *pt)
+{
+  // adding extra parameters here. but maybe depending on needs this could be done at parse time
+  // and these extra parameters can be added to the Function.
+  std::vector<Parameter*> new_parameters;
+  new_parameters.insert(new_parameters.end(), this->parameters_.begin(), this->parameters_.end());
+  int err;
+  Type *dstore = this->current_scope_->lookup("dstore", &err);
+  if(dstore == 0x0) {
+    printf("Error: dstore is not in scope\n");
+  }
+  new_parameters.push_back(new Parameter(dstore, "dstore", 1));
+
+  const char* c_name = container_name(pt->name());
+  Type *container = this->current_scope_->lookup(c_name, &err);
+  if(container == 0x0) {
+    printf("Error: container is not in scope\n");
+  }
+
+  new_parameters.push_back(new Parameter(container, c_name, 1));
+
+  Rpc* tmp = new Rpc(this->return_var_, this->identifier_, new_parameters, this->current_scope_);
+  tmp->set_function_pointer_defined(true);
+  return tmp;
+}
+
 /* end */
+
+UnresolvedType::UnresolvedType(const char *name)
+{
+  this->type_name_ = name;
+}
+
+Marshal_type* UnresolvedType::accept(MarshalPrepareVisitor *worker)
+{
+  // todo
+}
+
+CCSTTypeName* UnresolvedType::accept(TypeNameVisitor *worker)
+{
+  // todo
+}
+
+CCSTStatement* UnresolvedType::accept(TypeVisitor *worker, Variable *v)
+{
+  // todo
+}
+
+int UnresolvedType::num()
+{
+  return 8;
+}
+
+const char* UnresolvedType::name()
+{
+  return this->type_name_;
+}
+
+void UnresolvedType::resolve_types(LexicalScope *ls)
+{
+  return;
+}
+
+void UnresolvedType::create_trampoline_structs(LexicalScope *ls)
+{
+  return;
+}
+
+Channel::Channel()
+{
+}
+
+Marshal_type* Channel::accept(MarshalPrepareVisitor *worker)
+{
+  return worker->visit(this);
+}
+CCSTTypeName* Channel::accept(TypeNameVisitor *worker)
+{
+  return worker->visit(this);
+}
+CCSTStatement* Channel::accept(TypeVisitor *worker, Variable *v)
+{
+  return worker->visit(this, v);
+}
+const char* Channel::name()
+{
+  return "channel";
+}
+int Channel::num()
+{
+  return 6;
+}
+
+void Channel::resolve_types(LexicalScope *ls)
+{
+  return;
+}
+
+void Channel::create_trampoline_structs(LexicalScope *ls)
+{
+  return;
+}
 
 /* typedef type */
 
 
-Typedef::Typedef(const char* alias, Type* type)
+Typedef::Typedef(const char* id, const char* alias, Type* type)
 {
+  this->identifier_ = id;
   this->alias_ = alias;
   this->type_ = type; // need to allocate?
 }
@@ -78,7 +212,17 @@ int Typedef::num()
 
 const char* Typedef::name()
 {
-  return this->alias_;
+  return this->identifier_;
+}
+
+void Typedef::resolve_types(LexicalScope *ls)
+{
+  return;
+}
+
+void Typedef::create_trampoline_structs(LexicalScope *ls)
+{
+  return; //todo?
 }
 
 /* end */
@@ -112,6 +256,16 @@ int VoidType::num()
 const char* VoidType::name()
 {
   return "void";
+}
+
+void VoidType::resolve_types(LexicalScope *ls)
+{
+  return;
+}
+
+void VoidType::create_trampoline_structs(LexicalScope *ls)
+{
+  return;
 }
 
 /* end */
@@ -159,6 +313,16 @@ const char* IntegerType::name()
 {
   printf("todo integer type name function.\n");
   return "";
+}
+
+void IntegerType::resolve_types(LexicalScope *ls)
+{
+  return;
+}
+
+void IntegerType::create_trampoline_structs(LexicalScope *ls)
+{
+  return;
 }
 
 /* end */
@@ -210,6 +374,46 @@ int ProjectionType::num()
 const char* ProjectionType::name()
 {
   return this->id_;
+}
+
+void ProjectionType::resolve_types(LexicalScope *ls)
+{
+  for(std::vector<ProjectionField*>::iterator it = this->fields_.begin(); it != this->fields_.end(); it ++) {
+    ProjectionField *pf = (ProjectionField*) *it;
+    pf->resolve_types(ls);
+  }
+}
+
+void ProjectionType::create_trampoline_structs(LexicalScope *ls)
+{
+  for(std::vector<ProjectionField*>::iterator it = this->fields_.begin(); it != this->fields_.end(); it ++) {
+    ProjectionField *pf = (ProjectionField*) *it;
+    if (pf->type()->num() == 7) { // function pointer
+      Function *f = dynamic_cast<Function*>(pf->type());
+      Assert(f != 0x0, "Error: dynamic cast to function type failed!\n");
+      
+      std::vector<ProjectionField*> trampoline_fields;
+      int err;
+      trampoline_fields.push_back(new ProjectionField(ls->lookup(container_name(this->name()), &err)
+						      ,container_name(this->name()), 1)); // container field
+      trampoline_fields.push_back(new ProjectionField(ls->lookup("dstore", &err), "dstore", 1)); // dstore field
+      trampoline_fields.push_back(new ProjectionField(ls->lookup("lcd_trampoline_handle", &err), "t_handle", 1)); // lcd_trampoline handle field
+
+      const char* trampoline_struct_name = hidden_args_name(f->name());
+      ls->insert(trampoline_struct_name, new ProjectionType(trampoline_struct_name, trampoline_struct_name, trampoline_fields));
+    }
+  }
+}
+
+ProjectionField* ProjectionType::get_field(const char *field_name)
+{
+  for(std::vector<ProjectionField*>::iterator it = this->fields_.begin(); it != this->fields_.end(); it ++) {
+    ProjectionField *pf = *it;
+    if (strcmp(field_name, pf->identifier()) == 0) {
+      return pf;
+    }
+  }
+  return 0x0;
 }
 
 /* end */

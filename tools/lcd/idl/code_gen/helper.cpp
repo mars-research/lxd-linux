@@ -1,50 +1,42 @@
 #include "ccst.h"
 #include "code_gen.h"
 
-/*
-  creates the C code for a container struct
-  for the projection provided
- */
-CCSTDeclaration* container_struct_definition(const char* name, ProjectionType *pt, bool channel)
+// for debugging purposes
+char* type_number_to_name(int num)
 {
-  // field for the real struct
-  // field for other side capability
-  // field for my ref capability
+  switch(num) {
+  case 1:
+    {
+      return "typedef type";
+    }
+  case 2: 
+    {
+      return "integer type";
+    }
+  case 4:
+    {
+      return "projection type";
+    }
+  case 5:
+    {
+      return "void type";
+    }
+  case 6:
+    {
+      return "channel type";
+    }
+  case 7: 
+    {
+      return "function pointer type";
+    }
+  case 8:
+    {
+      return "unresolved type";
+    }
 
-  // optional channel
-  std::vector<CCSTStructDeclaration*> container_fields;
-  
-  std::vector<CCSTStructDeclarator*> real_struct_field;
-  real_struct_field.push_back(new CCSTStructDeclarator(new CCSTDeclarator(0x0, new CCSTDirectDecId(pt->real_type()))));
-  container_fields.push_back(new CCSTStructDeclaration(type(pt), new CCSTStructDecList(real_struct_field)));
-
-  std::vector<CCSTStructDeclarator*> remote_ref_field;
-  remote_ref_field.push_back(new CCSTStructDeclarator(new CCSTDeclarator(0x0, new CCSTDirectDecId("remote_ref"))));
-  
-  std::vector<CCSTSpecifierQual*> dptr_t;
-  dptr_t.push_back(new CCSTTypedefName("dptr_t"));
-  container_fields.push_back(new CCSTStructDeclaration(dptr_t, new CCSTStructDecList(remote_ref_field)));
-  
-  std::vector<CCSTStructDeclarator*> my_ref_field;
-  my_ref_field.push_back(new CCSTStructDeclarator(new CCSTDeclarator(0x0, new CCSTDirectDecId("my_ref"))));
-  container_fields.push_back(new CCSTStructDeclaration(dptr_t, new CCSTStructDecList(my_ref_field)));
-
-
-  if(channel) {
-    std::vector<CCSTSpecifierQual*> cptr_t;
-    cptr_t.push_back(new CCSTTypedefName("cptr_t"));
-    
-    std::vector<CCSTStructDeclarator*> channel_field;
-    channel_field.push_back(new CCSTStructDeclarator(new CCSTDeclarator(0x0, new CCSTDirectDecId("chnl"))));
-    container_fields.push_back(new CCSTStructDeclaration(cptr_t, new CCSTStructDecList(channel_field)));
   }
-  CCSTStructUnionSpecifier *container = new CCSTStructUnionSpecifier(struct_t, name, container_fields);
-
-  std::vector<CCSTDecSpecifier*> struct_specifier;
-  struct_specifier.push_back(container);
-  std::vector<CCSTInitDeclarator*> empty;
-  return new CCSTDeclaration(struct_specifier, empty);
 }
+
 
 CCSTDeclaration* typedef_declaration(Typedef *t)
 {
@@ -66,6 +58,16 @@ CCSTAssignOp* equals()
   return new CCSTAssignOp(equal_t);
 }
 
+CCSTUnaryOp* Not()
+{
+  return new CCSTUnaryOp(unary_bang_t);
+}
+
+CCSTUnaryOp* reference()
+{
+  return new CCSTUnaryOp(unary_bit_and_t);
+}
+
 /* 
  * confirm this works
  * returns a new string with _p on end.
@@ -84,6 +86,7 @@ const char* parameter_name(const char* name)
 /*
  * returns a new string with _container on the end.
  */
+/*
 const char* container_name(const char* name)
 {
   int length = strlen(name);
@@ -95,6 +98,7 @@ const char* container_name(const char* name)
   strncpy(new_str, total.str().c_str(), length+length2+1);
   return new_str;
 }
+*/
 
 /*
  * takes the vector of global variables with also provides the parameters to the function.
@@ -170,7 +174,7 @@ CCSTEnumeratorList* construct_enumlist(std::vector<Rpc *> rps)
   return enum_list;
 }
 
-const char* string_to_upper(char* str)
+const char* string_to_upper(const char* str)
 {
   char* ret = (char*) malloc((sizeof(str)+1)*sizeof(char));
   int i;
@@ -215,13 +219,18 @@ CCSTFuncDef* function_definition(CCSTDeclaration* function_declaration, CCSTComp
   return new CCSTFuncDef(function_declaration->specifier_, func, decs, body);
 }
 
-CCSTParamTypeList* parameter_list()
+CCSTParamTypeList* parameter_list(std::vector<Parameter*> params)
 {
-  
+  std::vector<CCSTParamDeclaration*> param_decs;
+  for(std::vector<Parameter*>::iterator it = params.begin(); it != params.end(); it ++) {
+    Parameter *p = (Parameter*) *it;
+    param_decs.push_back(new CCSTParamDeclaration(type2(p->type()), new CCSTDeclarator(pointer(p->pointer_count()), new CCSTDirectDecId(p->identifier()))));
+  }
+
+  return new CCSTParamList(param_decs);
 }
 
-/* creates a function declaration
- * from an rpc, not callee
+/* creates a function declaration from an rpc
  */
 CCSTDeclaration* function_declaration(Rpc* r)
 {
@@ -231,7 +240,7 @@ CCSTDeclaration* function_declaration(Rpc* r)
   CCSTPointer *p = pointer(r->return_variable()->pointer_count());
   
   CCSTDirectDecId *name = new CCSTDirectDecId(r->name());
-  CCSTParamTypeList *param_list = parameter_list();
+  CCSTParamTypeList *param_list = parameter_list(r->parameters());
   CCSTDirectDecParamTypeList *name_params = new CCSTDirectDecParamTypeList(name, param_list);
   
   func.push_back(new CCSTDeclarator(p, name_params));
@@ -239,78 +248,118 @@ CCSTDeclaration* function_declaration(Rpc* r)
   return new CCSTDeclaration(specifier, func);
 }
 
+// constructs a type declaration from a name instead of a type object
+std::vector<CCSTDecSpecifier*> struct_type(const char *type_name)
+{
+  std::vector<CCSTDecSpecifier*> specifier;
+  specifier.push_back(new CCSTStructUnionSpecifier(struct_t, type_name));
+  return specifier;
+}
+
+std::vector<CCSTDecSpecifier*> int_type()
+{
+  std::vector<CCSTDecSpecifier*>specifier;
+  specifier.push_back(new CCSTSimpleTypeSpecifier(int_t));
+  
+  return specifier;
+}
+
 std::vector<CCSTDecSpecifier*> type2(Type *t)
 {
   std::vector<CCSTDecSpecifier*>specifier;
-  switch(t->num())
+  int num = t->num();
+  switch(num)  {
+  case 1:
     {
-    case 2: // int type case
-      {
-	IntegerType *it = dynamic_cast<IntegerType*>(t);
-	Assert(it != 0x0, "Error: dynamic cast failed!\n");
-	switch (it->int_type())
-	  {
-	  case pt_char_t:
-	    {
-	      specifier.push_back(new CCSTSimpleTypeSpecifier(char_t));
-	      break;
-	    }
-	  case pt_short_t:
-	    {
-	      specifier.push_back(new CCSTSimpleTypeSpecifier(short_t));
-	      break;
-	    }
-	  case pt_int_t:
-	    {
-	      specifier.push_back(new CCSTSimpleTypeSpecifier(int_t));
-	      break;
-	    }
-	  case pt_long_t:
-	    {
-	      specifier.push_back( new CCSTSimpleTypeSpecifier(long_t));
-	      break;
-	    }
-	  case pt_longlong_t:
-	    {
-	      specifier.push_back(new CCSTSimpleTypeSpecifier(long_t));
-	      specifier.push_back(new CCSTSimpleTypeSpecifier(long_t));
-	      break;
-	    }
-	  case pt_capability_t:
-	    {
-	      specifier.push_back(new CCSTTypedefName("capability_t"));
-	      break;
-	    }
-	  default:
-	    {
-	      Assert(1 == 0, "Error: unknown type\n");
-	    }
-	  }
-	return specifier;
-      }
-    case 4: // struct
-      {
-	ProjectionType *pt = dynamic_cast<ProjectionType*>(t);
-	Assert(pt != 0x0, "Error: dynamic cast failed!\n");
-	specifier.push_back(new CCSTStructUnionSpecifier(struct_t, pt->real_type()));
-	return specifier;
-      }
-    default:
-      {
-	Assert(1 == 0, "Error: Not a struct or integer type.\n");
-      }
+      // typdef 
+      // todo
     }
+  case 2: // int type case
+    {
+      IntegerType *it = dynamic_cast<IntegerType*>(t);
+      Assert(it != 0x0, "Error: dynamic cast failed!\n");
+      switch (it->int_type())
+	{
+	case pt_char_t:
+	  {
+	    specifier.push_back(new CCSTSimpleTypeSpecifier(char_t));
+	    break;
+	  }
+	case pt_short_t:
+	  {
+	    specifier.push_back(new CCSTSimpleTypeSpecifier(short_t));
+	    break;
+	  }
+	case pt_int_t:
+	  {
+	    specifier.push_back(new CCSTSimpleTypeSpecifier(int_t));
+	    break;
+	  }
+	case pt_long_t:
+	  {
+	    specifier.push_back( new CCSTSimpleTypeSpecifier(long_t));
+	    break;
+	  }
+	case pt_longlong_t:
+	  {
+	    specifier.push_back(new CCSTSimpleTypeSpecifier(long_t));
+	    specifier.push_back(new CCSTSimpleTypeSpecifier(long_t));
+	    break;
+	  }
+	case pt_capability_t:
+	  {
+	    specifier.push_back(new CCSTTypedefName("capability_t"));
+	    break;
+	  }
+	default:
+	  {
+	    Assert(1 == 0, "Error: unknown type\n");
+	  }
+	}
+      return specifier;
+    }
+  case 4: // struct
+    {
+      ProjectionType *pt = dynamic_cast<ProjectionType*>(t);
+      Assert(pt != 0x0, "Error: dynamic cast failed!\n");
+      specifier.push_back(new CCSTStructUnionSpecifier(struct_t, pt->real_type()));
+      return specifier;
+    }
+  case 5:
+    {
+      specifier.push_back(new CCSTSimpleTypeSpecifier(void_t));
+      return specifier;
+    }
+  case 6:
+    {
+      specifier.push_back(new CCSTTypedefName("cptr_t"));
+      return specifier;
+    }
+  case 7:
+    {
+      // function pointer type
+      // todo
+    }
+  default:
+    {
+      printf("Received %s instead of struct or integer\n", type_number_to_name(num));
+      Assert(1 == 0, "Error: Not a struct or integer type.\n");
+    }
+  }
 }
-
-
-
-
 
 std::vector<CCSTSpecifierQual*> type(Type *t)
 {
-  std::vector<CCSTSpecifierQual*>specifier;
-  switch(t->num())
+  std::vector<CCSTSpecifierQual*> specifier;
+
+  int num = t->num();
+  switch(num)
     {
+    case 1:
+      {
+	specifier.push_back(new CCSTTypedefName(t->name()));
+	break;
+      }
     case 2: // int type case
       {
 	IntegerType *it = dynamic_cast<IntegerType*>(t);
@@ -362,9 +411,31 @@ std::vector<CCSTSpecifierQual*> type(Type *t)
 	specifier.push_back(new CCSTStructUnionSpecifier(struct_t, pt->real_type()));
 	return specifier;
       }
+    case 5:
+      {
+	// void type
+	// todo
+	specifier.push_back(new CCSTSimpleTypeSpecifier(void_t));
+	return specifier;
+      }
+    case 6:
+      {
+	// channel type
+	// cptr_t define this somewhere for easy change
+	specifier.push_back(new CCSTTypedefName("cptr_t"));
+	return specifier;
+      }
+    case 7:
+      {
+	// function pointer type
+	// todo
+	// where is support in grammar
+	break;
+      }
     default:
       {
-	Assert(1 == 0, "Error: Not a struct or integer type.\n");
+	printf("Received %s with name %s instead of struct or integer\n", type_number_to_name(num), t->name());
+	Assert(1 == 0, "Error: Not a struct or integer type. \n");
       }
     }
 }
@@ -532,7 +603,159 @@ CCSTPrimaryExprId* function_name(const char *func_name)
   return new CCSTPrimaryExprId(func_name);
 }
 
-CCSTPostFixExprAssnExpr* function_call(CCSTPrimaryExprId *func_name, std::vector<CCSTAssignExpr*> args)
+CCSTPostFixExprAssnExpr* function_call(const char *func_name, std::vector<CCSTAssignExpr*> args)
 {
-  return new CCSTPostFixExprAssnExpr(func_name, args);
+  return new CCSTPostFixExprAssnExpr(new CCSTPrimaryExprId(func_name), args);
 }
+
+/* 
+ * given a projection, returns a struct declaration for the projection name 
+ * including the projection fields.
+ */
+CCSTStructUnionSpecifier* struct_declaration(ProjectionType *pt)
+{
+  std::vector<CCSTStructDeclaration*> field_decs;
+
+  std::vector<ProjectionField*> fields = pt->fields();
+  for(std::vector<ProjectionField*>::iterator it = fields.begin(); it != fields.end(); it ++) {
+    ProjectionField *pf = (ProjectionField*) *it;
+    field_decs.push_back(new CCSTStructDeclaration( type(pf->type())
+						    , new CCSTStructDeclarator( new CCSTDeclarator( pointer(pf->pointer_count()), new CCSTDirectDecId(pf->identifier())))));
+  }
+  
+  return new CCSTStructUnionSpecifier(struct_t, pt->name(), field_decs);
+}
+
+CCSTIfStatement* if_cond_fail(CCSTExpression *cond, const char *err_msg)
+{
+  std::vector<CCSTDeclaration*> if_body_declarations;
+  std::vector<CCSTStatement*> if_body_statements;
+  
+  std::vector<CCSTAssignExpr*> liblcd_err_args;
+  liblcd_err_args.push_back(new CCSTString(err_msg));
+  if_body_statements.push_back(function_call("LIBLCD_ERR", liblcd_err_args));
+
+  std::vector<CCSTAssignExpr*> lcd_exit_args;
+  lcd_exit_args.push_back(new CCSTInteger(-1));
+  if_body_statements.push_back(function_call("lcd_exit", lcd_exit_args));
+
+  CCSTCompoundStatement *if_body = new CCSTCompoundStatement(if_body_declarations, if_body_statements);
+  return new CCSTIfStatement(cond, if_body);
+}
+
+CCSTCompoundStatement* alloc_init_containers_driver(ProjectionType *pt, LexicalScope *ls, const char *side)
+{
+  std::vector<CCSTDeclaration*> declarations;
+  std::vector<CCSTStatement*> statements;
+
+  std::vector<CCSTInitDeclarator*> err_decs;
+  err_decs.push_back(new CCSTDeclarator(0x0, new CCSTDirectDecId("err")));
+  CCSTDeclaration *err_variable = new CCSTDeclaration(int_type(), err_decs);
+  declarations.push_back(err_variable);
+
+  statements.push_back(alloc_init_containers(pt, ls, side));
+  return new CCSTCompoundStatement(declarations, statements);
+}
+
+// need to pass scope!
+CCSTCompoundStatement* alloc_init_containers(ProjectionType *pt, LexicalScope *ls, const char *side) 
+{
+  std::vector<CCSTDeclaration*> declarations;
+  std::vector<CCSTStatement*> statements;
+
+  // declare container
+  int err;
+  const char* container_name_ = container_name(pt->name());
+  Type *container_tmp = ls->lookup(container_name_, &err); // fix
+  Assert(container_tmp != 0x0, "Error: could not find container in environment\n");
+  ProjectionType *container = dynamic_cast<ProjectionType*>(container_tmp);
+  Assert(container != 0x0, "Error: dynamic cast to Projection type failed!\n");
+  
+  std::vector<CCSTInitDeclarator*> decs;
+  decs.push_back(new CCSTDeclarator(new CCSTPointer(), new CCSTDirectDecId(container_name_)));
+  CCSTDeclaration *container_declaration = new CCSTDeclaration(type2(container), decs);
+  declarations.push_back(container_declaration);
+
+  // alloc
+  std::vector<CCSTAssignExpr*> kzalloc_args;
+  kzalloc_args.push_back(new CCSTUnaryExprSizeOf(new CCSTUnaryExprCastExpr(new CCSTUnaryOp(unary_mult_t), new CCSTPrimaryExprId(container_name_))));
+  kzalloc_args.push_back(new CCSTEnumConst("GFP_KERNEL"));
+  statements.push_back(new CCSTAssignExpr(new CCSTPrimaryExprId(container_name_), equals(), function_call("kzalloc", kzalloc_args)));
+
+  // error check
+  // if null
+  // LIBLCD_ERR("kzalloc");
+  //	lcd_exit(-1); /* abort */
+  statements.push_back(if_cond_fail(new CCSTUnaryExprCastExpr(Not(), new CCSTPrimaryExprId(container_name_))
+				    , "kzalloc"));
+
+  // insert into dstore
+  // do error checking
+  // err = lcd_dstore_insert...
+  std::vector<CCSTAssignExpr*> dstore_insert_args;
+  dstore_insert_args.push_back(new CCSTPrimaryExprId("dstore")); // lookup this name in the future.
+  dstore_insert_args.push_back(new CCSTPrimaryExprId(container_name_)); // what we are inserting
+  
+  dstore_insert_args.push_back(new CCSTEnumConst("STRUCT_FILE_TAG")); // this part is not clear
+  
+  ProjectionField *my_ref_field = container->get_field("my_ref");
+  Assert(my_ref_field != 0x0, "Error: could not find field in projection\n");
+  
+  dstore_insert_args.push_back(access(my_ref_field));	
+  
+  // insert into dstore
+  statements.push_back(new CCSTAssignExpr(new CCSTPrimaryExprId("err"), equals(), function_call("lcd_dstore_insert", dstore_insert_args)));
+  
+  // do error checking
+  statements.push_back(if_cond_fail(new CCSTPrimaryExprId("err"), "dstore"));
+
+
+  Parameter *tmp = new Parameter(container, container_name_, 1);
+  std::vector<ProjectionField*> fields = pt->fields();
+  for(std::vector<ProjectionField*>::iterator it = fields.begin(); it != fields.end(); it ++) {
+    ProjectionField *pf = *it;
+    if(pf->type()->num() == 4 && alloc_caller(pf, side)) {
+      ProjectionType *pt2 = dynamic_cast<ProjectionType*>(pf->type());
+      Assert(pt2 != 0x0, "Error: dynamic cast to Projection type failed!\n");
+      
+      statements.push_back(alloc_init_containers(pt2, ls, side)); 
+
+      // need to link/init
+      
+      // need to access this field, but from the container....
+      Assert(pf->accessor() != 0x0, "Error: field does not have a surrounding variable");
+      Variable *sv = pf->accessor()->accessor();
+      pf->accessor()->set_accessor(tmp);
+
+      // 1. get container for this field
+      const char* container_name2 = container_name(pt2->name());
+      Type *container_tmp2 = ls->lookup(container_name2, &err); // fix
+      Assert(container_tmp2 != 0x0, "Error: could not find container in environment\n");
+      ProjectionType *container2 = dynamic_cast<ProjectionType*>(container_tmp2);
+      Assert(container2 != 0x0, "Error: dynamic cast to Projection type failed!\n");
+  
+      // 2. in container look up field
+      ProjectionField *tmp_pf = container2->get_field(pt2->name()); // make sure name returns the name i think it does
+
+      // 3. create a tmp variable
+      Parameter *tmp2 = new Parameter(container2, container_name2, 1);
+      
+      // 4. set accessor in field.
+      tmp_pf->set_accessor(tmp2);
+      statements.push_back(new CCSTAssignExpr(access(pf), equals(), new CCSTUnaryExprCastExpr(reference() ,access(tmp_pf)))); // doing "&" may be wrong... put in function that checks
+    }
+    
+  }
+
+  return new CCSTCompoundStatement(declarations, statements);
+}
+
+bool alloc_caller(Variable *v, const char *side)
+{
+  if(strcmp(side, "caller") == 0) {
+    return v->alloc_caller();
+  }
+  
+  return v->alloc_callee();
+}
+

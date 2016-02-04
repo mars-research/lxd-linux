@@ -5,7 +5,13 @@ CCSTStatement* marshal_variable(Variable *param)
   // todo
 }
 
-CCSTStatement* MarshalTypeVisitor::visit(FunctionPointer *fp, Variable *v)
+CCSTStatement* MarshalTypeVisitor::visit(Channel *c, Variable *v)
+{
+  printf("Marshal type visitor channel todo\n");
+  return 0x0;
+}
+
+CCSTStatement* MarshalTypeVisitor::visit(Function *fp, Variable *v)
 {
   printf("Marshal function pointer not completed\n");
   return 0x0;
@@ -26,7 +32,7 @@ CCSTStatement* MarshalTypeVisitor::visit(Typedef *td, Variable *v)
   } else {
     arguments.push_back(access_v);
   }
-  return function_call( function_name( store_register_mapping(mt->get_register()))
+  return function_call(store_register_mapping(mt->get_register())
 			, arguments);
 }
 
@@ -50,7 +56,7 @@ CCSTStatement* MarshalTypeVisitor::visit(IntegerType *it, Variable *v)
   } else {
     arguments.push_back(access_v);
   }
-  return function_call( function_name( store_register_mapping(mt->get_register()))
+  return function_call( store_register_mapping(mt->get_register())
 		 , arguments);
 }
 
