@@ -249,8 +249,10 @@ static int get_module_pages(hva_t hva, unsigned long size,
 			 * Make a copy
 			 */
 			ret = dup_page(hva, &pg_cptr);
-			if (ret)
+			if (ret) {
+				LCD_ERR("dup failed");
 				goto fail1;
+			}
 			did_dup = 1;
 		} else {
 			/*
@@ -259,8 +261,10 @@ static int get_module_pages(hva_t hva, unsigned long size,
 			 * Just add the page to caller's cspace
 			 */
 			ret = klcd_add_page(p, &pg_cptr);
-			if (ret)
+			if (ret) {
+				LCD_ERR("add failed");
 				goto fail1;
+			}
 			did_dup = 0;
 		}
 		/*
@@ -407,14 +411,18 @@ int klcd_load_module(char *mdir, char *mname, cptr_t mloader_endpoint,
 	struct module *m;
 
 	ret = init_lcd_info(mi);
-	if (ret)
+	if (ret) {
+		LCD_ERR("init lcd info failed");
 		goto fail0;
+	}
 	/*
 	 * Load module in host
 	 */
 	ret = __klcd_get_module(mdir, mname, &m);
-	if (ret)
+	if (ret) {
+		LCD_ERR("loading module into host failed");
 		goto fail1;
+	}
 	/*
 	 * Get init and core pages
 	 */
@@ -422,12 +430,14 @@ int klcd_load_module(char *mdir, char *mname, cptr_t mloader_endpoint,
 			m->init_size, &(*mi)->mpages_list,
 			NULL);
 	if (ret) {
+		LCD_ERR("loading init pages failed");
 		goto fail2;
 	}
 	ret = get_module_pages(va2hva(m->module_core), 
 			m->core_size, &(*mi)->mpages_list,
 			m);
 	if (ret) {
+		LCD_ERR("loading core pages failed");
 		goto fail3;
 	}
 	LCD_MSG("module %s init @ 0x%lx core @ 0x%lx",
