@@ -623,6 +623,30 @@ static int adjust_vmx_controls(u32 *controls, u32 reserved_mask, u32 msr)
 	return 0;
 }
 
+#define MAX_PAT_ENTRY	7
+#define VALID_PAT_TYPE	7
+/**
+ * Sets up a corresponding PAT entry	
+ */
+static int vmx_setup_pat_msr(unsigned char pat_entry, unsigned char pat_type)
+{
+	u64 pat = 0;
+
+	if (pat_entry > MAX_PAT_ENTRY) {
+		LCD_ARCH_ERR("Invalid PAT entry, cannot setup PAT MSR \n");
+		return -EINVAL;
+	}
+	
+	if(pat_type > VALID_PAT_TYPE) {
+		LCD_ARCH_ERR("Not a valid PAT type, cannot setup PAT MSR \n");
+		return -EINVAL;
+	}
+
+	pat = vmcs_readl(GUEST_IA32_PAT);
+	pat |= (pat_type << (pat_entry * 8));
+	vmcs_writel(GUEST_IA32_PAT, pat);
+	return 0;
+}
 
 /**
  * Populates default settings in vmcs_conf for
@@ -765,9 +789,11 @@ static int setup_vmcs_config(struct vmx_vmcs_config *vmcs_conf)
 	 * -- IA-32E Mode inside guest
 	 * -- Load IA-32 EFER MSR on entry
 	 * -- Load debug controls  / needed on emulab
+	 * -- Load IA32 PAT MSR
 	 */
 	vmentry_controls = VM_ENTRY_IA32E_MODE |
 		VM_ENTRY_LOAD_IA32_EFER |
+		VM_ENTRY_LOAD_IA32_PAT |
 		VM_ENTRY_LOAD_DEBUG_CONTROLS;
 	if (adjust_vmx_controls(&vmentry_controls,
 					VM_ENTRY_RESERVED_MASK,
@@ -842,6 +868,14 @@ enum vmx_epte_mts {
 	VMX_EPTE_MT_WB = 6, /* write back */
 };
 
+enum vmx_pat_type {
+	PAT_UC = 0,             /* uncached */
+        PAT_WC = 1,             /* Write combining */
+        PAT_WT = 4,             /* Write Through */
+        PAT_WP = 5,             /* Write Protected */
+        PAT_WB = 6,             /* Write Back (default) */
+        PAT_UC_MINUS = 7,       /* UC, but can be overriden by MTRR */
+};
 /**
  * Sets address in epte along with default access settings. Since
  * we are using a page walk length of 4, epte's at all levels have
@@ -1096,6 +1130,29 @@ int lcd_arch_ept_gpa_to_hpa(struct lcd_arch *lcd, gpa_t ga, hpa_t *ha_out)
 	return 0;
 }
 
+int lcd_arch_ept_gpa_to_hva(struct lcd_arch *lcd, unsigned long gva, unsigned long *hva_out)
+{
+	int ret;
+	lcd_arch_epte_t *ept_entry;
+
+	ret = lcd_arch_ept_walk(lcd, __gpa(gva), 0, &ept_entry);
+	if (ret) { 
+		return ret;
+        };
+
+	/*
+	 * Confirm the entry is present
+	 */
+	if (!vmx_epte_present(*ept_entry)) {
+		LCD_ARCH_ERR("gpa %lx is not mapped\n",
+			gva);
+		return -EINVAL;
+	}	
+
+
+        *hva_out = (unsigned long)hpa2va(lcd_arch_ept_hpa(ept_entry)) + (((unsigned long) gva) & (PAGE_SIZE - 1));
+	return 0;
+}
 /**
  * Recursively frees all present entries in dir at level, and
  * the page containing the dir. The recursion depth is limited to 3 - 4 stack
@@ -1623,6 +1680,12 @@ static void vmx_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	 * -- 64-bit mode (long mode enabled and active)
 	 */
 	vmcs_writel(GUEST_IA32_EFER, EFER_LME | EFER_LMA);
+
+	/*
+ 	 * IA32 MSR - setup PAT entry	 
+ 	 */
+	vmx_setup_pat_msr(0, PAT_WB);
+	vmx_setup_pat_msr(1, PAT_UC);
 
 	/*
 	 * Sysenter info
@@ -2173,13 +2236,15 @@ static void dump_lcd_arch(struct lcd_arch *lcd)
 	unsigned long flags;
 
 	vmx_get_cpu(lcd);
-	lcd->regs[LCD_ARCH_REGS_RIP] = vmcs_readl(GUEST_RIP);
-	lcd->regs[LCD_ARCH_REGS_RSP] = vmcs_readl(GUEST_RSP);
+	lcd->regs.rip = vmcs_readl(GUEST_RIP);
+	lcd->regs.rsp = vmcs_readl(GUEST_RSP);
 	flags = vmcs_readl(GUEST_RFLAGS);
 	vmx_put_cpu(lcd);
 
 	printk(KERN_ERR "---- Begin LCD Arch Dump ----\n");
 	printk(KERN_ERR "CPU %d VPID %d\n", lcd->cpu, lcd->vpid);
+
+	/*
 	printk(KERN_ERR "RIP 0x%016llx RFLAGS 0x%08lx\n",
 	       lcd->regs[LCD_ARCH_REGS_RIP], flags);
 	printk(KERN_ERR "RAX 0x%016llx RCX 0x%016llx\n",
@@ -2206,7 +2271,9 @@ static void dump_lcd_arch(struct lcd_arch *lcd)
 	printk(KERN_ERR "R14 0x%016llx R15 0x%016llx\n",
 			lcd->regs[LCD_ARCH_REGS_R14], 
 		lcd->regs[LCD_ARCH_REGS_R15]);
+	*/
 
+	lcd_show_execution_state(lcd, &lcd->regs);
 	/* printk(KERN_ERR "Dumping Stack Contents...\n"); */
 	/* sp = (unsigned long *) vcpu->regs[VCPU_REGS_RSP]; */
 	/* for (i = 0; i < STACK_DEPTH; i++) */
@@ -2358,12 +2425,50 @@ static int vmx_handle_control_reg(struct lcd_arch *lcd_arch)
 			/*
 			 * Move to
 			 */
-			vmcs_writel(GUEST_CR3, lcd_arch->regs[general_reg]);
+			switch (general_reg){
+				case 0: vmcs_writel(GUEST_CR3, lcd_arch->regs.rax); break;
+				case 1: vmcs_writel(GUEST_CR3, lcd_arch->regs.rcx); break;
+				case 2: vmcs_writel(GUEST_CR3, lcd_arch->regs.rdx); break;
+				case 3: vmcs_writel(GUEST_CR3, lcd_arch->regs.rbx); break;
+				case 4: vmcs_writel(GUEST_CR3, lcd_arch->regs.rsp); break;
+				case 5: vmcs_writel(GUEST_CR3, lcd_arch->regs.rbp); break;
+				case 6: vmcs_writel(GUEST_CR3, lcd_arch->regs.rsi); break;
+				case 7: vmcs_writel(GUEST_CR3, lcd_arch->regs.rdi); break;
+				case 8: vmcs_writel(GUEST_CR3, lcd_arch->regs.r8); break;
+				case 9: vmcs_writel(GUEST_CR3, lcd_arch->regs.r9); break;
+				case 10: vmcs_writel(GUEST_CR3, lcd_arch->regs.r10); break;
+				case 11: vmcs_writel(GUEST_CR3, lcd_arch->regs.r11); break;
+				case 12: vmcs_writel(GUEST_CR3, lcd_arch->regs.r12); break;
+				case 13: vmcs_writel(GUEST_CR3, lcd_arch->regs.r13); break;
+				case 14: vmcs_writel(GUEST_CR3, lcd_arch->regs.r14); break;
+				case 15: vmcs_writel(GUEST_CR3, lcd_arch->regs.r15); break;
+				default: LCD_ARCH_ERR("Unknown general register in CR3 access:%d", general_reg);
+			}
 		} else {
 			/*
 			 * Move from
 			 */
-			lcd_arch->regs[general_reg] = vmcs_readl(GUEST_CR3);
+			switch (general_reg){
+				case 0: lcd_arch->regs.rax = vmcs_readl(GUEST_CR3); break;
+				case 1: lcd_arch->regs.rcx = vmcs_readl(GUEST_CR3); break;
+				case 2: lcd_arch->regs.rdx = vmcs_readl(GUEST_CR3); break;
+				case 3: lcd_arch->regs.rbx = vmcs_readl(GUEST_CR3); break;
+				case 4: lcd_arch->regs.rsp = vmcs_readl(GUEST_CR3); break;
+				case 5: lcd_arch->regs.rbp = vmcs_readl(GUEST_CR3); break;
+				case 6: lcd_arch->regs.rsi = vmcs_readl(GUEST_CR3); break;
+				case 7: lcd_arch->regs.rdi = vmcs_readl(GUEST_CR3); break;
+				case 8: lcd_arch->regs.r8 = vmcs_readl(GUEST_CR3); break;
+				case 9: lcd_arch->regs.r9 = vmcs_readl(GUEST_CR3); break;
+				case 10: lcd_arch->regs.r10 = vmcs_readl(GUEST_CR3); break;
+				case 11: lcd_arch->regs.r11 = vmcs_readl(GUEST_CR3); break;
+				case 12: lcd_arch->regs.r12 = vmcs_readl(GUEST_CR3); break;
+				case 13: lcd_arch->regs.r13 = vmcs_readl(GUEST_CR3); break;
+				case 14: lcd_arch->regs.r14 = vmcs_readl(GUEST_CR3); break;
+				case 15: lcd_arch->regs.r15 = vmcs_readl(GUEST_CR3); break;
+
+				default: LCD_ARCH_ERR("Unknown general register in CR3 access:%d", general_reg);
+			}
+
 		}
 		/*
 		 * Step past instruction that caused exit
@@ -2676,35 +2781,35 @@ static void __noclone vmx_enter(struct lcd_arch *lcd_arch)
 		  [fail]"i"(offsetof(struct lcd_arch, fail)),
 		  [host_rsp]"i"(offsetof(struct lcd_arch, host_rsp)),
 		  [rax]"i"(offsetof(struct lcd_arch, 
-					  regs[LCD_ARCH_REGS_RAX])),
+					  regs.rax)),
 		  [rbx]"i"(offsetof(struct lcd_arch, 
-					  regs[LCD_ARCH_REGS_RBX])),
+					  regs.rbx)),
 		  [rcx]"i"(offsetof(struct lcd_arch, 
-					  regs[LCD_ARCH_REGS_RCX])),
+					  regs.rcx)),
 		  [rdx]"i"(offsetof(struct lcd_arch, 
-					  regs[LCD_ARCH_REGS_RDX])),
+					  regs.rdx)),
 		  [rsi]"i"(offsetof(struct lcd_arch, 
-					  regs[LCD_ARCH_REGS_RSI])),
+					  regs.rsi)),
 		  [rdi]"i"(offsetof(struct lcd_arch, 
-					  regs[LCD_ARCH_REGS_RDI])),
+					  regs.rdi)),
 		  [rbp]"i"(offsetof(struct lcd_arch, 
-					  regs[LCD_ARCH_REGS_RBP])),
+					  regs.rbp)),
 		  [r8]"i"(offsetof(struct lcd_arch, 
-					  regs[LCD_ARCH_REGS_R8])),
+					  regs.r8)),
 		  [r9]"i"(offsetof(struct lcd_arch, 
-					  regs[LCD_ARCH_REGS_R9])),
+					  regs.r9)),
 		  [r10]"i"(offsetof(struct lcd_arch, 
-					  regs[LCD_ARCH_REGS_R10])),
+					  regs.r10)),
 		  [r11]"i"(offsetof(struct lcd_arch, 
-					  regs[LCD_ARCH_REGS_R11])),
+					  regs.r11)),
 		  [r12]"i"(offsetof(struct lcd_arch, 
-					  regs[LCD_ARCH_REGS_R12])),
+					  regs.r12)),
 		  [r13]"i"(offsetof(struct lcd_arch, 
-					  regs[LCD_ARCH_REGS_R13])),
+					  regs.r13)),
 		  [r14]"i"(offsetof(struct lcd_arch, 
-					  regs[LCD_ARCH_REGS_R14])),
+					  regs.r14)),
 		  [r15]"i"(offsetof(struct lcd_arch, 
-					  regs[LCD_ARCH_REGS_R15])),
+					  regs.r15)),
 		  [cr2]"i"(offsetof(struct lcd_arch, cr2)),
 		  [wordsize]"i"(sizeof(ulong))
 		: "cc", "memory"
@@ -2804,7 +2909,7 @@ out:
 
 int lcd_arch_set_pc(struct lcd_arch *lcd_arch, gva_t a)
 {
-	lcd_arch->regs[LCD_ARCH_REGS_RIP] = gva_val(a);
+	lcd_arch->regs.rip = gva_val(a);
 	/*
 	 * Must load vmcs to modify it
 	 */
@@ -2816,7 +2921,7 @@ int lcd_arch_set_pc(struct lcd_arch *lcd_arch, gva_t a)
 
 int lcd_arch_set_sp(struct lcd_arch *lcd_arch, gva_t a)
 {
-	lcd_arch->regs[LCD_ARCH_REGS_RSP] = gva_val(a);
+	lcd_arch->regs.rsp = gva_val(a);
 	/*
 	 * Must load vmcs to modify it
 	 */
@@ -3520,6 +3625,36 @@ static int vmx_check_addr_size(struct lcd_arch *t)
 	return 0;
 }
 
+static int vmx_check_pat_msr(struct lcd_arch *t)
+{
+	u64 pat;
+	unsigned char val;
+	unsigned int i;
+
+	pat = vmcs_readl(GUEST_IA32_PAT);
+
+	/*
+	 * Ensure each entry is 0 (UC), 1 (WC), 4 (WT), 5 (WP),
+	 * 6 (WB), or 7 (UC-)
+	 */
+	for (i = 0; i <= MAX_PAT_ENTRY; i++) {
+
+		val = (pat & (0xFFUL << (i * 8))) >> (i * 8);
+		if (val != 0UL && 
+			val != 1UL && 
+			val != 4UL &&
+			val != 5UL &&
+			val != 6UL &&
+			val != 7UL) {
+			LCD_ARCH_ERR("Invalid pat type %d in PAT idx %d",
+				val, i);
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
 static int vmx_check_guest_ctrl_regs(struct lcd_arch *t)
 {
 	u64 act64;
@@ -3631,8 +3766,8 @@ static int vmx_check_guest_ctrl_regs(struct lcd_arch *t)
 	 * pat msr
 	 */
 	if (vmx_entry_has(t, VM_ENTRY_LOAD_IA32_PAT)) {
-		LCD_ARCH_ERR("vmentry pat msr load check not implemented");
-		return -1;
+		if (vmx_check_pat_msr(t))
+			return -1;
 	}
 
 	/*

@@ -10,6 +10,7 @@ lcd_domains-y += main.o ipc.o cap.o
 
 # Arch dependent code
 lcd_domains-y += arch/$(ARCH)/main.o
+lcd_domains-y += arch/$(ARCH)/traps.o
 
 # kliblcd
 lcd_domains-y += $(addprefix ../kliblcd/, init.o \
