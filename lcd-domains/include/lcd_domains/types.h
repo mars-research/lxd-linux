@@ -115,9 +115,7 @@ static inline hpa_t hpa_add(hpa_t hpa, unsigned long off)
  */
 #define LCD_MPATH_SIZE 256
 
-#define LCD_TEST_MODS_PATH \
-	"/local/disk2/xcap-git/lcd-domains/test-mods"
-
+/* LCD_TEST_MODS_PATH set in top-level Makefile via -D */
 #define LCD_DIR(subpath) \
 	LCD_TEST_MODS_PATH "/" subpath
 
