@@ -121,4 +121,9 @@ static inline hpa_t hpa_add(hpa_t hpa, unsigned long off)
 
 #define LCD_PRINTK_BUFF_SIZE 512
 
+/* EXTRA ERRORS ------------------------------------------------------------ */
+
+#define EALREADYMAPPED (512)
+
+
 #endif /* LCD_DOMAINS_TYPES_H */
