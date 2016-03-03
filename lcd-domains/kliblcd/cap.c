@@ -1,52 +1,37 @@
-/**
+/*
  * cap.c
  *
- * Authors:
- *   Charlie Jacobsen  <charlesj@cs.utah.edu>
+ * Copyright: University of Utah
  */
 
-#include <lcd-domains/kliblcd.h>
-#include <lcd-domains/utcb.h>
-#include <lcd-domains/types.h>
-#include "../microkernel/internal.h"
+#include <libcap.h>
+#include <liblcd/liblcd.h>
+#include <lcd_domains/microkernel.h>
 
-int klcd_cap_grant(cptr_t lcd, cptr_t src, cptr_t dest)
+void lcd_cap_delete(cptr_t slot)
 {
-	return __lcd_cap_grant_cheat(current->lcd, lcd, src, dest);
+	cap_delete(current->lcd->cspace, slot);
+	lcd_cptr_free(slot);
 }
 
-int klcd_cap_page_grant_map(cptr_t lcd, cptr_t page, cptr_t dest, gpa_t gpa)
+int lcd_cap_revoke(cptr_t slot)
 {
-	return __lcd_cap_page_grant_map_cheat(current->lcd, lcd, page, dest, 
-					gpa);
+	return cap_revoke(current->lcd->cspace, slot);
 }
 
-void klcd_cap_delete(cptr_t slot)
+int lcd_cptr_alloc(cptr_t *slot_out)
 {
-	/*
-	 * Delete capability from cspace
-	 */
-	__lcd_cap_delete(&current->lcd->cspace, slot);
-	/*
-	 * Return cptr
-	 */
-	lcd_free_cptr(slot);
+	return cptr_alloc(current->cptr_cache, slot_out);
 }
 
-int klcd_cap_revoke(cptr_t slot)
+void lcd_cptr_free(cptr_t slot)
 {
-	/*
-	 * Revoke child capabilities
-	 *
-	 * XXX: How do the lcd's know these slots are now free? The microkernel
-	 * won't tell them.
-	 */
-	return __lcd_cap_revoke(&current->lcd->cspace, slot);
+	cptr_free(current->cptr_cache, slot);
 }
 
 /* EXPORTS -------------------------------------------------- */
 
-EXPORT_SYMBOL(klcd_cap_grant);
-EXPORT_SYMBOL(klcd_cap_page_grant_map);
-EXPORT_SYMBOL(klcd_cap_delete);
-EXPORT_SYMBOL(klcd_cap_revoke);
+EXPORT_SYMBOL(lcd_cap_delete);
+EXPORT_SYMBOL(lcd_cap_revoke);
+EXPORT_SYMBOL(lcd_cptr_alloc);
+EXPORT_SYMBOL(lcd_cptr_free);

@@ -1,89 +1,18 @@
 /* 
  * ipc.c
  *
- * Authors: Anton Burtsev <aburtsev@flux.utah.edu>
- *          Charles Jacobsen <charlesj@cs.utah.edu>
  * Copyright: University of Utah
  */
 
 #include <linux/types.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
-#include <lcd-domains/types.h>
-#include "internal.h"
+#include <lcd_domains/types.h>
+#include <lcd_domains/microkernel.h>
 
-/* QUICK LOOKUP / LOCK -------------------------------------------------- */
+/* CREATE -------------------------------------------------- */
 
-static int lookup_ep(struct cspace *cspace, cptr_t slot, struct cnode **cnode)
-{
-	int ret;
-
-
-	/*
-	 * Look up
-	 */
-	ret = __lcd_cnode_get(cspace, slot, cnode);
-	if (ret)
-		goto fail1;
-	/*
-	 * Confirm it's an lcd
-	 */
-	if ((*cnode)->type != LCD_CAP_TYPE_SYNC_EP) {
-		LCD_ERR("not a sync ep");
-		ret = -EINVAL;
-		goto fail2;
-	}
-	return 0;
-
-fail2:
-	__lcd_cnode_put(*cnode);
-fail1:
-	return ret;
-}
-
-static int get_ep(struct cspace *cspace, cptr_t endpoint, struct cnode **cnode,
-		struct lcd_sync_endpoint **e)
-{
-	int ret;
-	/*
-	 * Look up and lock cnode containing endpoint
-	 */
-	ret = lookup_ep(cspace, endpoint, cnode);
-	if (ret)
-		goto fail1;
-	*e = (*cnode)->object;
-	/*
-	 * Lock endpoint struct
-	 */
-	ret = mutex_lock_interruptible(&(*e)->lock);
-	if (ret) {
-		LCD_ERR("interrupted");
-		goto fail2;
-	}
-	
-	return 0; /* caller should match with put_ep */
-
-fail2:
-	__lcd_cnode_put(*cnode);
-fail1:
-	return ret;
-}
-
-static void put_ep(struct cnode *cnode, struct lcd_sync_endpoint *ep)
-{
-	/*
-	 * Unlock lcd
-	 */
-	mutex_unlock(&ep->lock);
-	/*
-	 * Release cnode
-	 */
-	__lcd_cnode_put(cnode);
-}
-
-/* MAIN INTERFACE -------------------------------------------------- */
-
-int __lcd_create_sync_endpoint(struct lcd *caller, cptr_t slot)
+int __lcd_create_sync_endpoint__(struct lcd_sync_endpoint **ep_out)
 {
 	struct lcd_sync_endpoint *e;
 	int ret;
@@ -105,11 +34,36 @@ int __lcd_create_sync_endpoint(struct lcd *caller, cptr_t slot)
 	 * Set up lock
 	 */
 	mutex_init(&e->lock);
+
+	*ep_out = e;
+
+	return 0;
+
+fail1:
+	return ret;
+}
+
+void __lcd_destroy_sync_endpoint__(struct lcd_sync_endpoint *ep)
+{
+	kfree(ep);
+}
+
+int __lcd_create_sync_endpoint(struct lcd *caller, cptr_t slot)
+{
+	struct lcd_sync_endpoint *e;
+	int ret;
+	/*
+	 * Create it
+	 */
+	ret = __lcd_create_sync_endpoint__(&e);
+	if (ret)
+		goto fail1;
 	/*
 	 * Insert into caller's cspace
 	 */
-	ret = __lcd_cap_insert(&caller->cspace, slot, e, 
-			LCD_CAP_TYPE_SYNC_EP);
+	ret = cap_insert(caller->cspace, slot, e,
+			__lcd_get_libcap_type(
+				LCD_MICROKERNEL_TYPE_ID_SYNC_EP));
 	if (ret) {
 		LCD_ERR("insert");
 		goto fail2;
@@ -118,17 +72,89 @@ int __lcd_create_sync_endpoint(struct lcd *caller, cptr_t slot)
 	return 0;
 
 fail2:
-	kfree(e);
+	__lcd_destroy_sync_endpoint__(e);
 fail1:
 	return ret;
 }
 
+/* LOOKUP -------------------------------------------------- */
+
+static int lookup_ep(struct cspace *cspace, cptr_t slot, struct cnode **cnode)
+{
+	int ret;
+	cap_type_t t;
+	/*
+	 * Look up
+	 */
+	ret = cap_cnode_get(cspace, slot, cnode);
+	if (ret)
+		goto fail1;
+	/*
+	 * Confirm it's an lcd or klcd
+	 */
+	t = cap_cnode_type(*cnode);
+	if (t != __lcd_get_libcap_type(LCD_MICROKERNEL_TYPE_ID_SYNC_EP)) {
+		LCD_ERR("not a sync ipc endpoint");
+		ret = -EINVAL;
+		goto fail2;
+	}
+
+	return 0;
+
+fail2:
+	cap_cnode_put(*cnode);
+fail1:
+	return ret;
+}
+
+int __lcd_get_sync_endpoint(struct lcd *caller, cptr_t sync_ep_cptr,
+			struct cnode **cnode, 
+			struct lcd_sync_endpoint **e)
+{
+	int ret;
+	/*
+	 * Look up and lock cnode containing endpoint
+	 */
+	ret = lookup_ep(caller->cspace, sync_ep_cptr, cnode);
+	if (ret)
+		goto fail1;
+	*e = cap_cnode_object(*cnode);
+	/*
+	 * Lock endpoint struct
+	 */
+	ret = mutex_lock_interruptible(&(*e)->lock);
+	if (ret) {
+		LCD_ERR("interrupted");
+		goto fail2;
+	}
+	
+	return 0; /* caller should match with __lcd_put_sync_endpoint */
+
+fail2:
+	cap_cnode_put(*cnode);
+fail1:
+	return ret;
+}
+
+void __lcd_put_sync_endpoint(struct lcd *caller, struct cnode *cnode, 
+			struct lcd_sync_endpoint *e)
+{
+	/*
+	 * Unlock endpoint
+	 */
+	mutex_unlock(&e->lock);
+	/*
+	 * Release cnode
+	 */
+	cap_cnode_put(cnode);
+}
+
+/* SEND/RECV/CALL/REPLY -------------------------------------------------- */
 
 static void copy_msg_regs(struct lcd *sender, struct lcd *receiver)
 {
-	int i;
-	for (i = 0; i < LCD_NUM_REGS; i++)
-		receiver->utcb->mr[i] = sender->utcb->mr[i];
+	memcpy(receiver->utcb->mr, sender->utcb->mr,
+		sizeof(receiver->utcb->mr));
 }
 
 static void copy_msg_cap(struct lcd *sender, struct lcd *receiver,
@@ -136,10 +162,11 @@ static void copy_msg_cap(struct lcd *sender, struct lcd *receiver,
 {
 	int ret;
 
-	ret = __lcd_cap_grant(&sender->cspace, from_ptr,
-			&receiver->cspace, to_ptr);
+	ret = cap_grant(sender->cspace, from_ptr,
+			receiver->cspace, to_ptr);
 	if (ret) {
-		LCD_ERR("failed to transfer cap @ 0x%lx in lcd %p to slot @ 0x%lx in lcd %p",
+		LCD_DEBUG(LCD_DEBUG_ERR,
+			"failed to transfer cap @ 0x%lx in lcd %p to slot @ 0x%lx in lcd %p",
 			cptr_val(from_ptr), sender, cptr_val(to_ptr), 
 			receiver);
 	}
@@ -163,16 +190,17 @@ static void copy_msg_caps(struct lcd *sender, struct lcd *receiver)
 
 static void delete_reply_endpoint(struct lcd *sender)
 {
-	__lcd_cap_delete(&sender->cspace, LCD_CPTR_REPLY_ENDPOINT);
+	cap_delete(sender->cspace, LCD_CPTR_REPLY_ENDPOINT);
 }
 
 static void copy_call_endpoint(struct lcd *sender, struct lcd *receiver)
 {
 	int ret;
-	ret = __lcd_cap_grant(&sender->cspace, LCD_CPTR_CALL_ENDPOINT,
-			&receiver->cspace, LCD_CPTR_REPLY_ENDPOINT);
+	ret = cap_grant(sender->cspace, LCD_CPTR_CALL_ENDPOINT,
+			receiver->cspace, LCD_CPTR_REPLY_ENDPOINT);
 	if (ret)
-		LCD_ERR("error granting call endpoint cap");
+		LCD_DEBUG(LCD_DEBUG_ERR,
+			"error granting call endpoint cap");
 }
 
 static int transmit_msg(struct lcd *sender, struct lcd *receiver,
@@ -208,17 +236,14 @@ static int transmit_msg(struct lcd *sender, struct lcd *receiver,
 	return ret;
 }
 
-static int wait_for_transmit(struct lcd *lcd, struct lcd_sync_endpoint *ep)
+static int wait_for_transmit(struct lcd *lcd, struct cnode *ep_cnode,
+			struct lcd_sync_endpoint *ep)
 {
 	int ret;
 	/*
-	 * Unset our flag
+	 * Release endpoint e so others can use it
 	 */
-	atomic_set(&lcd->xmit_flag, 0);
-	/*
-	 * UNLOCK: endpoint e
-	 */
-	mutex_unlock(&ep->lock);
+	__lcd_put_sync_endpoint(lcd, ep_cnode, ep);
 	/*
 	 * Loop until the condition is true, or we get a signal (interrupted)
 	 *
@@ -296,7 +321,7 @@ static void debug_dump_utcb(struct lcd *lcd)
 	
 	/* General regs */
 	for (i = 0; i < LCD_NUM_REGS; i++) {
-		printk("  mr[%d] = %llx\n", i,
+		printk("  mr[%d] = %lx\n", i,
 			lcd->utcb->mr[i]);
 	}
 
@@ -323,13 +348,6 @@ static int do_send(struct lcd *sender, struct cnode *cnode,
 		 */
 		list_add_tail(&sender->endpoint_queue, &ep->senders);
 		/*
-		 * Release the cnode
-		 *
-		 * It's now safe to release cnode since we are in the
-		 * queue
-		 */
-		__lcd_cnode_put(cnode);
-		/*
 		 * Mark myself as making a call, if necessary, so that recvr
 		 * knows it needs to copy reply endpoint cap.
 		 */
@@ -340,7 +358,7 @@ static int do_send(struct lcd *sender, struct cnode *cnode,
 		 *
 		 * wait_for_transmit will unlock ep
 		 */
-		ret = wait_for_transmit(sender, ep);
+		ret = wait_for_transmit(sender, cnode, ep);
 		if (ret) { 
 			LCD_ERR("transmit failed");
 			goto fail1;
@@ -370,7 +388,7 @@ static int do_send(struct lcd *sender, struct cnode *cnode,
 	/*
 	 * Put endpoint
 	 */
-	put_ep(cnode, ep);
+	__lcd_put_sync_endpoint(sender, cnode, ep);
 	/*
 	 * Send message, and wake up receiver
 	 */
@@ -402,7 +420,7 @@ static int do_send(struct lcd *sender, struct cnode *cnode,
 fail3:
 	mutex_unlock(&sender->lock);
 fail2:
-	put_ep(cnode, ep);
+	__lcd_put_sync_endpoint(sender, cnode, ep);
 fail1:
 	return ret;
 }
@@ -415,9 +433,10 @@ int __lcd_send(struct lcd *caller, cptr_t endpoint)
 	/*
 	 * Look up and lock endpoint
 	 */
-	ret = get_ep(&caller->cspace, endpoint, &cnode, &ep);
+	ret = __lcd_get_sync_endpoint(caller, endpoint, &cnode, &ep);
 	if (ret) {
-		LCD_ERR("ep lookup for cptr 0x%lx", cptr_val(endpoint));
+		LCD_DEBUG(LCD_DEBUG_ERR,
+			"ep lookup for cptr 0x%lx", cptr_val(endpoint));
 		goto fail1;
 	}
 	/* do_send does put on ep; we're not doing a call or reply */
@@ -430,6 +449,7 @@ int __lcd_send(struct lcd *caller, cptr_t endpoint)
 	return 0;
 
 fail2:
+	__lcd_put_sync_endpoint(caller, cnode, ep);
 fail1:
 	return ret;
 }
@@ -449,18 +469,11 @@ static int do_recv(struct lcd *receiver, struct cnode *cnode,
 		 */
 		list_add_tail(&receiver->endpoint_queue, &ep->receivers);
 		/*
-		 * Release the cnode
-		 *
-		 * It's now safe to release cnode since we are in the
-		 * queue
-		 */
-		__lcd_cnode_put(cnode);
-		/*
 		 * Wait for a sender to receive message
 		 *
 		 * wait_for_transmit will unlock ep
 		 */
-		ret = wait_for_transmit(receiver, ep);
+		ret = wait_for_transmit(receiver, cnode, ep);
 		if (ret) { 
 			LCD_ERR("transmit failed");
 			goto fail1;
@@ -475,7 +488,8 @@ static int do_recv(struct lcd *receiver, struct cnode *cnode,
 	sender = list_first_entry(&ep->senders, struct lcd, endpoint_queue);
         list_del_init(&sender->endpoint_queue);
 	/*
-	 * Lock sender and receiver, for access to their utcb's
+	 * Lock sender and receiver, for access to their utcb's. (Notice we
+	 * lock in the same order as in do_send.)
 	 */
 	ret = mutex_lock_interruptible(&sender->lock);
 	if (ret) {
@@ -490,7 +504,7 @@ static int do_recv(struct lcd *receiver, struct cnode *cnode,
 	/*
 	 * Put endpoint
 	 */
-	put_ep(cnode, ep);
+	__lcd_put_sync_endpoint(receiver, cnode, ep);
 	/*
 	 * Send message, and wake up sender
 	 *
@@ -503,7 +517,7 @@ static int do_recv(struct lcd *receiver, struct cnode *cnode,
 	if (ret) {
 		LCD_ERR("transmit");
 		/*
-		 * Notify sender, and unlock
+		 * Notify sender, and unlock.
 		 */
 		set_lcd_xmit(sender, LCD_XMIT_FAILED);
 		wake_up_process(sender->kthread);
@@ -527,7 +541,7 @@ static int do_recv(struct lcd *receiver, struct cnode *cnode,
 fail3:
 	mutex_unlock(&sender->lock);
 fail2:
-	put_ep(cnode, ep);
+	__lcd_put_sync_endpoint(receiver, cnode, ep);
 fail1:
 	return ret;
 }
@@ -540,9 +554,10 @@ int __lcd_recv(struct lcd *caller, cptr_t endpoint)
 	/*
 	 * Look up and lock endpoint
 	 */
-	ret = get_ep(&caller->cspace, endpoint, &cnode, &ep);
+	ret = __lcd_get_sync_endpoint(caller, endpoint, &cnode, &ep);
 	if (ret) {
-		LCD_ERR("ep lookup failed for cptr 0x%lx", cptr_val(endpoint));
+		LCD_DEBUG(LCD_DEBUG_ERR,
+			"ep lookup failed for cptr 0x%lx", cptr_val(endpoint));
 		goto fail1;
 	}
 	/* do_recv does put on ep */
@@ -555,6 +570,7 @@ int __lcd_recv(struct lcd *caller, cptr_t endpoint)
 	return 0;
 
 fail2:
+	__lcd_put_sync_endpoint(caller, cnode, ep);
 fail1:
 	return ret;
 }
@@ -567,9 +583,10 @@ int __lcd_call(struct lcd *caller, cptr_t endpoint)
 	/*
 	 * Look up and lock endpoint
 	 */
-	ret = get_ep(&caller->cspace, endpoint, &cnode, &ep);
+	ret = __lcd_get_sync_endpoint(caller, endpoint, &cnode, &ep);
 	if (ret) {
-		LCD_ERR("ep lookup");
+		LCD_DEBUG(LCD_DEBUG_ERR,
+			"ep lookup failed for cptr 0x%lx", cptr_val(endpoint));
 		goto fail1;
 	}
 	/* do_send does put on ep; we're doing a call */
@@ -584,6 +601,7 @@ int __lcd_call(struct lcd *caller, cptr_t endpoint)
 	return __lcd_recv(caller, LCD_CPTR_CALL_ENDPOINT);
 
 fail2:
+	__lcd_put_sync_endpoint(caller, cnode, ep);
 fail1:
 	return ret;
 }
@@ -593,12 +611,12 @@ int __lcd_reply(struct lcd *caller)
 	struct lcd_sync_endpoint *ep;
 	struct cnode *cnode;
 	int ret;
-	/*
-	 * Look up and lock reply endpoint
-	 */
-	ret = get_ep(&caller->cspace, LCD_CPTR_REPLY_ENDPOINT, &cnode, &ep);
+	ret = __lcd_get_sync_endpoint(caller, LCD_CPTR_REPLY_ENDPOINT, 
+				&cnode, &ep);
 	if (ret) {
-		LCD_ERR("ep lookup");
+		LCD_DEBUG(LCD_DEBUG_ERR,
+			"ep lookup failed for cptr 0x%lx", 
+			cptr_val(LCD_CPTR_REPLY_ENDPOINT));
 		goto fail1;
 	}
 	/* do_send does put on ep; we're doing a reply */
@@ -611,63 +629,10 @@ int __lcd_reply(struct lcd *caller)
 	return 0;
 
 fail2:
+	__lcd_put_sync_endpoint(caller, cnode, ep);
 fail1:
 	return ret;
 }
-
-/* CHECK / DESTROY -------------------------------------------------- */
-
-void __lcd_sync_endpoint_check(struct lcd *lcd, struct lcd_sync_endpoint *e)
-{
-	int ret;
-	struct list_head *cursor, *next;
-	
-	/*
-	 * Lock the endpoint, and see if lcd is in its queues
-	 */
-	ret = mutex_lock_interruptible(&e->lock);
-	if (ret) {
-		LCD_ERR("interrupted");
-		goto out1;
-	}
-	
-	list_for_each_safe(cursor, next, &e->senders) {
-		if (cursor == &lcd->endpoint_queue) {
-			/*
-			 * Set xmit flag to fail so lcd knows
-			 */
-			atomic_set(&lcd->xmit_flag, LCD_XMIT_FAILED);
-			list_del_init(cursor);
-			goto out2;
-		}
-	}
-
-	list_for_each_safe(cursor, next, &e->receivers) {
-		if (cursor == &lcd->endpoint_queue) {
-			/*
-			 * Set xmit flag to fail so lcd knows
-			 */
-			atomic_set(&lcd->xmit_flag, LCD_XMIT_FAILED);
-			list_del_init(cursor);
-			goto out2;
-		}
-	}
-
-out2:
-	mutex_unlock(&e->lock);
-out1:
-	return;
-}
-
-void __lcd_sync_endpoint_destroy(struct lcd_sync_endpoint *e)
-{
-	/*
-	 * No one has a capability to the endpoint, so no one should
-	 * be in the queues; free e
-	 */
-	kfree(e);
-}
-
 
 /* INIT/EXIT -------------------------------------------------- */
 

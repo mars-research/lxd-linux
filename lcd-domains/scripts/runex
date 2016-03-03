@@ -1,0 +1,5 @@
+#! /bin/bash
+
+sudo dmesg -c > /dev/null
+sudo insmod build/test_mods/$@/boot/lcd_test_mod_$@_boot.ko
+sudo rmmod build/test_mods/$@/boot/lcd_test_mod_$@_boot.ko
