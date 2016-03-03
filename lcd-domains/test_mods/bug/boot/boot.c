@@ -29,7 +29,7 @@ static int boot_main(void)
 	/*
 	 * Create a new lcd
 	 */
-	ret = lcd_create_module_lcd(LCD_DIR("bug"),
+	ret = lcd_create_module_lcd(LCD_DIR("bug/lcd"),
 				"lcd_test_mod_bug_lcd",
 				&lcd,
 				&ctx);
