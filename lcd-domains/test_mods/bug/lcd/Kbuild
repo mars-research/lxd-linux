@@ -5,4 +5,5 @@ lcd_test_mod_bug_lcd-y              += lcd.o
 
 lcd_test_mod_bug_lcd-y              += $(LIBLCD)
 
-ccflags-y += $(ISOLATED_CC_FLAGS)
+# Optimizations *must* be turned off or this example won't work.
+ccflags-y += $(ISOLATED_CC_FLAGS) -O0
