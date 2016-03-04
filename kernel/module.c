@@ -3413,7 +3413,7 @@ static inline int is_arm_mapping_symbol(const char *str)
 	       && (str[2] == '\0' || str[2] == '.');
 }
 
-static const char *get_ksymbol(struct module *mod,
+const char *get_ksymbol(struct module *mod,
 			       unsigned long addr,
 			       unsigned long *size,
 			       unsigned long *offset)
@@ -3456,6 +3456,7 @@ static const char *get_ksymbol(struct module *mod,
 		*offset = addr - mod->symtab[best].st_value;
 	return mod->strtab + mod->symtab[best].st_name;
 }
+EXPORT_SYMBOL(get_ksymbol);
 
 /* For kallsyms to ask for address resolution.  NULL means not found.  Careful
  * not to lock to avoid deadlock on oopses, simply disable preemption. */
