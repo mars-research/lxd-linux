@@ -2308,6 +2308,27 @@ static bool is_core_symbol(const Elf_Sym *src, const Elf_Shdr *sechdrs,
 	return true;
 }
 
+static bool is_init_symbol(const Elf_Sym *src, const Elf_Shdr *sechdrs,
+			unsigned int shnum)
+{
+	const Elf_Shdr *sec;
+
+	if (src->st_shndx == SHN_UNDEF
+	    || src->st_shndx >= shnum
+	    || !src->st_name)
+		return false;
+
+	sec = sechdrs + src->st_shndx;
+	if (!(sec->sh_flags & SHF_ALLOC)
+#ifndef CONFIG_KALLSYMS_ALL
+	    || !(sec->sh_flags & SHF_EXECINSTR)
+#endif
+	    || !(sec->sh_entsize & INIT_OFFSET_MASK))
+		return false;
+
+	return true;
+}
+
 /*
  * We only allocate and copy the strings needed by the parts of symtab
  * we keep.  This is simple, but has the effect of making multiple
@@ -2352,7 +2373,8 @@ static void layout_symtab(struct module *mod, struct load_info *info)
 	pr_debug("\t%s\n", info->secstrings + strsect->sh_name);
 }
 
-static void add_kallsyms(struct module *mod, const struct load_info *info)
+static void add_kallsyms(struct module *mod, const struct load_info *info,
+			int for_lcd)
 {
 	unsigned int i, ndst;
 	const Elf_Sym *src;
@@ -2374,7 +2396,10 @@ static void add_kallsyms(struct module *mod, const struct load_info *info)
 	src = mod->symtab;
 	for (ndst = i = 0; i < mod->num_symtab; i++) {
 		if (i == 0 ||
-		    is_core_symbol(src+i, info->sechdrs, info->hdr->e_shnum)) {
+			is_core_symbol(src+i, info->sechdrs, info->hdr->e_shnum) ||
+			(for_lcd && is_init_symbol(src+i, 
+						info->sechdrs, 
+						info->hdr->e_shnum))) {
 			dst[ndst] = src[i];
 			dst[ndst++].st_name = s - mod->core_strtab;
 			s += strlcpy(s, &mod->strtab[src[i].st_name],
@@ -2388,7 +2413,8 @@ static inline void layout_symtab(struct module *mod, struct load_info *info)
 {
 }
 
-static void add_kallsyms(struct module *mod, const struct load_info *info)
+static void add_kallsyms(struct module *mod, const struct load_info *info,
+			int for_lcd)
 {
 }
 #endif /* CONFIG_KALLSYMS */
@@ -2998,7 +3024,8 @@ int __weak module_finalize(const Elf_Ehdr *hdr,
 	return 0;
 }
 
-static int post_relocation(struct module *mod, const struct load_info *info)
+static int post_relocation(struct module *mod, const struct load_info *info,
+			int for_lcd)
 {
 	/* Sort exception table now relocations are done. */
 	sort_extable(mod->extable, mod->extable + mod->num_exentries);
@@ -3008,7 +3035,7 @@ static int post_relocation(struct module *mod, const struct load_info *info)
 		       info->sechdrs[info->index.pcpu].sh_size);
 
 	/* Setup kallsyms-specific fields. */
-	add_kallsyms(mod, info);
+	add_kallsyms(mod, info, for_lcd);
 
 	/* Arch-specific module finalizing. */
 	return module_finalize(info->hdr, info->sechdrs, mod);
@@ -3121,11 +3148,9 @@ static int do_init_module(struct module *mod, int for_lcd)
 	module_put(mod);
 	trim_init_extable(mod);
 #ifdef CONFIG_KALLSYMS
-	if (!for_lcd) {
-		mod->num_symtab = mod->core_num_syms;
-		mod->symtab = mod->core_symtab;
-		mod->strtab = mod->core_strtab;
-	}
+	mod->num_symtab = mod->core_num_syms;
+	mod->symtab = mod->core_symtab;
+	mod->strtab = mod->core_strtab;
 #endif
 	if (!for_lcd) {
 		/* 
@@ -3283,7 +3308,7 @@ static int load_module(struct load_info *info, const char __user *uargs,
 	if (err < 0)
 		goto free_modinfo;
 
-	err = post_relocation(mod, info);
+	err = post_relocation(mod, info, for_lcd);
 	if (err < 0)
 		goto free_modinfo;
 
