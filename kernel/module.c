@@ -3121,9 +3121,11 @@ static int do_init_module(struct module *mod, int for_lcd)
 	module_put(mod);
 	trim_init_extable(mod);
 #ifdef CONFIG_KALLSYMS
-	mod->num_symtab = mod->core_num_syms;
-	mod->symtab = mod->core_symtab;
-	mod->strtab = mod->core_strtab;
+	if (!for_lcd) {
+		mod->num_symtab = mod->core_num_syms;
+		mod->symtab = mod->core_symtab;
+		mod->strtab = mod->core_strtab;
+	}
 #endif
 	if (!for_lcd) {
 		/* 
@@ -3456,6 +3458,7 @@ const char *get_ksymbol(struct module *mod,
 		*offset = addr - mod->symtab[best].st_value;
 	return mod->strtab + mod->symtab[best].st_name;
 }
+EXPORT_SYMBOL(get_ksymbol);
 
 /* For kallsyms to ask for address resolution.  NULL means not found.  Careful
  * not to lock to avoid deadlock on oopses, simply disable preemption. */
