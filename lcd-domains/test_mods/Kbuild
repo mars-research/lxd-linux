@@ -1,0 +1,37 @@
+#
+# Top-level test mods Kbuild file
+#
+# Some of these variables are exported from the top-level Makefile.
+#
+
+COMMON_CC_FLAGS= \
+	$(LCD_DOMAINS_CFLAGS) \
+	-I$(LCD_DOMAINS_TOP_SRC_DIR)/include \
+	-I$(LCD_DOMAINS_TOP_SRC_DIR)/arch/$(ARCH)/include
+
+		 
+export ISOLATED_CC_FLAGS= \
+	$(COMMON_CC_FLAGS) \
+	-I$(LIBLCD_BUILD_DIR)/libcap.install/include \
+	-I$(LCD_DOMAINS_TOP_SRC_DIR)/config/isolated \
+	-DLCD_ISOLATE \
+	-DCONFIG_LAZY_THC \
+	-DCPTR_CACHE_LOCK_PADDING_SIZE=8
+
+export NON_ISOLATED_CC_FLAGS= \
+	$(COMMON_CC_FLAGS) \
+	-I$(MICROKERNEL_BUILD_DIR)/libcap.install/include \
+	-I$(LCD_DOMAINS_TOP_SRC_DIR)/config/non_isolated
+
+# Examples
+
+obj-m += liblcd_test/
+obj-m += load/
+obj-m += ipc1/
+obj-m += ipc2/
+obj-m += async/
+obj-m += create_klcd/
+obj-m += glue_example/
+obj-m += string_example/
+obj-m += pmfs/
+obj-m += bug/
