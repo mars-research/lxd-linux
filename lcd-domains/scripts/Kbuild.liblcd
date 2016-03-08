@@ -39,12 +39,17 @@ lib-y += $(addprefix liblcd/lib/, \
 	hexdump.o \
 	reciprocal_div.o \
 	rbtree.o \
+	bitmap.o \
 	)
 
 lib-y += $(addprefix liblcd/mm/, \
 	slab.o \
 	slab_common.o \
 	util.o \
+	)
+
+lib-y += $(addprefix liblcd/kernel/irq/, \
+	manage.o \
 	)
 
 lib-y += liblcd/resolve.o

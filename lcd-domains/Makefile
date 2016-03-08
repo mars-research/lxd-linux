@@ -126,6 +126,8 @@ export LIBLCD_BUILD_DIR
 LIBLCD_DIRS= \
 	liblcd/lcd-domains \
 	liblcd/lcd-domains/async \
+	liblcd/kernel \
+	liblcd/kernel/irq \
 	liblcd/mm \
 	liblcd/lib \
 	libcap.build \
