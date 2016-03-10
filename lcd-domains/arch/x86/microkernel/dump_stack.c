@@ -120,7 +120,7 @@ static int do_one_trace(gva_t ptr, struct lcd_arch *lcd)
 	if (ret) { 
 		LCD_ERR("Failed to resolve guest gva 0x%lx into hva\n",
 			gva_val(ptr));
-		return ret;
+		goto exit;
 	}
 	/*
 	 * Resolve address on stack to hva
@@ -130,17 +130,16 @@ static int do_one_trace(gva_t ptr, struct lcd_arch *lcd)
 	if (ret) {
 		LCD_ERR("Failed to resolve guest addr 0x%lx into hva\n",
 			gva_val(addr));
-		return ret;
+		goto exit;
 	}
+exit:
+	return ret;
 }
 
 static void _show_trace(struct lcd_arch *lcd, gva_t sp,
 			gva_t __maybe_unused bp)
 {
-	hva_t stack_hva;
 	gva_t stack_bottom_gva = stack_trace_bottom(sp);
-	gva_t addr;
-	hva_t addr_hva;
 
 	printk("Warning: no frame pointers, stack might be innacurate\n");
 
