@@ -51,6 +51,7 @@ lib-y += $(addprefix liblcd/arch/x86/kernel/, \
 	irqinit.o \
 	entry_64.o \
 	irq.o \
+	irq_64.o \
 	)
 
 lib-y += $(addprefix liblcd/arch/x86/kernel/apic/, \
@@ -60,6 +61,7 @@ lib-y += $(addprefix liblcd/arch/x86/kernel/apic/, \
 lib-y += $(addprefix liblcd/kernel/irq/, \
 	manage.o \
 	irqdesc.o \
+	chip.o \
 	)
 
 lib-y += liblcd/resolve.o

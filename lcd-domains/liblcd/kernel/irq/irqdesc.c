@@ -8,10 +8,9 @@
  *
  */
 
-#if !defined(LCD_ISOLATE)
+#if defined(LCD_ISOLATE)
 #include <lcd_config/pre_hook.h>
 #endif
-
 
 #include <linux/irq.h>
 #include <linux/slab.h>
