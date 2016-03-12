@@ -47,9 +47,17 @@ lib-y += $(addprefix liblcd/mm/, \
 	slab_common.o \
 	util.o \
 	)
+lib-y += $(addprefix liblcd/arch/x86/kernel/, \
+	irqinit.o \
+	)
+
+lib-y += $(addprefix liblcd/arch/x86/kernel/apic/, \
+	io_apic.o \
+	)
 
 lib-y += $(addprefix liblcd/kernel/irq/, \
 	manage.o \
+	irqdesc.o \
 	)
 
 lib-y += liblcd/resolve.o
