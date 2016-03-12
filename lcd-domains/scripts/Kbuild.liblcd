@@ -49,6 +49,8 @@ lib-y += $(addprefix liblcd/mm/, \
 	)
 lib-y += $(addprefix liblcd/arch/x86/kernel/, \
 	irqinit.o \
+	entry_64.o \
+	irq.o \
 	)
 
 lib-y += $(addprefix liblcd/arch/x86/kernel/apic/, \

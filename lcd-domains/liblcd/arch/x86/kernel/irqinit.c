@@ -1,4 +1,4 @@
-#if !defined(LCD_ISOLATE)
+#if defined(LCD_ISOLATE)
 #include <lcd_config/pre_hook.h>
 #endif
 
@@ -201,9 +201,10 @@ void __init native_init_IRQ(void)
 {
 	int i;
 
+#if !defined(LCD_ISOLATE)
 	/* Execute any quirks before the call gates are initialised: */
 	x86_init.irqs.pre_vector_init();
-
+#endif 
 	apic_intr_init();
 
 	/*

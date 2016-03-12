@@ -20,7 +20,7 @@
  *	Paul Diefenbaugh	:	Added full ACPI support
  */
 
-#if !defined(LCD_ISOLATE)
+#if defined(LCD_ISOLATE)
 #include <lcd_config/pre_hook.h>
 #endif
 

@@ -7,7 +7,7 @@
  * This file contains driver APIs to the irq subsystem.
  */
 
-#if !defined(LCD_ISOLATE)
+#if defined(LCD_ISOLATE)
 #include <lcd_config/pre_hook.h>
 #endif
 
