@@ -64,6 +64,10 @@ lib-y += $(addprefix liblcd/kernel/irq/, \
 	chip.o \
 	)
 
+lib-y += $(addprefix liblcd/kernel/, \
+	softirq.o \
+	)
+
 lib-y += liblcd/resolve.o
 
 # code shared by kliblcd and isolated liblcd
