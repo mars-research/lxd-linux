@@ -1834,7 +1834,6 @@ __apicdebuginit(int) __maybe_unused print_ICs(void)
 {
 	if (apic_verbosity == APIC_QUIET)
 		return 0;
-
 	print_PIC();
 
 	/* don't print out if apic is not there */

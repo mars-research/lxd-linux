@@ -50,6 +50,7 @@
  * (these are usually mapped into the 0x30-0xff vector range)
  */
 
+#if !defined(LCD_ISOLATE)
 /*
  * IRQ2 is cascade interrupt to second interrupt controller
  */
@@ -58,6 +59,7 @@ static struct irqaction irq2 = {
 	.name = "cascade",
 	.flags = IRQF_NO_THREAD,
 };
+#endif
 
 DEFINE_PER_CPU(vector_irq_t, vector_irq) = {
 	[0 ... NR_VECTORS - 1] = -1,
@@ -217,9 +219,10 @@ void __init native_init_IRQ(void)
 		/* IA32_SYSCALL_VECTOR could be used in trap_init already. */
 		set_intr_gate(i, interrupt[i - FIRST_EXTERNAL_VECTOR]);
 	}
-
+#if !defined(LCD_ISOLATE)
 	if (!acpi_ioapic && !of_ioapic)
 		setup_irq(2, &irq2);
+#endif	
 
 #ifdef CONFIG_X86_32
 	irq_ctx_init(smp_processor_id());

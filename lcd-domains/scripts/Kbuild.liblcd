@@ -46,6 +46,7 @@ lib-y += $(addprefix liblcd/mm/, \
 	slab.o \
 	slab_common.o \
 	util.o \
+	percpu.o \
 	)
 lib-y += $(addprefix liblcd/arch/x86/kernel/, \
 	irqinit.o \
@@ -66,6 +67,7 @@ lib-y += $(addprefix liblcd/kernel/irq/, \
 
 lib-y += $(addprefix liblcd/kernel/, \
 	softirq.o \
+	kthread.o \
 	)
 
 lib-y += liblcd/resolve.o
@@ -87,4 +89,6 @@ ccflags-y += \
 	-I$(LCD_DOMAINS_TOP_SRC_DIR)/config/isolated \
 	-DCONFIG_LAZY_THC \
 	-DMODULE \
-	-DLCD_ISOLATE
+	-DLCD_ISOLATE 
+
+asflags-y += $(ccflags-y)

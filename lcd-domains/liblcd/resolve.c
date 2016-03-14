@@ -6,6 +6,7 @@
 #include <linux/ftrace_event.h>
 #include <linux/perf_event.h>
 #include <liblcd/liblcd.h>
+#include <linux/slab.h>
 
 #include <lcd_config/post_hook.h>
 
@@ -115,3 +116,49 @@ int printk(const char *fmt, ...)
 	va_end(args);
 	return 0;
 }
+
+/* APIC */
+unsigned int apic_verbosity;
+
+/* page_alloc.c */
+struct page *
+__alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order,
+			struct zonelist *zonelist, nodemask_t *nodemask)
+{
+	/*
+	 * For now, we ignore the node id (not numa aware).
+	 */
+	return lcd_alloc_pages((unsigned int) gfp_mask, order);
+}
+
+void * __alloc_bootmem(unsigned long size, unsigned long align,
+					unsigned long goal, unsigned long limit)
+{
+	printk(KERN_ALERT "__alloc_bootmem of %lu bytes with align:%lu, goal:%lu, limit:%lu\n", 
+			size, align, goal, limit);
+	BUG(); 
+	return kmalloc(size, GFP_KERNEL);
+}
+
+/**
+ * __alloc_bootmem_nopanic - allocate boot memory without panicking
+ * @size: size of the request in bytes
+ * @align: alignment of the region
+ * @goal: preferred starting address of the region
+ *
+ * The goal is dropped if it can not be satisfied and the allocation will
+ * fall back to memory below @goal.
+ *
+ * Allocation may happen on any node in the system.
+ *
+ * Returns NULL on failure.
+ */
+void * __init __alloc_bootmem_nopanic(unsigned long size, unsigned long align,
+					unsigned long goal)
+{
+	printk(KERN_ALERT "__alloc_bootmem_nopanic of %lu bytes with align:%lu, goal:%lu\n", 
+			size, align, goal);
+	BUG(); 
+	return kmalloc(size, GFP_KERNEL);
+}
+
