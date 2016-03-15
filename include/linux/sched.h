@@ -57,6 +57,7 @@ struct sched_param {
 struct lcd;
 struct cptr_cache;
 struct lcd_resource_tree;
+struct ptstate_t;
 
 #include <asm/processor.h>
 
@@ -1423,6 +1424,7 @@ struct task_struct {
 	struct lcd *lcd;
 	struct cptr_cache *cptr_cache;
 	struct lcd_resource_tree *lcd_resource_trees[2];
+	struct ptstate_t *ptstate;
 };
 
 /* Future-safe accessor for struct task_struct's cpus_allowed. */

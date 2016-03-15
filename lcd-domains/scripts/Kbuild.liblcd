@@ -24,12 +24,6 @@ lib-y += $(addprefix liblcd/lcd-domains/, \
 	sync_ipc.o \
 	)
 
-# Soon this will be module'd like libcap
-lib-y += $(addprefix liblcd/lcd-domains/async/, \
-	thc.o \
-	thcsync.o \
-	)
-
 lib-y += $(addprefix liblcd/lib/, \
 	find_next_bit.o \
 	kstrtox.o \
@@ -58,12 +52,4 @@ lib-y += $(addprefix common/, \
 # libcap is linked in with ar script
 
 # Extra includes
-ccflags-y += \
-	$(LCD_DOMAINS_CFLAGS) \
-	-I$(LCD_DOMAINS_TOP_SRC_DIR)/include \
-	-I$(LCD_DOMAINS_TOP_SRC_DIR)/arch/$(ARCH)/include \
-	-I$(LIBLCD_BUILD_DIR)/libcap.install/include \
-	-I$(LCD_DOMAINS_TOP_SRC_DIR)/config/isolated \
-	-DCONFIG_LAZY_THC \
-	-DMODULE \
-	-DLCD_ISOLATE
+ccflags-y += $(LIBLCD_CFLAGS)
