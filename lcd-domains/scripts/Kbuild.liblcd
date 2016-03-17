@@ -48,11 +48,17 @@ lib-y += $(addprefix liblcd/mm/, \
 	util.o \
 	percpu.o \
 	)
+
+lib-y += $(addprefix liblcd/arch/x86/lib/, \
+	delay.o \
+	)
+
 lib-y += $(addprefix liblcd/arch/x86/kernel/, \
 	irqinit.o \
 	entry_64.o \
 	irq.o \
 	irq_64.o \
+	traps.o \
 	)
 
 lib-y += $(addprefix liblcd/arch/x86/kernel/apic/, \
@@ -63,11 +69,13 @@ lib-y += $(addprefix liblcd/kernel/irq/, \
 	manage.o \
 	irqdesc.o \
 	chip.o \
+	resend.o \
 	)
 
 lib-y += $(addprefix liblcd/kernel/, \
 	softirq.o \
 	kthread.o \
+	cpu.o \
 	)
 
 lib-y += liblcd/resolve.o
@@ -89,6 +97,6 @@ ccflags-y += \
 	-I$(LCD_DOMAINS_TOP_SRC_DIR)/config/isolated \
 	-DCONFIG_LAZY_THC \
 	-DMODULE \
-	-DLCD_ISOLATE 
+	-DLCD_ISOLATE  
 
 asflags-y += $(ccflags-y)

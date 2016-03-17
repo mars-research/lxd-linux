@@ -77,8 +77,6 @@
 #define for_each_irq_pin(entry, head) \
 	for (entry = head; entry; entry = entry->next)
 
-
-
 /*
  *      Is the SiS APIC rmw bug present ?
  *      -1 = don't know, 0 = no, 1 = yes
@@ -1930,9 +1928,10 @@ void native_disable_io_apic(void)
 		 */
 		ioapic_write_entry(ioapic_i8259.apic, ioapic_i8259.pin, entry);
 	}
-
+#if !defined(LCD_ISOLATE)
 	if (cpu_has_apic || apic_from_smp_config())
 		disconnect_bsp_APIC(ioapic_i8259.pin != -1);
+#endif
 
 }
 
@@ -1952,6 +1951,7 @@ void disable_IO_APIC(void)
 	x86_io_apic_ops.disable();
 }
 
+#if !defined(LCD_ISOLATE)
 #ifdef CONFIG_X86_32
 /*
  * function to set the IO-APIC physical IDs based on the
@@ -2075,6 +2075,7 @@ void __init setup_ioapic_ids_from_mpc(void)
 	setup_ioapic_ids_from_mpc_nocheck();
 }
 #endif
+#endif /* LCD_ISOLATE */
 
 #if !defined(LCD_ISOLATE)
 int no_timer_check __initdata;
@@ -3411,6 +3412,7 @@ int io_apic_setup_irq_pin_once(unsigned int irq, int node,
 	return ret;
 }
 
+#if !defined(LCD_ISOLATE)
 static int __init io_apic_get_redir_entries(int ioapic)
 {
 	union IO_APIC_reg_01	reg_01;
@@ -3426,6 +3428,7 @@ static int __init io_apic_get_redir_entries(int ioapic)
 	 */
 	return reg_01.bits.entries + 1;
 }
+#endif
 
 static void __init probe_nr_irqs_gsi(void)
 {
@@ -3479,6 +3482,7 @@ int io_apic_set_pci_routing(struct device *dev, int irq,
 	return io_apic_setup_irq_pin_once(irq, node, irq_attr);
 }
 
+#if !defined(LCD_ISOLATE)
 #ifdef CONFIG_X86_32
 static int __init io_apic_get_unique_id(int ioapic, int apic_id)
 {
@@ -3578,7 +3582,9 @@ static u8 __init io_apic_unique_id(u8 id)
 	return find_first_zero_bit(used, 256);
 }
 #endif
+#endif /* LCD_ISOLATE */
 
+#if !defined(LCD_ISOLATE)
 static int __init io_apic_get_version(int ioapic)
 {
 	union IO_APIC_reg_01	reg_01;
@@ -3590,6 +3596,7 @@ static int __init io_apic_get_version(int ioapic)
 
 	return reg_01.bits.version;
 }
+#endif
 
 int acpi_get_override_irq(u32 gsi, int *trigger, int *polarity)
 {
@@ -3783,6 +3790,7 @@ int mp_find_ioapic_pin(int ioapic, u32 gsi)
 	return gsi - gsi_cfg->gsi_base;
 }
 
+#if !defined(LCD_ISOLATE)
 static __init int bad_ioapic(unsigned long address)
 {
 	if (nr_ioapics >= MAX_IO_APICS) {
@@ -3796,7 +3804,9 @@ static __init int bad_ioapic(unsigned long address)
 	}
 	return 0;
 }
+#endif
 
+#if !defined(LCD_ISOLATE)
 static __init int bad_ioapic_register(int idx)
 {
 	union IO_APIC_reg_00 reg_00;
@@ -3815,7 +3825,9 @@ static __init int bad_ioapic_register(int idx)
 
 	return 0;
 }
+#endif
 
+#if !defined(LCD_ISOLATE)
 void __init mp_register_ioapic(int id, u32 address, u32 gsi_base)
 {
 	int idx = 0;
@@ -3865,6 +3877,7 @@ void __init mp_register_ioapic(int id, u32 address, u32 gsi_base)
 
 	nr_ioapics++;
 }
+#endif
 
 /* Enable IOAPIC early just for system timer */
 void __init pre_init_apic_IRQ0(void)

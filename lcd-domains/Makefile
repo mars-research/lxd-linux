@@ -127,6 +127,7 @@ LIBLCD_DIRS= \
 	liblcd/lcd-domains \
 	liblcd/lcd-domains/async \
 	liblcd/kernel \
+	liblcd/arch/x86/lib \
 	liblcd/arch/x86/kernel \
 	liblcd/arch/x86/kernel/apic \
 	liblcd/kernel/irq \
