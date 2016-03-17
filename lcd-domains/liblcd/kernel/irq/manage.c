@@ -29,15 +29,17 @@
 #include <lcd_config/post_hook.h>
 #endif
 
-#ifdef CONFIG_IRQ_FORCED_THREADING_FALSE
+#ifdef CONFIG_IRQ_FORCED_THREADING
 __read_mostly bool force_irqthreads;
 
-static int __init setup_forced_irqthreads(char *arg)
+static int __init __maybe_unused setup_forced_irqthreads(char *arg)
 {
 	force_irqthreads = true;
 	return 0;
 }
+#if !defined(LCD_ISOLATE)
 early_param("threadirqs", setup_forced_irqthreads);
+#endif
 #endif
 
 /**
@@ -573,7 +575,6 @@ int can_request_irq(unsigned int irq, unsigned long irqflags)
 	return canrequest;
 }
 
-#if 0
 int __irq_set_trigger(struct irq_desc *desc, unsigned int irq,
 		      unsigned long flags)
 {
@@ -627,7 +628,6 @@ int __irq_set_trigger(struct irq_desc *desc, unsigned int irq,
 		unmask_irq(desc);
 	return ret;
 }
-#endif 
 
 #ifdef CONFIG_HARDIRQS_SW_RESEND
 int irq_set_parent(int irq, int parent_irq)

@@ -573,7 +573,7 @@ EXPORT_SYMBOL(tasklet_kill);
 /*
  * tasklet_hrtimer
  */
-
+#if !defined(LCD_ISOLATE)
 /*
  * The trampoline is called when the hrtimer expires. It schedules a tasklet
  * to run __tasklet_hrtimer_trampoline() which in turn will call the intended
@@ -601,6 +601,7 @@ static void __tasklet_hrtimer_trampoline(unsigned long data)
 	if (restart != HRTIMER_NORESTART)
 		hrtimer_restart(&ttimer->timer);
 }
+#endif
 
 /**
  * tasklet_hrtimer_init - Init a tasklet/hrtimer combo for softirq callbacks
@@ -613,11 +614,13 @@ void tasklet_hrtimer_init(struct tasklet_hrtimer *ttimer,
 			  enum hrtimer_restart (*function)(struct hrtimer *),
 			  clockid_t which_clock, enum hrtimer_mode mode)
 {
+#if !defined(LCD_ISOLATE)
 	hrtimer_init(&ttimer->timer, which_clock, mode);
 	ttimer->timer.function = __hrtimer_tasklet_trampoline;
 	tasklet_init(&ttimer->tasklet, __tasklet_hrtimer_trampoline,
 		     (unsigned long)ttimer);
 	ttimer->function = function;
+#endif
 }
 EXPORT_SYMBOL_GPL(tasklet_hrtimer_init);
 
@@ -763,7 +766,9 @@ void __init softirq_init(void)
 			INIT_LIST_HEAD(&per_cpu(softirq_work_list[i], cpu));
 	}
 
+#if !defined(LCD_ISOLATE)
 	register_hotcpu_notifier(&remote_softirq_cpu_notifier);
+#endif
 
 	open_softirq(TASKLET_SOFTIRQ, tasklet_action);
 	open_softirq(HI_SOFTIRQ, tasklet_hi_action);

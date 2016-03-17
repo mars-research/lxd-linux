@@ -9,6 +9,12 @@
 #include <linux/slab.h>
 #include <linux/context_tracking.h>
 #include <asm/traps.h>                  /* dotraplinkage, ...           */
+#include <liblcd/allocator.h>
+#include <asm/apic.h>
+#include <linux/hrtimer.h>
+#include <asm/processor.h>
+#include <linux/kernel_stat.h>
+
 #include <lcd_config/post_hook.h>
 
 //#include <linux/irq.h>
@@ -178,6 +184,7 @@ unsigned int apic_verbosity;
 int disable_apic;
 struct cpuinfo_x86 boot_cpu_data;
 //int first_system_vector = FIRST_SYSTEM_VECTOR;
+unsigned long io_apic_irqs;
 
 /* Context tracking */
 /* should be per-cpu */
@@ -219,6 +226,10 @@ void * __alloc_bootmem(unsigned long size, unsigned long align,
 	return kmalloc(size, GFP_KERNEL);
 }
 
+void __free_pages(struct page *page, unsigned int order) {
+	return lcd_free_pages(page, order);
+};
+
 /**
  * __alloc_bootmem_nopanic - allocate boot memory without panicking
  * @size: size of the request in bytes
@@ -241,16 +252,13 @@ void * __init __alloc_bootmem_nopanic(unsigned long size, unsigned long align,
 	return kmalloc(size, GFP_KERNEL);
 }
 
-
-void cpu_init(void) {
-	printk(KERN_ALERT "cpu_init is not implemented\n");
-	BUG(); 
-	return;
+void __init free_bootmem(unsigned long physaddr, unsigned long size) 
+{
+	kfree(__va(physaddr));
+	return; 
 }
 
 /* traps */
-/* should be per-cpu */
-int debug_stack_usage;
 
 /* dumpstack */
 void die(const char *str, struct pt_regs *regs, long err) {
@@ -304,4 +312,51 @@ int fixup_exception(struct pt_regs *regs)
 	return -1;
 }
 
+void force_sig(int sig, struct task_struct *p)
+{
+	printk(KERN_ALERT "force_sig is not implemented\n");
+	BUG(); 
+	return;
+}
 
+bool freezing_slow_path(struct task_struct *p)
+{
+	printk(KERN_ALERT "freezing_slow_path is not implemented\n");
+	BUG(); 
+	return false;
+};
+
+int hard_smp_processor_id(void)
+{
+	return read_apic_id();
+};
+
+void hrtimer_init(struct hrtimer *timer, clockid_t clock_id,
+                  enum hrtimer_mode mode)
+{
+	printk(KERN_ALERT "hrtimer_init is not implemented\n");
+	return;
+}
+
+void ignore_signals(struct task_struct *t)
+{
+	int i;
+
+	printk(KERN_ALERT "ignore_signals is not implemented\n");
+	for (i = 0; i < _NSIG; ++i)
+		t->sighand->action[i].sa.sa_handler = SIG_IGN;
+
+	flush_signals(t);
+	return;
+}
+
+/* Some per-cpu declarations, that don't work at the moment */
+
+// I should probably init it with a meaningful value
+// DEFINE_PER_CPU_SHARED_ALIGNED(struct tss_struct, init_tss) = INIT_TSS;
+DECLARE_PER_CPU_SHARED_ALIGNED(struct tss_struct, init_tss); 
+
+/* kstat */
+DEFINE_PER_CPU(struct kernel_stat, kstat);
+
+unsigned long loops_per_jiffy = (1<<12);

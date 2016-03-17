@@ -55,11 +55,13 @@ void ack_bad_irq(unsigned int irq)
 }
 
 #define irq_stats(x)		(&per_cpu(irq_stat, x))
+
 /*
  * /proc/interrupts printing for arch specific interrupts
  */
 int arch_show_interrupts(struct seq_file *p, int prec)
 {
+#if !defined(LCD_ISOLATE)	
 	int j;
 
 	seq_printf(p, "%*s: ", prec, "NMI");
@@ -136,6 +138,7 @@ int arch_show_interrupts(struct seq_file *p, int prec)
 #if defined(CONFIG_X86_IO_APIC)
 	seq_printf(p, "%*s: %10u\n", prec, "MIS", atomic_read(&irq_mis_count));
 #endif
+#endif /* LCD_ISOLATE */
 	return 0;
 }
 

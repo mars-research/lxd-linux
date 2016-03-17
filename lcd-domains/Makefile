@@ -130,6 +130,7 @@ LIBLCD_DIRS= \
 	liblcd/arch/x86/lib \
 	liblcd/arch/x86/kernel \
 	liblcd/arch/x86/kernel/apic \
+	liblcd/arch/x86/kernel/cpu \
 	liblcd/kernel/irq \
 	liblcd/mm \
 	liblcd/lib \

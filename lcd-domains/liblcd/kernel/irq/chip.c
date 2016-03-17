@@ -322,7 +322,11 @@ static bool irq_check_poll(struct irq_desc *desc)
 {
 	if (!(desc->istate & IRQS_POLL_INPROGRESS))
 		return false;
+#if defined(LCD_ISOLATE)
+	return false;
+#else
 	return irq_wait_for_poll(desc);
+#endif
 }
 
 /**

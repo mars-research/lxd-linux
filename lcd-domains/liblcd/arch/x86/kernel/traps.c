@@ -67,13 +67,12 @@
 #include <asm/x86_init.h>
 #include <asm/pgalloc.h>
 #include <asm/proto.h>
+#if defined(LCD_ISOLATE)
+gate_desc idt_table[NR_VECTORS] __page_aligned_data /* = { { { { 0, 0 } } }, } */;
+#endif /* LCD_ISOLATE */
 #else
 #include <asm/processor-flags.h>
 #include <asm/setup.h>
-
-#if defined(LCD_ISOLATE)
-#include <lcd_config/post_hook.h>
-#endif
 
 asmlinkage int system_call(void);
 
@@ -83,6 +82,11 @@ asmlinkage int system_call(void);
  */
 gate_desc idt_table[NR_VECTORS] __page_aligned_data = { { { { 0, 0 } } }, };
 #endif
+
+#if defined(LCD_ISOLATE)
+#include <lcd_config/post_hook.h>
+#endif
+
 
 DECLARE_BITMAP(used_vectors, NR_VECTORS);
 EXPORT_SYMBOL_GPL(used_vectors);
@@ -117,6 +121,11 @@ static int __kprobes
 do_trap_no_signal(struct task_struct *tsk, int trapnr, char *str,
 		  struct pt_regs *regs,	long error_code)
 {
+#if defined(LCD_ISOLATE)
+	printk("math_error is not implemented\n");
+	BUG();
+	return -1; 
+#else
 #ifdef CONFIG_X86_32
 	if (regs->flags & X86_VM_MASK) {
 		/*
@@ -141,6 +150,7 @@ do_trap_no_signal(struct task_struct *tsk, int trapnr, char *str,
 	}
 
 	return -1;
+#endif /* LCD_ISOLATE */
 }
 
 static void __kprobes
@@ -152,6 +162,11 @@ do_trap(int trapnr, int signr, char *str, struct pt_regs *regs,
 
 	if (!do_trap_no_signal(tsk, trapnr, str, regs, error_code))
 		return;
+#if defined(LCD_ISOLATE)
+	printk(KERN_ALERT "can't handle trap\n");
+	BUG(); 
+	return;
+#else
 	/*
 	 * We want error_code and trap_nr set for userspace faults and
 	 * kernelspace faults which result in die(), but not
@@ -179,6 +194,7 @@ do_trap(int trapnr, int signr, char *str, struct pt_regs *regs,
 		force_sig_info(signr, info, tsk);
 	else
 		force_sig(signr, tsk);
+#endif /* LCD_ISOLATE */	
 }
 
 #define DO_ERROR(trapnr, signr, str, name)				\
@@ -238,6 +254,11 @@ DO_ERROR_INFO(X86_TRAP_AC, SIGBUS, "alignment check", alignment_check,
 /* Runs on IST stack */
 dotraplinkage void do_stack_segment(struct pt_regs *regs, long error_code)
 {
+#if defined(LCD_ISOLATE)
+	printk("do_stack_segment is not implemented\n");
+	BUG();
+	return; 
+#else
 	enum ctx_state prev_state;
 
 	prev_state = exception_enter();
@@ -248,10 +269,16 @@ dotraplinkage void do_stack_segment(struct pt_regs *regs, long error_code)
 		preempt_conditional_cli(regs);
 	}
 	exception_exit(prev_state);
+#endif /* LCD_ISOLATE */
 }
 
 dotraplinkage void do_double_fault(struct pt_regs *regs, long error_code)
 {
+#if defined(LCD_ISOLATE)
+	printk("do_double_fault is not implemented\n");
+	BUG();
+	return; 
+#else
 	static const char str[] = "double fault";
 	struct task_struct *tsk = current;
 
@@ -268,12 +295,18 @@ dotraplinkage void do_double_fault(struct pt_regs *regs, long error_code)
 	 */
 	for (;;)
 		die(str, regs, error_code);
+#endif /* LCD_ISOLATE */	
 }
 #endif
 
 dotraplinkage void __kprobes
 do_general_protection(struct pt_regs *regs, long error_code)
 {
+#if defined(LCD_ISOLATE)
+	printk("do_general_protection is not implemented\n");
+	BUG();
+	return; 
+#else
 	struct task_struct *tsk;
 	enum ctx_state prev_state;
 
@@ -316,11 +349,17 @@ do_general_protection(struct pt_regs *regs, long error_code)
 	force_sig(SIGSEGV, tsk);
 exit:
 	exception_exit(prev_state);
+#endif /* LCD_ISOLATE */
 }
 
 /* May run on IST stack. */
 dotraplinkage void __kprobes notrace do_int3(struct pt_regs *regs, long error_code)
 {
+#if defined(LCD_ISOLATE)
+	printk("do_int3 is not implemented\n");
+	BUG();
+	return; 
+#else
 	enum ctx_state prev_state;
 
 #ifdef CONFIG_DYNAMIC_FTRACE
@@ -354,6 +393,7 @@ dotraplinkage void __kprobes notrace do_int3(struct pt_regs *regs, long error_co
 	debug_stack_usage_dec();
 exit:
 	exception_exit(prev_state);
+#endif /* LCD_ISOLATE */	
 }
 
 #ifdef CONFIG_X86_64
@@ -409,6 +449,11 @@ asmlinkage __kprobes struct pt_regs *sync_regs(struct pt_regs *eregs)
  */
 dotraplinkage void __kprobes do_debug(struct pt_regs *regs, long error_code)
 {
+#if defined(LCD_ISOLATE)
+	printk("do_debug is not implemented\n");
+	BUG();
+	return; 
+#else
 	struct task_struct *tsk = current;
 	enum ctx_state prev_state;
 	int user_icebp = 0;
@@ -486,6 +531,7 @@ dotraplinkage void __kprobes do_debug(struct pt_regs *regs, long error_code)
 
 exit:
 	exception_exit(prev_state);
+#endif /* LCD_ISOLATE */
 }
 
 /*
@@ -495,6 +541,11 @@ exit:
  */
 void math_error(struct pt_regs *regs, int error_code, int trapnr)
 {
+#if defined(LCD_ISOLATE)
+	printk("math_error is not implemented\n");
+	BUG();
+	return; 
+#else
 	struct task_struct *task = current;
 	siginfo_t info;
 	unsigned short err;
@@ -575,35 +626,54 @@ void math_error(struct pt_regs *regs, int error_code, int trapnr)
 		return;
 	}
 	force_sig_info(SIGFPE, &info, task);
+#endif
 }
 
 dotraplinkage void do_coprocessor_error(struct pt_regs *regs, long error_code)
 {
+#if defined(LCD_ISOLATE)
+	printk("do_coprocessor_error is not implemented\n");
+	BUG();
+	return; 
+#else
 	enum ctx_state prev_state;
 
 	prev_state = exception_enter();
 	math_error(regs, error_code, X86_TRAP_MF);
 	exception_exit(prev_state);
+#endif /* LCD_ISOLATE */
 }
 
 dotraplinkage void
 do_simd_coprocessor_error(struct pt_regs *regs, long error_code)
 {
+#if defined(LCD_ISOLATE)
+	printk("do_simd_coprocessor_error is not implemented\n");
+	BUG();
+	return; 
+#else
 	enum ctx_state prev_state;
 
 	prev_state = exception_enter();
 	math_error(regs, error_code, X86_TRAP_XF);
 	exception_exit(prev_state);
+#endif /* LCD_ISOLATE */
 }
 
 dotraplinkage void
 do_spurious_interrupt_bug(struct pt_regs *regs, long error_code)
 {
+#if defined(LCD_ISOLATE)
+	printk("do_spurious_interrupt_bug is not implemented\n");
+	BUG();
+	return; 
+#else
 	conditional_sti(regs);
 #if 0
 	/* No need to warn about this any longer. */
 	pr_info("Ignoring P6 Local APIC Spurious Interrupt Bug...\n");
 #endif
+#endif /* LCD_ISOLATE */
 }
 
 asmlinkage void __attribute__((weak)) smp_thermal_interrupt(void)
@@ -626,6 +696,9 @@ asmlinkage void __attribute__((weak)) smp_threshold_interrupt(void)
  */
 void math_state_restore(void)
 {
+#if defined(LCD_ISOLATE)
+	return;
+#else
 	struct task_struct *tsk = current;
 
 	if (!tsk_used_math(tsk)) {
@@ -655,12 +728,18 @@ void math_state_restore(void)
 	}
 
 	tsk->fpu_counter++;
+#endif
 }
 EXPORT_SYMBOL_GPL(math_state_restore);
 
 dotraplinkage void __kprobes
 do_device_not_available(struct pt_regs *regs, long error_code)
 {
+#if defined(LCD_ISOLATE)
+	printk("do_device_not_available is not implemented\n");
+	BUG();
+	return; 
+#else
 	enum ctx_state prev_state;
 
 	prev_state = exception_enter();
@@ -683,11 +762,17 @@ do_device_not_available(struct pt_regs *regs, long error_code)
 	conditional_sti(regs);
 #endif
 	exception_exit(prev_state);
+#endif /* LCD_ISOLATE */
 }
 
 #ifdef CONFIG_X86_32
 dotraplinkage void do_iret_error(struct pt_regs *regs, long error_code)
 {
+#if defined(LCD_ISOLATE)
+	printk("do_iret_error is not implemented\n");
+	BUG();
+	return; 
+#else
 	siginfo_t info;
 	enum ctx_state prev_state;
 
@@ -704,6 +789,7 @@ dotraplinkage void do_iret_error(struct pt_regs *regs, long error_code)
 			&info);
 	}
 	exception_exit(prev_state);
+#endif /* LCD_ISOLATE */
 }
 #endif
 

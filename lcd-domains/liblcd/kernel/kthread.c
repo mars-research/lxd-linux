@@ -155,6 +155,7 @@ void *kthread_data(struct task_struct *task)
  * inaccessible for any reason, %NULL is returned.  This function requires
  * that @task itself is safe to dereference.
  */
+#if !defined(LCD_ISOLATE)
 void *probe_kthread_data(struct task_struct *task)
 {
 	struct kthread *kthread = to_kthread(task);
@@ -163,6 +164,7 @@ void *probe_kthread_data(struct task_struct *task)
 	probe_kernel_read(&data, &kthread->data, sizeof(data));
 	return data;
 }
+#endif
 
 static void __kthread_parkme(struct kthread *self)
 {

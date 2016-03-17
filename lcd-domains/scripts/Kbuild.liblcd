@@ -40,6 +40,7 @@ lib-y += $(addprefix liblcd/lib/, \
 	reciprocal_div.o \
 	rbtree.o \
 	bitmap.o \
+	radix-tree.o \
 	)
 
 lib-y += $(addprefix liblcd/mm/, \
@@ -65,11 +66,17 @@ lib-y += $(addprefix liblcd/arch/x86/kernel/apic/, \
 	io_apic.o \
 	)
 
+lib-y += $(addprefix liblcd/arch/x86/kernel/cpu/, \
+	common.o \
+	)
+
+
 lib-y += $(addprefix liblcd/kernel/irq/, \
 	manage.o \
 	irqdesc.o \
 	chip.o \
 	resend.o \
+	handle.o \
 	)
 
 lib-y += $(addprefix liblcd/kernel/, \
@@ -97,6 +104,6 @@ ccflags-y += \
 	-I$(LCD_DOMAINS_TOP_SRC_DIR)/config/isolated \
 	-DCONFIG_LAZY_THC \
 	-DMODULE \
-	-DLCD_ISOLATE  
+	-DLCD_ISOLATE 
 
 asflags-y += $(ccflags-y)

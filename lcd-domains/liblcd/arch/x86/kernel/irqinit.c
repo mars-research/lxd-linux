@@ -77,31 +77,37 @@ int vector_used_by_percpu_irq(unsigned int vector)
 	return 0;
 }
 
+#if !defined(LCD_ISOLATE)
 void __init init_ISA_irqs(void)
 {
 	struct irq_chip *chip = legacy_pic->chip;
 	const char *name = chip->name;
 	int i;
 
+#if !defined(LCD_ISOLATE)
 #if defined(CONFIG_X86_64) || defined(CONFIG_X86_LOCAL_APIC)
 	init_bsp_APIC();
+#endif
 #endif
 	legacy_pic->init(0);
 
 	for (i = 0; i < legacy_pic->nr_legacy_irqs; i++)
 		irq_set_chip_and_handler_name(i, chip, handle_level_irq, name);
 }
+#endif
 
 void __init init_IRQ(void)
 {
+#if !defined(LCD_ISOLATE)
 	int i;
-
+#endif
 	/*
 	 * We probably need a better place for this, but it works for
 	 * now ...
 	 */
 	x86_add_irq_domains();
 
+#if !defined(LCD_ISOLATE)
 	/*
 	 * On cpu 0, Assign IRQ0_VECTOR..IRQ15_VECTOR's to IRQ 0..15.
 	 * If these IRQ's are handled by legacy interrupt-controllers like PIC,
@@ -112,6 +118,7 @@ void __init init_IRQ(void)
 	 */
 	for (i = 0; i < legacy_pic->nr_legacy_irqs; i++)
 		per_cpu(vector_irq, 0)[IRQ0_VECTOR + i] = i;
+#endif
 
 	x86_init.irqs.intr_init();
 }
@@ -121,6 +128,7 @@ void __init init_IRQ(void)
  */
 void setup_vector_irq(int cpu)
 {
+#if !defined(LCD_ISOLATE)
 #ifndef CONFIG_X86_IO_APIC
 	int irq;
 
@@ -133,6 +141,7 @@ void setup_vector_irq(int cpu)
 	 */
 	for (irq = 0; irq < legacy_pic->nr_legacy_irqs; irq++)
 		per_cpu(vector_irq, cpu)[IRQ0_VECTOR + irq] = irq;
+#endif
 #endif
 
 	__setup_vector_irq(cpu);
