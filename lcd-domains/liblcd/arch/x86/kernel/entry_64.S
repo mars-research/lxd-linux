@@ -545,6 +545,8 @@ ENTRY(save_paranoid)
 END(save_paranoid)
 	.popsection
 
+#if !defined(LCD_ISOLATE)
+
 /*
  * A newly forked process directly context switches into this address.
  *
@@ -839,6 +841,7 @@ int_restore_rest:
 	jmp int_with_check
 	CFI_ENDPROC
 END(system_call)
+#endif /* LCD_ISOLATE */
 
 	.macro FORK_LIKE func
 ENTRY(stub_\func)
@@ -885,6 +888,8 @@ ENTRY(ptregscall_common)
 	ret $REST_SKIP		/* pop extended registers */
 	CFI_ENDPROC
 END(ptregscall_common)
+
+#if !defined(LCD_ISOLATE)
 
 ENTRY(stub_execve)
 	CFI_STARTPROC
@@ -945,7 +950,7 @@ ENTRY(stub_x32_execve)
 END(stub_x32_execve)
 
 #endif
-
+#endif /* LCD_ISOLATE */
 /*
  * Build the entry stubs and pointer table with some assembler magic.
  * We pack 7 stubs into a single 32-byte chunk, which will fit in a

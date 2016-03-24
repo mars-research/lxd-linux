@@ -80,7 +80,6 @@ lib-y += $(addprefix liblcd/kernel/irq/, \
 	)
 
 lib-y += $(addprefix liblcd/kernel/, \
-	softirq.o \
 	kthread.o \
 	cpu.o \
 	)

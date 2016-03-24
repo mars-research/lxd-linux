@@ -183,7 +183,7 @@ void kthread_parkme(void)
 {
 	__kthread_parkme(to_kthread(current));
 }
-
+#if !defined(LCD_ISOLATE)
 static int kthread(void *_create)
 {
 	/* Copy data: it's on kthread's stack */
@@ -224,19 +224,20 @@ int tsk_fork_get_node(struct task_struct *tsk)
 #endif
 	return numa_node_id();
 }
+#endif /*LCD_ISOLATE */
 
-#if defined(LCD_ISOLATE)
+#if !defined(LCD_ISOLATE)
+
 /*
  * Create a kernel thread.
  */
+#if defined(LCD_ISOLATE)
 pid_t kernel_thread(int (*fn)(void *), void *arg, unsigned long flags)
 {
 	panic("UNIMPLEMENTED\n");
 	return -1; 
 }
-
 #endif
-
 
 static void create_kthread(struct kthread_create_info *create)
 {
@@ -252,6 +253,8 @@ static void create_kthread(struct kthread_create_info *create)
 		complete(&create->done);
 	}
 }
+
+#endif /* LCD_ISOLATE */
 
 /**
  * kthread_create_on_node - create a kthread.
@@ -275,6 +278,7 @@ static void create_kthread(struct kthread_create_info *create)
  *
  * Returns a task_struct or ERR_PTR(-ENOMEM).
  */
+#if !defined(LCD_ISOLATE)
 struct task_struct *kthread_create_on_node(int (*threadfn)(void *data),
 					   void *data, int node,
 					   const char namefmt[],
@@ -312,6 +316,7 @@ struct task_struct *kthread_create_on_node(int (*threadfn)(void *data),
 	return create.result;
 }
 EXPORT_SYMBOL(kthread_create_on_node);
+#endif /*LCD_ISOLATE */
 
 static void __kthread_bind(struct task_struct *p, unsigned int cpu, long state)
 {
@@ -351,6 +356,7 @@ EXPORT_SYMBOL(kthread_bind);
  * Description: This helper function creates and names a kernel thread
  * The thread will be woken and put into park mode.
  */
+#if !defined(LCD_ISOLATE)
 struct task_struct *kthread_create_on_cpu(int (*threadfn)(void *data),
 					  void *data, unsigned int cpu,
 					  const char *namefmt)
@@ -367,6 +373,7 @@ struct task_struct *kthread_create_on_cpu(int (*threadfn)(void *data),
 	kthread_park(p);
 	return p;
 }
+#endif /*LCD_ISOLATE */
 
 static void __kthread_unpark(struct task_struct *k, struct kthread *kthread)
 {
@@ -468,6 +475,7 @@ int kthread_stop(struct task_struct *k)
 }
 EXPORT_SYMBOL(kthread_stop);
 
+#if !defined(LCD_ISOLATE)
 int kthreadd(void *unused)
 {
 	struct task_struct *tsk = current;
@@ -678,3 +686,5 @@ void flush_kthread_worker(struct kthread_worker *worker)
 	wait_for_completion(&fwork.done);
 }
 EXPORT_SYMBOL_GPL(flush_kthread_worker);
+
+#endif /*LCD_ISOLATE */

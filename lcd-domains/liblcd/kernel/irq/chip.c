@@ -365,6 +365,8 @@ out_unlock:
 }
 EXPORT_SYMBOL_GPL(handle_simple_irq);
 
+#if !defined(LCD_ISOLATE)
+
 /*
  * Called unconditionally from handle_level_irq() and only for oneshot
  * interrupts from handle_fasteoi_irq()
@@ -423,7 +425,9 @@ out_unlock:
 	raw_spin_unlock(&desc->lock);
 }
 EXPORT_SYMBOL_GPL(handle_level_irq);
+#endif
 
+#if !defined(LCD_ISOLATE)
 #ifdef CONFIG_IRQ_PREFLOW_FASTEOI
 static inline void preflow_handler(struct irq_desc *desc)
 {
@@ -485,7 +489,7 @@ out:
 		goto out_eoi;
 	goto out_unlock;
 }
-
+#endif /* LCD_ISOLATE */
 /**
  *	handle_edge_irq - edge type IRQ handler
  *	@irq:	the interrupt number

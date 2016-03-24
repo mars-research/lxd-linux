@@ -350,6 +350,17 @@ void ignore_signals(struct task_struct *t)
 	return;
 }
 
+void schedule(void) {
+	return;
+};
+
+void __wake_up(wait_queue_head_t *q, unsigned int mode,
+                        int nr_exclusive, void *key)
+{
+	printk(KERN_ALERT "__wake_up is not implemented\n");
+	return;
+}
+
 /* Some per-cpu declarations, that don't work at the moment */
 
 // I should probably init it with a meaningful value
