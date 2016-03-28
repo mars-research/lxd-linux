@@ -44,4 +44,8 @@ int bdi_init_callee(void);
 
 int bdi_destroy_callee(void);
 
+int iget_locked_callee(void);
+
+int truncate_inode_pages_callee(void);
+
 #endif /* VFS_KLCD_INTERNAL_H */

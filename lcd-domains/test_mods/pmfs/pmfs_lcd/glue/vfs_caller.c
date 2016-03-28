@@ -350,6 +350,34 @@ fail1:
 	return NULL;
 }
 
+void truncate_inode_pages(struct address_space *mapping, loff_t lstart)
+{
+	struct address_space_container *a_container;
+	int ret;
+	/*
+	 * Marshal remote reference and lstart, do rpc.
+	 */
+	a_container = container_of(mapping, struct address_space_container,
+				address_space);
+	lcd_set_r0(TRUNCATE_INODE_PAGES);
+	lcd_set_r1(cptr_val(a_container->their_ref));
+	lcd_set_r2(lstart);
+
+	ret = lcd_sync_call(vfs_chnl);
+	if (ret) {
+		LIBLCD_ERR("truncate inode pages rpc failed");
+		goto fail1;
+	}
+	/*
+	 * Nothing else to do
+	 */
+	goto out;
+
+out:
+fail1:
+	return;
+}
+
 /* CALLEE FUNCTIONS (FUNCTION POINTERS) ------------------------------ */
 
 int super_block_alloc_inode_callee(void)

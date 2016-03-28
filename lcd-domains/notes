@@ -3,7 +3,7 @@
                  U boot_cpu_data
 X REDEF          U call_rcu_sched
                  U capable
-                 U clear_inode
+X GLUE           U clear_inode
                  U clear_nlink
                  U __copy_user_nocache
 X SUCK DONE      U crc16
@@ -28,7 +28,7 @@ X REDEF  DONE    U get_random_bytes
 X REDEF  DONE    U get_seconds
                  U __get_user_4
 X GLUE           U iget_failed
-X GLUE           U iget_locked
+X GLUE DONE      U iget_locked
                  U ihold
                  U inc_nlink
                  U init_special_inode
@@ -82,7 +82,7 @@ X NO-OP DONE     U __request_region
                  U set_nlink
                  U __supported_pte_mask
                  U touch_atime
-                 U truncate_inode_pages
+X GLUE DONE      U truncate_inode_pages (shouldn't do much)
 X GLUE           U unlock_new_inode
                  U vfs_follow_link
                  U vfs_readlink
@@ -100,6 +100,8 @@ glue for super ops
      alloc_inode DONE
      destroy_inode DONE
      put_super
+     evict_inode
+        -- assume i links > 0, truncate list is empty
 glue for mount fn pointer
 
 glue for pmfs_fill_super

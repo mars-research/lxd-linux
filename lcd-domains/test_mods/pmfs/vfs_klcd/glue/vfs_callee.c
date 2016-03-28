@@ -622,3 +622,34 @@ fail1:
 
 	return ret;
 }
+
+int truncate_inode_pages_callee(void)
+{
+	struct address_space_container *a_container;
+	int ret;
+	/*
+	 * Look up our private address space object
+	 */
+	ret = glue_cap_lookup_address_space_type(pmfs_cspace,
+						__cptr(lcd_r1()),
+						&a_container);
+	if (ret) {
+		LIBLCD_ERR("address space not found");
+		goto fail1;
+	}
+	/*
+	 * Invoke real function
+	 */
+	truncate_inode_pages(a_container->address_space, lcd_r2());
+	/*
+	 * Reply with nothing
+	 */
+	ret = 0;
+	goto out;
+
+out:
+fail1:
+	if (lcd_sync_reply())
+		LIBLCD_ERR("double fault?");
+	return ret;
+}
