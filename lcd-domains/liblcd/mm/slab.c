@@ -1563,7 +1563,7 @@ static void setup_node_pointer(struct kmem_cache *cachep)
 
 /* BEGIN LCD */
 /* needed to zero out BSS */
-extern struct task_struct fake;
+extern struct task_struct fake_task;
 /* END LCD */
 
 /*
@@ -1574,11 +1574,11 @@ void __init kmem_cache_init(void)
 {
 	int i;
 /* BEGIN LCD */
-/* need to zero out BSS data! */
+/* need to zero out BSS data! (actually, this may not be necessary) */
 	memset(&kmalloc_caches, 0, sizeof(kmalloc_caches));
 	memset(&kmem_cache, 0, sizeof(kmem_cache));
 	memset(&slab_state, 0, sizeof(slab_state));
-	memset(&fake, 0, sizeof(fake));
+	memset(&fake_task, 0, sizeof(fake_task));
 	memset(&init_kmem_cache_node, 0, sizeof(init_kmem_cache_node));
 /* END LCD */
 
