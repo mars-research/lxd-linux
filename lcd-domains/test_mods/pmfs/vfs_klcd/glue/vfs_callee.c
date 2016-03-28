@@ -72,7 +72,12 @@ void glue_vfs_exit(void)
 	glue_cap_exit();
 }
 
-/* FUNCTIONS -------------------------------------------------- */
+/* FUNCTION POINTERS ---------------------------------------- */
+
+
+
+
+/* CALLEE FUNCTIONS -------------------------------------------------- */
 
 int register_filesystem_callee(void)
 {
@@ -127,7 +132,7 @@ int register_filesystem_callee(void)
 	 * XXX: We don't bother passing fs name for now. Just hard code
 	 * it to "pmfs".
 	 */
-	fs_container->pmfs_ref = __cptr(lcd_r1());
+	fs_container->their_ref = __cptr(lcd_r1());
 	fs_container->file_system_type.name = "pmfs";
 	/*
 	 * Get cptr to pmfs channel (the channel we will use to invoke
@@ -140,7 +145,7 @@ int register_filesystem_callee(void)
 	 *
 	 * Pull out remote ref, and link with fs type
 	 */
-	module_container->pmfs_ref = __cptr(lcd_r2());
+	module_container->their_ref = __cptr(lcd_r2());
 	fs_container->file_system_type.owner = &module_container->module;
 
 	/*
@@ -320,7 +325,7 @@ int bdi_init_callee(void)
 	 * other unused fields.)
 	 *
 	 */
-	bdi_container->pmfs_ref = __cptr(lcd_r1());
+	bdi_container->their_ref = __cptr(lcd_r1());
 	bdi_container->backing_dev_info.ra_pages = lcd_r2();
 	bdi_container->backing_dev_info.capabilities = lcd_r3();
 

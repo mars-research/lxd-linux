@@ -145,8 +145,8 @@ int register_filesystem(struct file_system_type *fs)
 	/*
 	 * We expect a remote ref coming back
 	 */
-	fs_container->vfs_ref = __cptr(lcd_r1());
-	module_container->vfs_ref = __cptr(lcd_r2());
+	fs_container->their_ref = __cptr(lcd_r1());
+	module_container->their_ref = __cptr(lcd_r2());
 
 	/* Clear capability register */
 	lcd_set_cr0(CAP_CPTR_NULL);
@@ -175,8 +175,8 @@ int unregister_filesystem(struct file_system_type *fs)
 	/*
 	 * Pass remote refs to vfs's copies
 	 */
-	lcd_set_r1(cptr_val(fs_container->vfs_ref));
-	lcd_set_r2(cptr_val(module_container->vfs_ref));
+	lcd_set_r1(cptr_val(fs_container->their_ref));
+	lcd_set_r2(cptr_val(module_container->their_ref));
 
 	/* IPC CALL ---------------------------------------- */
 
@@ -251,7 +251,7 @@ int bdi_init(struct backing_dev_info *bdi)
 	/*
 	 * We expect a remote ref coming back
 	 */
-	bdi_container->bdi_ref = __cptr(lcd_r1());
+	bdi_container->their_ref = __cptr(lcd_r1());
 
 	/*
 	 * Pass back return value
@@ -273,7 +273,7 @@ void bdi_destroy(struct backing_dev_info *bdi)
 	/*
 	 * Pass remote ref to bdi's copy
 	 */
-	lcd_set_r1(cptr_val(bdi_container->bdi_ref));
+	lcd_set_r1(cptr_val(bdi_container->their_ref));
 
 	/* IPC CALL ---------------------------------------- */
 
@@ -316,7 +316,7 @@ int super_block_alloc_inode_callee(void)
 	/*
 	 * Invoke the real function
 	 */
-	inode = sb_container->sb->s_ops->alloc_inode(&sb_container->sb);
+	inode = sb_container->sb->s_ops->alloc_inode(&sb_container->super_block);
 	if (!inode) {
 		LIBLCD_ERR("error alloc'ing inode");
 		ret = -ENOMEM;
@@ -326,7 +326,7 @@ int super_block_alloc_inode_callee(void)
 		container_of(inode, struct pmfs_inode_vfs, vfs_inode),
 		struct pmfs_inode_vfs_container,
 		pmfs_inode_vfs);
-	inode_container->vfs_ref = lcd_r2();
+	inode_container->their_ref = lcd_r2();
 	/*
 	 * Create a remote reference for the new inode
 	 */
