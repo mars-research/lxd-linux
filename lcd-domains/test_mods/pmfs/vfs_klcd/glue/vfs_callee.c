@@ -561,3 +561,64 @@ out:
 		LIBLCD_ERR("double fault");
 	return ret;
 }
+
+int iget_locked_callee(void)
+{
+	int ret;
+	struct super_block_container *sb_container;
+	struct inode *inode;
+	struct pmfs_inode_vfs *inode_container;
+	cptr_t their_ref = CAP_CPTR_NULL;
+	/*
+	 * Look up our private sb
+	 */
+	ret = glue_cap_lookup_super_block_type(pmfs_cspace,
+					__cptr(lcd_r1()),
+					&sb_container);
+	if (ret) {
+		LIBLCD_ERR("super block lookup failed");
+		goto fail1;
+	}
+	/*
+	 * Invoke the real function
+	 *
+	 * XXX: For pmfs, we know it implements alloc_inode, so we
+	 * expect the alloc has already been done; so this is "bind"
+	 * for pmfs.
+	 */
+	inode = iget_locked(&sb_container->super_block, lcd_r2());
+	if (!inode) {
+		LIBLCD_ERR("iget locked failed");
+		goto fail2;
+	}
+	inode_container = container_of(
+		container_of(inode,
+			struct pmfs_inode_vfs,
+			vfs_inode),
+		struct pmfs_inode_vfs_container,
+		pmfs_inode_vfs);
+	their_ref = inode_container->their_ref;
+	/*
+	 * Reply with remote ref, and the following:
+	 *
+	 *     -- i_state
+	 *     -- i_nlink
+	 *     -- i_mode
+	 */
+	lcd_set_r1(inode->i_state);
+	lcd_set_r2(inode->i_nlink);
+	lcd_set_r3(inode->i_mode);
+
+	ret = 0;
+	goto out;
+
+out:
+fail2:
+fail1:
+	lcd_set_r0(cptr_val(their_ref));
+
+	if (lcd_sync_reply())
+		LIBLCD_ERR("double fault?");
+
+	return ret;
+}

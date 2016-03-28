@@ -27,6 +27,7 @@
 #define BDI_DESTROY 4
 #define SUPER_BLOCK_ALLOC_INODE 5
 #define SUPER_BLOCK_DESTROY_INODE 6
+#define IGET_LOCKED 7
 
 /* STRUCT DEFS -------------------------------------------------- */
 

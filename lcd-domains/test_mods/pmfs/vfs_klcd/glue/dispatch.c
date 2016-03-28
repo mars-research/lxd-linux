@@ -31,6 +31,10 @@ int dispatch_vfs_channel(struct lcd_sync_channel_group_item *channel)
 		return bdi_destroy_callee();
 		break;
 
+	case IGET_LOCKED:
+		return iget_locked_callee();
+		break;
+
 	default:
 		LIBLCD_ERR("unexpected function label %d",
 			lcd_r0());

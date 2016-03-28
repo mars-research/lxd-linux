@@ -96,6 +96,10 @@ X NO-OP  DONE    U wake_up_process
 
 current fsuid, fsgid, ns --> elide DONE
 
-glue for super ops -> put_super, alloc_inode, destroy_inode
-     alloc_inode caller glue will need to call inode_init_once
+glue for super ops
+     alloc_inode DONE
+     destroy_inode DONE
+     put_super
 glue for mount fn pointer
+
+glue for pmfs_fill_super

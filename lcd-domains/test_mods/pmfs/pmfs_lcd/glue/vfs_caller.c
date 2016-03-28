@@ -295,6 +295,61 @@ void bdi_destroy(struct backing_dev_info *bdi)
 	 */
 }
 
+struct inode *iget_locked(struct super_block *sb, unsigned long ino)
+{
+	struct super_block_container *sb_container;
+	struct pmfs_inode_vfs_container *inode_container;
+	int ret;
+	/*
+	 * Marshal arguments and do rpc
+	 */
+	sb_container = container_of(sb, struct super_block_container,
+				super_block);
+	lcd_set_r0(IGET_LOCKED);
+	lcd_set_r1(sb_container->their_ref);
+	lcd_set_r2(ino);
+
+	ret = lcd_sync_call(vfs_chnl);
+	if (ret) {
+		LIBLCD_ERR("iget locked failed");
+		goto fail1;
+	}
+	/*
+	 * Get return values.
+	 *
+	 * Bind on inode (look up), and unmarshal:
+	 *
+	 *   -- i_state
+	 *   -- i_nlink
+	 *   -- i_mode
+	 */
+	if (cap_cptr_is_null(__cptr(lcd_r0()))) {
+		LIBLCD_ERR("got null from iget locked");
+		goto fail2;
+	}
+	ret = glue_cap_lookup_pmfs_inode_vfs_type(vfs_cspace,
+						__cptr(lcd_r0()),
+						&inode_container);
+	if (ret) {
+		LIBLCD_ERR("failed to lookup inode");
+		goto fail3;
+	}
+	inode_container->pmfs_inode_vfs.i_state = lcd_r1();
+	inode_container->pmfs_inode_vfs.i_nlink = lcd_r2();
+	inode_container->pmfs_inode_vfs.i_mode = lcd_r3();
+	/*
+	 * Done
+	 */
+	return &inode_container->pmfs_inode_vfs.vfs_inode;
+
+fail3:
+	/* It would be nice if we could call iput or something, but we're
+	 * sort of sunk since we can't look up our private copy ... */
+fail2:
+fail1:
+	return NULL;
+}
+
 /* CALLEE FUNCTIONS (FUNCTION POINTERS) ------------------------------ */
 
 int super_block_alloc_inode_callee(void)
