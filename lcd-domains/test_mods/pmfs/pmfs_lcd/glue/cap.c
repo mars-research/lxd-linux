@@ -26,6 +26,8 @@ enum glue_type {
 	GLUE_TYPE_FILE_SYSTEM_TYPE,
 	GLUE_TYPE_BACKING_DEV_INFO,
 	GLUE_TYPE_MODULE,
+	GLUE_TYPE_SUPER_BLOCK,
+	GLUE_TYPE_PMFS_INODE_VFS,
 	GLUE_NR_TYPES,
 };
 
@@ -57,6 +59,21 @@ static struct type_ops_id glue_libcap_type_ops[GLUE_NR_TYPES] = {
 			.revoke = dummy_func,
 		}
 	},
+	{
+		{
+			.name = "struct super_block",
+			.delete = dummy_func,
+			.revoke = dummy_func,
+		}
+	},
+	{
+		{
+			.name = "struct pmfs_inode_vfs",
+			.delete = dummy_func,
+			.revoke = dummy_func,
+		}
+	},
+
 };
 
 int glue_cap_init(void)
@@ -158,6 +175,26 @@ int glue_cap_insert_module_type(
 				c_out);
 }
 
+int glue_cap_insert_super_block_type(
+	struct glue_cspace *cspace, 
+	struct super_block_container *super_block_container,
+	cptr_t *c_out)
+{
+	return glue_cspace_insert(cspace, super_block_container,  
+				glue_libcap_type_ops[GLUE_TYPE_SUPER_BLOCK].libcap_type,
+				c_out);
+}
+
+int glue_cap_insert_pmfs_inode_vfs_type(
+	struct glue_cspace *cspace, 
+	struct pmfs_vfs_inode_container *pmfs_inode_vfs_container,
+	cptr_t *c_out)
+{
+	return glue_cspace_insert(cspace, pmfs_inode_vfs_container,  
+				glue_libcap_type_ops[GLUE_TYPE_PMFS_INODE_VFS].libcap_type,
+				c_out);
+}
+
 int glue_cap_lookup_file_system_type_type(
 	struct glue_cspace *cspace, 
 	cptr_t c,
@@ -188,6 +225,28 @@ int glue_cap_lookup_module_type(
 		cspace, c, 
 		glue_libcap_type_ops[GLUE_TYPE_MODULE].libcap_type,
 		(void **)module_container);
+}
+
+int glue_cap_lookup_super_block_type(
+	struct glue_cspace *cspace, 
+	cptr_t c,
+	struct super_block_container **super_block_container)
+{
+	return glue_cspace_lookup(
+		cspace, c, 
+		glue_libcap_type_ops[GLUE_TYPE_SUPER_BLOCK].libcap_type,
+		(void **)super_block_container);
+}
+
+int glue_cap_lookup_pmfs_inode_vfs_type(
+	struct glue_cspace *cspace, 
+	cptr_t c,
+	struct pmfs_inode_vfs_container **pmfs_inode_vfs_container)
+{
+	return glue_cspace_lookup(
+		cspace, c, 
+		glue_libcap_type_ops[GLUE_TYPE_PMFS_INODE_VFS].libcap_type,
+		(void **)pmfs_inode_vfs_container);
 }
 
 void glue_cap_remove(

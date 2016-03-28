@@ -294,3 +294,109 @@ void bdi_destroy(struct backing_dev_info *bdi)
 	 * (no return value)
 	 */
 }
+
+/* CALLEE FUNCTIONS (FUNCTION POINTERS) ------------------------------ */
+
+int super_block_alloc_inode_callee(void)
+{
+	struct super_block_container *sb_container;
+	struct pmfs_inode_vfs_container *inode_container;
+	struct inode *inode;
+	cptr_t my_ref = CAP_CPTR_NULL;
+	int ret;
+	/*
+	 * Get our private struct sb
+	 */
+	ret = glue_cap_lookup_super_block_type(vfs_cspace, __cptr(lcd_r1()),
+					&sb_container);
+	if (ret) {
+		LIBLCD_ERR("error looking up super block");
+		goto fail1;
+	}
+	/*
+	 * Invoke the real function
+	 */
+	inode = sb_container->sb->s_ops->alloc_inode(&sb_container->sb);
+	if (!inode) {
+		LIBLCD_ERR("error alloc'ing inode");
+		ret = -ENOMEM;
+		goto fail2;
+	}
+	inode_container = container_of(
+		container_of(inode, struct pmfs_inode_vfs, vfs_inode),
+		struct pmfs_inode_vfs_container,
+		pmfs_inode_vfs);
+	inode_container->vfs_ref = lcd_r2();
+	/*
+	 * Create a remote reference for the new inode
+	 */
+	ret = glue_cap_insert_pmfs_inode_vfs_type(vfs_cspace,
+						inode_container,
+						&my_ref);
+	if (ret) {
+		LIBLCD_ERR("error creating ref");
+		goto fail3;
+	}
+	inode_container->my_ref = my_ref;
+	/*
+	 * Respond
+	 */
+	ret = 0;
+	goto reply;
+
+fail3:
+	sb_container->sb->s_ops->destroy_inode(inode);
+fail2:
+fail1:
+reply:
+	lcd_set_r0(cptr_val(my_ref));
+	if (lcd_sync_reply())
+		LIBLCD_ERR("double fault?");
+	return ret;
+}
+
+int super_block_destroy_inode_callee(void)
+{
+	struct super_block_container *sb_container;
+	struct pmfs_inode_vfs_container *inode_container;
+	cptr_t my_ref;
+	int ret;
+	/*
+	 * Get our private struct sb
+	 */
+	ret = glue_cap_lookup_super_block_type(vfs_cspace, __cptr(lcd_r1()),
+					&sb_container);
+	if (ret) {
+		LIBLCD_ERR("error looking up super block");
+		goto fail1;
+	}
+	/*
+	 * Get our private struct inode
+	 */
+	my_ref = __cptr(lcd_r2());
+	ret = glue_cap_lookup_pmfs_inode_vfs_type(vfs_cspace, my_ref,
+						&inode_container);
+	if (ret) {
+		LIBLCD_ERR("error looking up inode");
+		goto fail2;
+	}
+	/*
+	 * Invoke the real function
+	 */
+	sb_container->sb->s_ops->destroy_inode(
+		inode_container->inode.vfs_inode);
+	/*
+	 * Remove our private copy from the cspace
+	 */
+	glue_cap_remove(vfs_cspace, my_ref);
+
+	ret = 0;
+	goto reply;
+
+fail2:
+fail1:
+reply:
+	if (lcd_sync_reply())
+		LIBLCD_ERR("double fault?");
+	return ret;
+}

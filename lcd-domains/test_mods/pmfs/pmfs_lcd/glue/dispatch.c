@@ -13,5 +13,13 @@
 
 int dispatch_fs_channel(struct lcd_sync_channel_group_item *chnl)
 {
-	return 0; /* no op for now */
+	switch (lcd_r0()) {
+	case SUPER_BLOCK_ALLOC_INODE:
+		return super_block_alloc_inode_callee();
+	case SUPER_BLOCK_DESTROY_INODE:
+		return super_block_destroy_inode_callee();
+	default:
+		LIBLCD_ERR("unexpected function tag %d", lcd_r0());
+		return -EINVAL;
+	}
 }

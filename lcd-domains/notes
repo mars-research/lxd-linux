@@ -1,7 +1,7 @@
                  U arch_get_unmapped_area_sz
                  U autoremove_wake_function
                  U boot_cpu_data
-                 U call_rcu_sched
+X REDEF          U call_rcu_sched
                  U capable
                  U clear_inode
                  U clear_nlink
@@ -96,5 +96,6 @@ X NO-OP  DONE    U wake_up_process
 
 current fsuid, fsgid, ns --> elide DONE
 
-glue for super ops -> put_super
+glue for super ops -> put_super, alloc_inode, destroy_inode
+     alloc_inode caller glue will need to call inode_init_once
 glue for mount fn pointer

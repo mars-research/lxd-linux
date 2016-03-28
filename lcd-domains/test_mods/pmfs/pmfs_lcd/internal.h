@@ -23,6 +23,8 @@
 #define UNREGISTER_FS 2
 #define BDI_INIT 3
 #define BDI_DESTROY 4
+#define SUPER_BLOCK_ALLOC_INODE 5
+#define SUPER_BLOCK_DESTROY_INODE 6
 
 /* STRUCT DEFS -------------------------------------------------- */
 
@@ -46,6 +48,18 @@ struct module_container {
 	cptr_t vfs_ref;
 };
 
+struct super_block_container {
+	struct super_block super_block;
+	cptr_t my_ref;
+	cptr_t vfs_ref;
+};
+
+struct pmfs_inode_vfs_container {
+	struct pmfs_inode_vfs pmfs_inode_vfs;
+	cptr_t my_ref;
+	cptr_t vfs_ref;
+};
+
 /* FUNCTIONS -------------------------------------------------- */
 
 int dispatch_fs_channel(struct lcd_sync_channel_group_item *chnl);
@@ -53,6 +67,10 @@ int dispatch_fs_channel(struct lcd_sync_channel_group_item *chnl);
 int glue_vfs_init(cptr_t _vfs_channel, struct lcd_sync_channel_group *group);
 
 void glue_vfs_exit(void);
+
+int super_block_alloc_inode_callee(void);
+
+int super_block_destroy_inode_callee(void);
 
 /* CSPACES ------------------------------------------------------------ */
 
@@ -79,6 +97,16 @@ int glue_cap_insert_module_type(
 	struct module_container *module_container,
 	cptr_t *c_out);
 
+int glue_cap_insert_super_block_type(
+	struct glue_cspace *cspace, 
+	struct super_block_container *super_block_container,
+	cptr_t *c_out);
+
+int glue_cap_insert_pmfs_inode_vfs_type(
+	struct glue_cspace *cspace, 
+	struct pmfs_vfs_inode_container *pmfs_inode_vfs_container,
+	cptr_t *c_out);
+
 int glue_cap_lookup_file_system_type_type(
 	struct glue_cspace *cspace, 
 	cptr_t c,
@@ -93,6 +121,17 @@ int glue_cap_lookup_module_type(
 	struct glue_cspace *cspace, 
 	cptr_t c,
 	struct module_container **module_container);
+
+int glue_cap_lookup_super_block_type(
+	struct glue_cspace *cspace, 
+	cptr_t c,
+	struct super_block_container **super_block_container);
+
+int glue_cap_lookup_pmfs_inode_vfs_type(
+	struct glue_cspace *cspace, 
+	cptr_t c,
+	struct pmfs_inode_vfs_container **pmfs_inode_vfs_container);
+
 
 void glue_cap_remove(
 	struct glue_cspace *cspace, 
