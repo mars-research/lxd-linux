@@ -378,6 +378,37 @@ fail1:
 	return;
 }
 
+void clear_inode(struct inode *inode)
+{
+	struct pmfs_inode_vfs_container *inode_container;
+	int ret;
+	/*
+	 * Marshal remote ref, and do rpc.
+	 */
+	inode_container = container_of(
+		container_of(inode,
+			struct pmfs_inode_vfs,
+			vfs_inode),
+		struct pmfs_inode_vfs_container,
+		pmfs_inode_vfs);
+	lcd_set_r0(CLEAR_INODE);
+	lcd_set_r1(cptr_val(inode_container->their_ref));
+	
+	ret = lcd_sync_call(vfs_chnl);
+	if (ret) {
+		LIBLCD_ERR("lcd call failed");
+		goto fail1;
+	}
+	/*
+	 * No reply stuff
+	 */
+	goto out;
+
+out:
+fail1:
+	return;
+}
+
 /* CALLEE FUNCTIONS (FUNCTION POINTERS) ------------------------------ */
 
 int super_block_alloc_inode_callee(void)

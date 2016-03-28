@@ -48,4 +48,6 @@ int iget_locked_callee(void);
 
 int truncate_inode_pages_callee(void);
 
+int clear_inode_callee(void);
+
 #endif /* VFS_KLCD_INTERNAL_H */

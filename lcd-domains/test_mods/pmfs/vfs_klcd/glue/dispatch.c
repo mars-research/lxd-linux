@@ -39,6 +39,10 @@ int dispatch_vfs_channel(struct lcd_sync_channel_group_item *channel)
 		return truncate_inode_pages_callee();
 		break;
 
+	case CLEAR_INODE:
+		return clear_inode_callee();
+		break;
+
 	default:
 		LIBLCD_ERR("unexpected function label %d",
 			lcd_r0());

@@ -3,7 +3,7 @@
                  U boot_cpu_data
 X REDEF          U call_rcu_sched
                  U capable
-X GLUE           U clear_inode
+X GLUE DONE      U clear_inode
                  U clear_nlink
                  U __copy_user_nocache
 X SUCK DONE      U crc16
@@ -105,3 +105,5 @@ glue for super ops
 glue for mount fn pointer
 
 glue for pmfs_fill_super
+
+Also todo: make sure containers are set up properly

@@ -29,6 +29,7 @@
 #define SUPER_BLOCK_DESTROY_INODE 6
 #define IGET_LOCKED 7
 #define TRUNCATE_INODE_PAGES 8
+#define CLEAR_INODE 9
 
 /* STRUCT DEFS -------------------------------------------------- */
 
