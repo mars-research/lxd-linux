@@ -17,12 +17,14 @@
 struct super_block_alloc_inode_hidden_args {
 	struct super_block_container *super_block_container;
 	struct glue_cspace *cspace;
+	cptr_t channel;
 	struct lcd_trampoline_handle *t_handle;
 };
 
 struct super_block_destroy_inode_hidden_args {
 	struct super_block_container *super_block_container;
 	struct glue_cspace *cspace;
+	cptr_t channel;
 	struct lcd_trampoline_handle *t_handle;
 };
 

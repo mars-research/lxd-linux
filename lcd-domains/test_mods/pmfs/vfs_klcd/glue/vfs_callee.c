@@ -74,8 +74,147 @@ void glue_vfs_exit(void)
 
 /* FUNCTION POINTERS ---------------------------------------- */
 
+struct inode* 
+noinline
+super_block_alloc_inode(struct super_block *super_block,
+			struct super_block_container *super_block_container,
+			struct glue_cspace *cspace,
+			cptr_t channel)
+{
+	struct pmfs_inode_vfs_container *inode_container;
+	int ret;
+	/*
+	 * Create our own private copy and ref
+	 */
+	inode_container = kzalloc(sizeof(*inode_container), GFP_NOFS);
+	if (!inode_container) {
+		LIBLCD_ERR("kzalloc inode failed");
+		goto fail1;
+	}
+	ret = glue_cap_insert_pmfs_inode_vfs_type(
+		pmfs_cspace,
+		inode_container,
+		&inode_container->my_ref);
+	if (ret) {
+		LIBLCD_ERR("cap insert failed");
+		goto fail2;
+	}
+	/*
+	 * Invoke remote alloc inode
+	 */
+	lcd_set_r0(SUPER_BLOCK_ALLOC_INODE);
+	lcd_set_r1(cptr_val(super_block_container->their_ref));
+	lcd_set_r2(cptr_val(inode_container->my_ref));
+	ret = lcd_sync_call(channel);
+	if (ret) {
+		LIBLCD_ERR("rpc failed");
+		goto fail3;
+	}
+	/*
+	 * Get remote ref from callee
+	 */
+	if (cap_cptr_is_null(__cptr(lcd_r0()))) {
+		LIBLCD_ERR("got null from callee");
+		goto fail4;
+	}
+	inode_container->their_ref = __cptr(lcd_r0());
+	/*
+	 * HACK: Invoke inode_init_once on our private copy
+	 */
+	inode_init_once(inode_container->pmfs_inode_vfs.vfs_inode);
+	/*
+	 * Return inode
+	 */
+	return &inode_container->pmfs_inode.vfs_inode;
 
+fail4:
+fail3:
+fail2:
+	kfree(inode_container);
+fail1:
+	return NULL;
+}
 
+LCD_TRAMPOLINE_DATA(super_block_alloc_inode_trampoline);
+struct inode * 
+LCD_TRAMPOLINE_LINKAGE(super_block_alloc_inode_trampoline)
+super_block_alloc_inode_trampoline(struct super_block *super_block)
+{
+	struct inode* (*volatile super_block_alloc_inode_p)(
+		struct super_block *,
+		struct super_block_container *,
+		struct glue_cspace *,
+		cptr_t channel)
+	struct super_block_alloc_inode_hidden_args *hidden_args;
+
+	LCD_TRAMPOLINE_PROLOGUE(hidden_args, 
+				super_block_alloc_inode_trampoline);
+
+	super_block_alloc_inode_p = super_block_alloc_inode;
+
+	return super_block_alloc_inode_p(super_block,
+					hidden_args->super_block_container,
+					hidden_args->cspace,
+					hidden_args->channel);
+}
+
+void
+noinline
+super_block_destroy_inode(struct inode *inode,
+			struct super_block_container *super_block_container,
+			struct glue_cspace *cspace,
+			cptr_t channel)
+{
+	struct pmfs_inode_vfs_container *inode_container;
+	int ret;
+	/*
+	 * Call remote destroy inode
+	 */
+	lcd_set_r0(SUPER_BLOCK_DESTROY_INODE);
+	lcd_set_r1(cptr_val(super_block_container->their_ref));
+	lcd_set_r2(cptr_val(inode_container->their_ref));
+	ret = lcd_sync_call(channel);
+	if (ret) {
+		LIBLCD_ERR("error calling remote destroy inode");
+		goto fail1;
+	}
+
+	/* Done */
+	goto out;
+
+out:
+fail1:
+	/*
+	 * Remove our copy from cspace, and destroy it
+	 */
+	glue_cap_remove(pmfs_cspace, inode_container->my_ref);
+	kfree(inode_container);
+
+	return;
+}
+
+LCD_TRAMPOLINE_DATA(super_block_destroy_inode_trampoline);
+void
+LCD_TRAMPOLINE_LINKAGE(super_block_destroy_inode_trampoline)
+super_block_destroy_inode_trampoline(struct inode *inode)
+{
+	void (*volatile super_block_destroy_inode_p)(
+		struct inode *,
+		struct super_block_container *,
+		struct glue_cspace *,
+		cptr_t);
+	struct super_block_alloc_inode_hidden_args *hidden_args;
+
+	LCD_TRAMPOLINE_PROLOGUE(hidden_args, 
+				super_block_destroy_inode_trampoline);
+
+	super_block_destroy_inode_p = super_block_destroy_inode;
+
+	super_block_destroy_inode_p(super_block,
+				hidden_args->super_block_container,
+				hidden_args->cspace,
+				hidden_args->channel);
+}
 
 /* CALLEE FUNCTIONS -------------------------------------------------- */
 
