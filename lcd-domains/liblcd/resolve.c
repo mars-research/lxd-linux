@@ -163,3 +163,45 @@ void __wake_up(wait_queue_head_t *q, unsigned int mode, int nr, void *key)
 {
 	return;
 }
+
+/* IOREMAPs -------------------------------------------------- */
+
+void *ioremap_cache(resource_size_t phys_addr, unsigned long size)
+{
+	return lcd_ioremap_cache(phys_addr, size);
+}
+
+void *ioremap_cache_ro(resource_size_t phys_addr, unsigned long size)
+{
+	return lcd_ioremap_cache(phys_addr, size);
+}
+
+void *ioremap_hpage_cache(resource_size_t phys_addr, unsigned long size)
+{
+	return lcd_ioremap_cache(phys_addr, size);
+}
+
+void *ioremap_hpage_cache_ro(resource_size_t phys_addr, unsigned long size)
+{
+	return lcd_ioremap_cache(phys_addr, size);
+}
+
+void iounmap(void *addr)
+{
+	lcd_iounmap(addr);
+}
+
+void __release_region(struct resource *parent, resource_size_t start,
+		resource_size_t n)
+{
+	return;
+}
+
+struct resource iomem_resource;
+struct resource fake_resource;
+struct resource * __request_region(struct resource *parent,
+				resource_size_t start, resource_size_t n,
+				const char *name, int flags)
+{
+	return &fake_resource;
+}
