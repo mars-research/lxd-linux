@@ -36,6 +36,7 @@
 #define D_MAKE_ROOT 13
 #define MOUNT_NODEV_FILL_SUPER 14
 #define MOUNT_NODEV 15
+#define FILE_SYSTEM_TYPE_MOUNT 16
 
 /* STRUCT DEFS -------------------------------------------------- */
 

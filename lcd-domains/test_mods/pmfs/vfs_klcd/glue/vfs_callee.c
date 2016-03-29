@@ -548,6 +548,113 @@ mount_nodev_fill_super_trampoline(struct super_block *super_block,
 					hidden_args->channel);
 }
 
+struct dentry *
+noinline
+file_system_type_mount(struct file_system_type *fs_type,
+		int flags,
+		const char *dev_name,
+		void *data,
+		struct file_system_type_container *fs_container,
+		struct glue_cspace *cspace,
+		cptr_t channel)
+{
+	int ret;
+	cptr_t dentry_ref;
+	struct dentry *dentry = NULL;
+	struct dentry_container *dentry_container;
+	cptr_t data_cptr;
+	unsigned int mem_order;
+	unsigned long data_offset;
+	/*
+	 * Volunteer memory that contains void *data
+	 */
+	ret = setup_data(data, &data_cptr, &mem_order, &data_offset);
+	if (ret) {
+		LIBLCD_ERR("error volunteering void *data arg");
+		goto fail1;
+	}
+	/*
+	 * Marshal:
+	 *
+	 *       -- fs type ref
+	 *       -- flags
+	 *       -- void *data stuff
+	 * XXX:  -- skip dev_name (pmfs doesn't use it)
+	 */
+	lcd_set_r0(FILE_SYSTEM_TYPE_MOUNT);
+	lcd_set_r1(cptr_val(fs_container->their_ref));
+	lcd_set_r2(flags);
+	lcd_set_cr0(data_cptr);
+	lcd_set_r3(mem_order);
+	lcd_set_r4(data_offset);
+	/*
+	 * Do rpc
+	 */
+	ret = lcd_sync_call(channel);
+	if (ret) {
+		LIBLCD_ERR("call error");
+		goto fail2;
+	}
+	/*
+	 * Unmarshal dentry
+	 */
+	ret = glue_cap_lookup_dentry_type(pmfs_cspace,
+					__cptr(lcd_r0()),
+					&dentry_container);
+	if (ret) {
+		LIBLCD_ERR("couldn't find dentry");
+		goto fail3;
+	}
+	dentry = &dentry_container->dentry;
+	/*
+	 * Unvolunteer void *data
+	 */
+	unsetup_data(data_cptr);
+	/*
+	 * Done
+	 */
+	goto out;
+
+fail3:
+fail2:
+	unsetup_data(data_cptr);
+fail1:
+out:
+	return dentry;
+}
+
+LCD_TRAMPOLINE_DATA(file_system_type_mount_trampoline);
+struct dentry *
+LCD_TRAMPOLINE_LINKAGE(file_system_type_mount_trampoline)
+file_system_type_mount_trampoline(struct file_system_type *fs_type,
+				int flags,
+				const char *dev_name,
+				void *data)
+{
+	struct dentry* (*volatile file_system_type_mount_p)(
+		struct file_system_type *,
+		int,
+		const char *,
+		void *,
+		struct file_system_type_container *,
+		struct glue_cspace *,
+		cptr_t)
+	struct file_system_type_mount_hidden_args *hidden_args;
+
+	LCD_TRAMPOLINE_PROLOGUE(hidden_args, 
+				file_system_type_mount_trampoline);
+
+	file_system_type_mount_p = file_system_type_mount;
+
+	return file_system_type_mount_p(fs_type,
+					flags,
+					dev_name,
+					data,
+					hidden_args->file_system_type_container,
+					hidden_args->cspace,
+					hidden_args->channel);
+}
+
 /* CALLEE FUNCTIONS -------------------------------------------------- */
 
 int register_filesystem_callee(void)

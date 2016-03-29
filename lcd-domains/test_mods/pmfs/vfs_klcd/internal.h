@@ -42,6 +42,13 @@ struct mount_nodev_fill_super_hidden_args {
 	struct lcd_trampoline_handle *t_handle;
 };
 
+struct file_system_type_mount_hidden_args {
+	struct file_system_type_mount_container *file_system_type_mount_container;
+	struct glue_cspace *cspace;
+	cptr_t channel;
+	struct lcd_trampoline_handle *t_handle;
+};
+
 /* FUNCTIONS -------------------------------------------------- */
 
 int dispatch_vfs_channel(struct lcd_sync_channel_group_item *chnl);

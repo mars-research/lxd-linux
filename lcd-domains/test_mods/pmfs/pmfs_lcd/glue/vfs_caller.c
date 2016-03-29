@@ -913,3 +913,83 @@ out:
 
 	return ret;
 }
+
+int file_system_type_mount_callee(void)
+{
+	struct file_system_type_container *fs_container;
+	struct dentry_container *dentry_container;
+	struct dentry *dentry;
+	cptr_t data_cptr;
+	unsigned int mem_order;
+	unsigned long data_offset;
+	gva_t data_gva;
+	int flags;
+	cptr_t dentry_ref = CAP_CPTR_NULL;
+	/*
+	 * Unmarshal args. We expect:
+	 *
+	 *       -- fs type ref
+	 * XXX:  -- nothing for dev_name (pmfs doesn't use it)
+	 *       -- flags
+	 *       -- void *data stuff
+	 */
+	ret = glue_cap_lookup_file_system_type_type(vfs_cspace,
+						__cptr(lcd_r1()),
+						&fs_container);
+	if (ret) {
+		LIBLCD_ERR("couldn't find fs type");
+		goto fail1;
+	}
+	flags = lcd_r2();
+	/*
+	 * Map void *data
+	 */
+	data_cptr = lcd_cr0();
+	mem_order = lcd_r3();
+	data_offset = lcd_r4();
+	
+	ret = lcd_map_virt(data_cptr, mem_order, &data_gva);
+	if (ret) {
+		LIBLCD_ERR("couldn't map void *data arg");
+		goto fail2;
+	}
+	/*
+	 * Call real function
+	 */
+	dentry = fs_container->file_system_type.mount(
+		&fs_container->file_system_type,
+		flags,
+		NULL,
+		(void *)(gva_val(data_gva) + data_offset));
+	if (!dentry) {
+		LIBLCD_ERR("got null from mount");
+		ret = -EINVAL;
+		goto fail3;
+	}
+	dentry_container = container_of(dentry,
+					struct dentry_container,
+					dentry);
+	dentry_ref = dentry_container->their_ref;
+	/*
+	 * Kill void *data stuff
+	 */
+	lcd_unmap_virt(data_gva, mem_order);
+	/*
+	 * Done
+	 */
+	ret = 0;
+	goto out;
+
+fail3:
+	lcd_unmap_virt(data_gva, mem_order);
+fail2:
+fail1:
+out:
+	lcd_cap_delete(data_cptr);
+
+	lcd_set_r0(cptr_val(dentry_ref));
+
+	if (lcd_sync_reply())
+		LIBLCD_ERR("double fault?");
+	return ret;
+}

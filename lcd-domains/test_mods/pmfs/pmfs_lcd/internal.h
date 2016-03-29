@@ -27,4 +27,6 @@ int super_block_evict_inode_callee(void);
 
 int mount_nodev_fill_super_callee(void);
 
+int file_system_type_mount_callee(void);
+
 #endif /* PMFS_LCD_INTERNAL_H */

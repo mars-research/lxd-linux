@@ -58,7 +58,7 @@ X SUCK  DONE     U match_token
 X SUCK  DONE     U memparse
                  U mnt_drop_write_file
                  U mnt_want_write_file
-X GLUE           U mount_nodev
+X GLUE DONE      U mount_nodev
                  U new_inode
                  U noop_fsync
                  U panic
@@ -104,8 +104,11 @@ glue for super ops
         -- assume i links > 0, truncate list is empty
 
 glue for fs type
-     mount
+     mount DONE
      kill_sb
+     -- populate fn pointers in register_filesystem
+     -- kill fn pointers in unregister_filesystem
+     -- kill super_block trampolines after kill_sb rpc
 
 glue for pmfs_fill_super DONE
      -- this is where we'll populate super ops DONE
@@ -113,3 +116,7 @@ glue for pmfs_fill_super DONE
 Also todo: make sure containers are set up properly
      -- modify super_block alloc/free
      -- modify dentry alloc/free
+
+
+        
+
