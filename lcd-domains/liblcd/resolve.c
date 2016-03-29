@@ -205,3 +205,12 @@ struct resource * __request_region(struct resource *parent,
 {
 	return &fake_resource;
 }
+
+/* RCU ------------------------------------------------------------ */
+
+void call_rcu_sched(struct rcu_head *head,
+		rcu_callback_t func)
+{
+	/* Just call it */
+	func(head);
+}

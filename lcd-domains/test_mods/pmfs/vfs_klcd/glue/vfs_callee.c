@@ -785,3 +785,99 @@ fail1:
 		LIBLCD_ERR("double fault?");
 	return ret;
 }
+
+int unlock_new_inode_callee(void)
+{
+	struct pmfs_inode_vfs_container *inode_container;
+	int ret;
+	/*
+	 * Look up our inode obj
+	 */
+	ret = glue_cap_lookup_pmfs_inode_vfs_type(pmfs_cspace,
+						__cptr(lcd_r1()),
+						&inode_container);
+	if (ret) {
+		LIBLCD_ERR("couldn't find inode");
+		goto fail1;
+	}
+	/*
+	 * Invoke real function
+	 */
+	unlock_new_inode(&inode_container->pmfs_inode_vfs.vfs_inode);
+	/*
+	 * Return new i_state
+	 */
+	lcd_set_r0(inode_container->pmfs_inode_vfs.vfs_inode.i_state);
+	/*
+	 * Reply
+	 */
+	ret = 0;
+	goto out;
+
+out:
+fail1:
+	if (lcd_sync_reply())
+		LIBLCD_ERR("double fault?");
+	return ret;
+}
+
+int d_make_root_callee(void)
+{
+	struct pmfs_inode_vfs_container *inode_container;
+	struct dentry_container *dentry_container;
+	struct dentry *dentry;
+	int ret;
+	cptr_t my_ref = CAP_CPTR_NULL;
+	/*
+	 * Get our inode obj
+	 */
+	ret = glue_cap_lookup_pmfs_inode_vfs_type(pmfs_cspace,
+						__cptr(lcd_r1()),
+						&inode_container);
+	if (ret) {
+		LIBLCD_ERR("couldn't find inode");
+		goto fail1;
+	}
+	/*
+	 * Update nlink
+	 */
+	inode_container->pmfs_inode_vfs.vfs_inode.i_nlink = lcd_r2();
+	/*
+	 * Call real function
+	 */
+	dentry = d_make_root(&inode_container->pmfs_inode_vfs.vfs_inode);
+	if (!dentry) {
+		LIBLCD_ERR("error making root dentry");
+		goto fail2;
+	}
+	dentry_container = container_of(dentry,
+					struct dentry_container,
+					dentry);
+	/*
+	 * Install in cspace, set up refs
+	 */
+	ret = glue_cap_insert_dentry_type(pmfs_cspace,
+					dentry_container,
+					&dentry_container->my_ref);
+	if (ret) {
+		LIBLCD_ERR("error inserting in cspace");
+		goto fail3;
+	}
+	my_ref = dentry_container->my_ref;
+	dentry_container->their_ref = __cptr(lcd_r3());
+	/*
+	 * Reply with ref
+	 */
+	ret = 0;
+	goto out;
+
+out:
+fail3:
+	dput(dentry);
+fail2:
+fail1:
+	lcd_set_r0(cptr_val(my_ref));
+	if (lcd_sync_reply())
+		LIBLCD_ERR("double fault?");
+	return ret;
+}

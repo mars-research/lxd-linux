@@ -59,4 +59,6 @@ int clear_inode_callee(void);
 
 int iget_failed_callee(void);
 
+int d_make_root_callee(void);
+
 #endif /* VFS_KLCD_INTERNAL_H */

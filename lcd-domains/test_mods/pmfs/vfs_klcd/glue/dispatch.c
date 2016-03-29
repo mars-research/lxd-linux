@@ -46,6 +46,14 @@ int dispatch_vfs_channel(struct lcd_sync_channel_group_item *channel)
 	case IGET_FAILED:
 		return iget_failed_callee();
 		break;
+		
+	case UNLOCK_NEW_INODE:
+		return unlock_new_inode_callee();
+		break;
+
+	case D_MAKE_ROOT:
+		return d_make_root_callee();
+		break;
 
 	default:
 		LIBLCD_ERR("unexpected function label %d",

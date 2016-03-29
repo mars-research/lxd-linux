@@ -1,7 +1,7 @@
                  U arch_get_unmapped_area_sz
                  U autoremove_wake_function
                  U boot_cpu_data
-X REDEF          U call_rcu_sched
+X REDEF DONE     U call_rcu_sched
                  U capable
 X GLUE DONE      U clear_inode
                  U clear_nlink
@@ -9,7 +9,7 @@ X GLUE DONE      U clear_inode
 X SUCK DONE      U crc16
                  U current_kernel_time
                  U d_instantiate
-X GLUE           U d_make_root
+X GLUE DONE      U d_make_root
                  U d_obtain_alias
                  U drop_nlink
                  U d_splice_alias
@@ -45,7 +45,7 @@ X LIBLCD DONE    U ioremap_cache_ro
 X LIBLCD DONE    U ioremap_hpage_cache
 X LIBLCD DONE    U ioremap_hpage_cache_ro
 X LIBLCD DONE    U iounmap
-X GLUE           U iput
+                 U iput
                  U is_bad_inode
 X GLUE           U kill_anon_super
 X NO-OP DONE     U kthread_create_on_node
@@ -83,7 +83,7 @@ X NO-OP DONE     U __request_region
                  U __supported_pte_mask
                  U touch_atime
 X GLUE DONE      U truncate_inode_pages (shouldn't do much)
-X GLUE           U unlock_new_inode
+X GLUE DONE      U unlock_new_inode
                  U vfs_follow_link
                  U vfs_readlink
                  U vm_insert_mixed
@@ -109,3 +109,5 @@ glue for pmfs_fill_super
      -- this is where we'll populate super ops
 
 Also todo: make sure containers are set up properly
+     -- modify super_block alloc/free
+     -- modify dentry alloc/free

@@ -461,6 +461,107 @@ fail1:
 	return;
 }
 
+void unlock_new_inode(struct inode *inode)
+{
+	struct pmfs_inode_vfs_container *inode_container;
+	/*
+	 * Get remote ref, and do rpc.
+	 */
+	inode_container = container_of(
+		container_of(inode,
+			struct pmfs_inode_vfs,
+			vfs_inode),
+		struct pmfs_inode_vfs_container,
+		pmfs_inode_vfs);
+	
+	lcd_set_r0(UNLOCK_NEW_INODE);
+	lcd_set_r1(cptr_val(inode_container->their_ref));
+
+	ret = lcd_sync_call(vfs_chnl);
+	if (ret) {
+		LIBLCD_ERR("call failed");
+		goto fail1;
+	}
+	/*
+	 * Get updated i_state
+	 */
+	inode_container->pmfs_inode_vfs.vfs_inode.i_state = lcd_r0();
+
+	goto out;
+
+out:
+fail1:
+	return;
+}
+
+struct dentry *
+d_make_root(struct inode *inode)
+{
+	struct pmfs_inode_vfs_container *inode_container;
+	struct dentry_container *dentry_container;
+	int ret;
+	/*
+	 * Get inode container
+	 */
+	inode_container = container_of(
+		container_of(inode,
+			struct pmfs_inode_vfs,
+			vfs_inode),
+		struct pmfs_inode_vfs_container,
+		pmfs_inode_vfs);
+	/*
+	 * Make our private copy and insert into cspace
+	 */
+	dentry_container = kzalloc(sizeof(*dentry_container), GFP_KERNEL);
+	if (!dentry_container) {
+		LIBLCD_ERR("error creating container");
+		goto fail1;
+	}
+	ret = glue_cap_insert_dentry_type(vfs_cspace,
+					dentry_container,
+					&dentry_container->my_ref);
+	if (ret) {
+		LIBLCD_ERR("error inserting dentry");
+		goto fail2;
+	}
+	/*
+	 * Set up links to other private objects
+	 */
+	dentry_container->dentry.d_sb = inode->i_sb;
+	dentry_container->dentry.d_inode = inode;
+	/*
+	 * Do rpc
+	 */
+	lcd_set_r0(D_MAKE_ROOT);
+	lcd_set_r1(cptr_val(inode_container->their_ref));
+	lcd_set_r2(inode_container->pmfs_inode_vfs.vfs_inode.i_nlinks);
+	lcd_set_r3(cptr_val(dentry_container->my_ref));
+	
+	ret = lcd_sync_call(vfs_chnl);
+	if (ret) {
+		LIBLCD_ERR("call failed");
+		goto fail3;
+	}
+	/*
+	 * Get remote ref to dentry in response
+	 */
+	if (cap_cptr_is_null(__cptr(lcd_r0()))) {
+		LIBLCD_ERR("got null from d_make_root");
+		goto fail4;
+	}
+	dentry_container->their_ref = __cptr(lcd_r0());
+	
+	return &dentry_container->dentry;
+
+fail4:
+fail3:
+	glue_cap_remove(dentry_container->my_ref);
+fail2:
+	kfree(dentry_container);
+fail1:
+	return NULL;
+}
+
 /* CALLEE FUNCTIONS (FUNCTION POINTERS) ------------------------------ */
 
 int super_block_alloc_inode_callee(void)
