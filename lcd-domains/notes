@@ -103,7 +103,9 @@ glue for super ops
      evict_inode DONE
         -- assume i links > 0, truncate list is empty
 
-glue for mount fn pointer
+glue for fs type
+     mount
+     kill_sb
 
 glue for pmfs_fill_super
      -- this is where we'll populate super ops

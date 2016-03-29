@@ -709,3 +709,105 @@ fail1:
 		LIBLCD_ERR("double fault?");
 	return ret;
 }
+
+int mount_nodev_fill_super_callee(void)
+{
+	struct mount_nodev_fill_super_container *fill_sup_container;
+	struct super_block_container *sb_container;
+	struct dentry_container *dentry_container;
+	cptr_t data_cptr;
+	gva_t data_gva;
+	unsigned int mem_order;
+	int ret;
+	/*
+	 * Bind on fill_super function pointer
+	 */
+	ret = glue_cap_lookup_mount_nodev_fill_super_type(vfs_cspace,
+							__cptr(lcd_r1()),
+							&fill_sup_container);
+	if (ret) {
+		LIBLCD_ERR("fill super lookup failed");
+		goto fail1;
+	}
+	/*
+	 * Callee alloc on super block. Create ref, etc.
+	 */
+	sb_container = kzalloc(sizeof(*sb_container), GFP_USER);
+	if (!sb_container) {
+		ret = -ENOMEM;
+		LIBLCD_ERR("kzalloc failed");
+		goto fail2;
+	}
+	ret = glue_cap_insert_super_block_type(vfs_cspace,
+					sb_container,
+					&sb_container->my_ref);
+	if (ret) {
+		LIBLCD_ERR("super block ref");
+		goto fail3;
+	}
+	sb_container->their_ref = __cptr(lcd_r2());
+	sb_container->super_block.flags = lcd_r3();
+	/*
+	 * void *data arg is passed as a string. We expect:
+	 *
+	 *    -- data mem ctpr in cr0
+	 *    -- mem order in r4
+	 *    -- data offset in r5
+	 */
+	data_cptr = lcd_cr0();
+	mem_order = lcd_r4();
+	ret = lcd_map_virt(data_cptr, mem_order, &data_gva);
+	if (ret) {
+		LIBLCD_ERR("error mapping void *data");
+		goto fail4;
+	}
+	/*
+	 * Invoke real function. ("int silent" arg is in r6.)
+	 */
+	ret = fill_sup_container->fill_super(&sb_container->super_block,
+					(void *)(gva_val(data_gva) + lcd_r5()),
+					lcd_r6());
+	if (ret) {
+		LIBLCD_ERR("fill super failed");
+		goto fail5;
+	}
+	/*
+	 * Reply with our super_block ref, new s_flags, and
+	 * ref to s_root dentry (so caller can set s_root to their
+	 * private dentry copy).
+	 */
+	dentry_container = container_of(
+		&sb_container->super_block.s_root,
+		struct dentry_container,
+		dentry);
+	lcd_set_r1(cptr_val(sb_container->my_ref));
+	lcd_set_r2(sb_container->super_block.flags);
+	lcd_set_r3(cptr_val(dentry_container->their_ref));
+	/*
+	 * Unmap void *data, and delete from our cspace.
+	 */
+	lcd_unmap_virt(data_gva, mem_order);
+
+	ret = 0;
+	goto out;
+
+
+fail5:
+	lcd_unmap_virt(data_gva, mem_order);
+fail4:
+	glue_cap_remove(vfs_cspace,
+			sb_container->my_ref);
+fail3:
+	kfree(sb_container);
+fail2:
+fail1:
+out:
+	lcd_cap_delete(data_cptr);
+
+	lcd_set_r0(ret);
+
+	if (lcd_sync_reply())
+		LIBLCD_ERR("double fault?");
+
+	return ret;
+}

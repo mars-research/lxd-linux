@@ -281,6 +281,128 @@ super_block_evict_inode_trampoline(struct inode *inode)
 				hidden_args->channel);
 }
 
+int
+noinline
+mount_nodev_fill_super(struct super_block *sb,
+		void *data,
+		int silent,
+		struct mount_nodev_fill_super_container *fill_sup_container,
+		struct glue_cspace *cspace,
+		cptr_t channel)
+{
+	struct super_block_container *sb_container;
+	struct dentry_container *dentry_container;
+	int ret;
+	cptr_t data_cptr;
+	unsigned long mem_sz;
+	unsigned long data_offset;
+	/*
+	 * Insert super block into cspace
+	 */
+	sb_container = container_of(
+		sb,
+		struct super_block_container,
+		super_block);
+	ret = glue_cap_insert_super_block_type(pmfs_cspace,
+					sb_container,
+					&sb_container->my_ref);
+	if (ret) {
+		LIBLCD_ERR("error inserting super block into cspace");
+		goto fail1;
+	}					
+	/*
+	 * Translate void *data into cptr, etc.
+	 */
+	ret = lcd_virt_to_cptr(__gva((unsigned long)data),
+			&data_cptr,
+			&mem_sz,
+			&data_offset);
+	if (ret) {
+		LIBLCD_ERR("error resolving data -> cptr");
+		goto fail2;
+	}
+	/*
+	 * Marshal arguments
+	 */
+	lcd_set_r0(MOUNT_NODEV_FILL_SUPER);
+	lcd_set_r1(cptr_val(fill_sup_container->their_ref));
+	lcd_set_r2(cptr_val(sb_container->my_ref));
+	lcd_set_r3(sb_container->super_block.s_flags);
+	lcd_set_cr0(data_cptr);
+	/* Assumes mem_sz is 2^x pages */
+	lcd_set_r4(ilog2(mem_sz >> PAGE_SHIFT));
+	lcd_set_r5(data_offset);
+	lcd_set_r6(silent);
+	/*
+	 * Do rpc
+	 */
+	ret = lcd_sync_call(channel);
+	if (ret) {
+		LIBLCD_ERR("sync call failed");
+		goto fail3;
+	}
+	/*
+	 * Unmarshal response. We expect a remote ref to a dentry.
+	 */
+	if (lcd_r0()) {
+		LIBLCD_ERR("remote fill_super failed");
+		goto fail4;
+	}
+	ret = glue_cap_lookup_dentry_type(pmfs_cspace,
+					__cptr(lcd_r3()),
+					&dentry_container);
+	if (ret) {
+		LIBLCD_ERR("couldn't find dentry");
+		goto fail5;
+	}
+	sb_container->their_ref = __cptr(lcd_r1());
+	sb_container->super_block.flags = lcd_r2();
+	sb_container->super_block.s_root = &dentry_container->dentry;
+	/*
+	 * Done
+	 */
+	ret = lcd_r0();
+	goto out;
+
+fail5:
+	/* nothing we can really undo ... */
+fail4:
+fail3
+fail2:
+fail1:
+out:
+	return ret;
+}
+
+LCD_TRAMPOLINE_DATA(mount_nodev_fill_super_trampoline);
+int
+LCD_TRAMPOLINE_LINKAGE(mount_nodev_fill_super_trampoline)
+mount_nodev_fill_super_trampoline(struct super_block *super_block,
+				void *data,
+				int silent)
+{
+	int (*volatile mount_nodev_fill_super_p)(
+		struct super_block *,
+		void *,
+		int,
+		struct mount_nodev_fill_super_container *,
+		struct glue_cspace *,
+		cptr_t channel)
+	struct mount_nodev_fill_super_hidden_args *hidden_args;
+
+	LCD_TRAMPOLINE_PROLOGUE(hidden_args, 
+				mount_nodev_fill_super_trampoline);
+
+	mount_nodev_fill_super_p = mount_nodev_fill_super;
+
+	return mount_nodev_fill_super_p(super_block,
+					data,
+					silent,
+					hidden_args->mount_nodev_fill_super_container,
+					hidden_args->cspace,
+					hidden_args->channel);
+}
+
 /* CALLEE FUNCTIONS -------------------------------------------------- */
 
 int register_filesystem_callee(void)

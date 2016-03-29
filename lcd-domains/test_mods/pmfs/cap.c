@@ -29,6 +29,7 @@ enum glue_type {
 	GLUE_TYPE_SUPER_BLOCK,
 	GLUE_TYPE_PMFS_INODE_VFS,
 	GLUE_TYPE_DENTRY,
+	GLUE_TYPE_MOUNT_NODEV_FILL_SUPER,
 	GLUE_NR_TYPES,
 };
 
@@ -81,6 +82,14 @@ static struct type_ops_id glue_libcap_type_ops[GLUE_NR_TYPES] = {
 			.revoke = dummy_func,
 		}
 	},
+	{
+		{
+			.name = "mount_nodev: fill_super",
+			.delete = dummy_func,
+			.revoke = dummy_func,
+		}
+	},
+
 };
 
 int glue_cap_init(void)
@@ -212,6 +221,16 @@ int glue_cap_insert_dentry_type(
 				c_out);
 }
 
+int glue_cap_insert_mount_nodev_fill_super_type(
+	struct glue_cspace *cspace, 
+	struct mount_nodev_fill_super_container *fill_sup_container,
+	cptr_t *c_out)
+{
+	return glue_cspace_insert(cspace, fill_sup_container,  
+				glue_libcap_type_ops[GLUE_TYPE_MOUNT_NODEV_FILL_SUPER].libcap_type,
+				c_out);
+}
+
 int glue_cap_lookup_file_system_type_type(
 	struct glue_cspace *cspace, 
 	cptr_t c,
@@ -275,6 +294,17 @@ int glue_cap_lookup_dentry_type(
 		cspace, c, 
 		glue_libcap_type_ops[GLUE_TYPE_DENTRY].libcap_type,
 		(void **)dentry_container);
+}
+
+int glue_cap_lookup_mount_nodev_fill_super_type(
+	struct glue_cspace *cspace, 
+	cptr_t c,
+	struct mount_nodev_fill_super_container **fill_sup_container)
+{
+	return glue_cspace_lookup(
+		cspace, c, 
+		glue_libcap_type_ops[GLUE_TYPE_MOUNT_NODEV_FILL_SUPER].libcap_type,
+		(void **)fill_sup_container);
 }
 
 void glue_cap_remove(

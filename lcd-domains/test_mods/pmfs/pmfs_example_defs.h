@@ -34,6 +34,7 @@
 #define IGET_FAILED 11
 #define UNLOCK_NEW_INODE 12
 #define D_MAKE_ROOT 13
+#define MOUNT_NODEV_FILL_SUPER 14
 
 /* STRUCT DEFS -------------------------------------------------- */
 
@@ -71,6 +72,12 @@ struct pmfs_inode_vfs_container {
 
 struct dentry_container {
 	struct dentry dentry;
+	cptr_t my_ref;
+	cptr_t their_ref;
+};
+
+struct mount_nodev_fill_super_container {
+	int (*fill_super)(struct super_block *, void *, int);
 	cptr_t my_ref;
 	cptr_t their_ref;
 };
@@ -115,6 +122,11 @@ int glue_cap_insert_dentry_type(
 	struct dentry_container *dentry_container,
 	cptr_t *c_out);
 
+int glue_cap_insert_mount_nodev_fill_super_type(
+	struct glue_cspace *cspace, 
+	struct mount_nodev_fill_super_container *fill_sup_container,
+	cptr_t *c_out);
+
 int glue_cap_lookup_file_system_type_type(
 	struct glue_cspace *cspace, 
 	cptr_t c,
@@ -144,6 +156,11 @@ int glue_cap_lookup_dentry_type(
 	struct glue_cspace *cspace, 
 	cptr_t c,
 	struct dentry_container **dentry_container);
+
+int glue_cap_lookup_mount_nodev_fill_super_type(
+	struct glue_cspace *cspace, 
+	cptr_t c,
+	struct mount_nodev_fill_super_container **fill_sup_container);
 
 void glue_cap_remove(
 	struct glue_cspace *cspace, 
