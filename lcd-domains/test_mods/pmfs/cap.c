@@ -28,7 +28,6 @@ enum glue_type {
 	GLUE_TYPE_MODULE,
 	GLUE_TYPE_SUPER_BLOCK,
 	GLUE_TYPE_PMFS_INODE_VFS,
-	GLUE_TYPE_ADDRESS_SPACE,
 	GLUE_NR_TYPES,
 };
 
@@ -70,13 +69,6 @@ static struct type_ops_id glue_libcap_type_ops[GLUE_NR_TYPES] = {
 	{
 		{
 			.name = "struct pmfs_inode_vfs",
-			.delete = dummy_func,
-			.revoke = dummy_func,
-		}
-	},
-	{
-		{
-			.name = "struct address_space",
 			.delete = dummy_func,
 			.revoke = dummy_func,
 		}
@@ -202,16 +194,6 @@ int glue_cap_insert_pmfs_inode_vfs_type(
 				c_out);
 }
 
-int glue_cap_insert_address_space_type(
-	struct glue_cspace *cspace, 
-	struct address_space_container *address_space_container,
-	cptr_t *c_out)
-{
-	return glue_cspace_insert(cspace, address_space_container,  
-				glue_libcap_type_ops[GLUE_TYPE_ADDRESS_SPACE].libcap_type,
-				c_out);
-}
-
 int glue_cap_lookup_file_system_type_type(
 	struct glue_cspace *cspace, 
 	cptr_t c,
@@ -264,17 +246,6 @@ int glue_cap_lookup_pmfs_inode_vfs_type(
 		cspace, c, 
 		glue_libcap_type_ops[GLUE_TYPE_PMFS_INODE_VFS].libcap_type,
 		(void **)pmfs_inode_vfs_container);
-}
-
-int glue_cap_lookup_address_space_type(
-	struct glue_cspace *cspace, 
-	cptr_t c,
-	struct address_space_container **address_space_container)
-{
-	return glue_cspace_lookup(
-		cspace, c, 
-		glue_libcap_type_ops[GLUE_TYPE_ADDRESS_SPACE].libcap_type,
-		(void **)address_space_container);
 }
 
 void glue_cap_remove(

@@ -334,9 +334,16 @@ struct inode *iget_locked(struct super_block *sb, unsigned long ino)
 		LIBLCD_ERR("failed to lookup inode");
 		goto fail3;
 	}
-	inode_container->pmfs_inode_vfs.i_state = lcd_r1();
-	inode_container->pmfs_inode_vfs.i_nlink = lcd_r2();
-	inode_container->pmfs_inode_vfs.i_mode = lcd_r3();
+	inode_container->pmfs_inode_vfs.vfs_inode.i_state = lcd_r1();
+	inode_container->pmfs_inode_vfs.vfs_inode.i_nlink = lcd_r2();
+	inode_container->pmfs_inode_vfs.vfs_inode.i_mode = lcd_r3();
+	/*
+	 * We also know that i_mapping -> i_data, at least for pmfs. (So
+	 * although i_mapping is a pointer, the data it points to is embedded
+	 * in the struct inode.)
+	 */
+	inode_container->pmfs_inode_vfs.vfs_inode.i_mapping =
+		&inode_container->pmfs_inode_vfs.vfs_inode.i_data;
 	/*
 	 * Done
 	 */
@@ -352,15 +359,24 @@ fail1:
 
 void truncate_inode_pages(struct address_space *mapping, loff_t lstart)
 {
-	struct address_space_container *a_container;
+	struct pmfs_inode_vfs_container *inode_container;
 	int ret;
 	/*
-	 * Marshal remote reference and lstart, do rpc.
+	 * At least for pmfs, we know that mapping points to
+	 * i_data for the corresponding inode. So, we resolve ...
 	 */
-	a_container = container_of(mapping, struct address_space_container,
-				address_space);
+	inode_container = container_of(
+		container_of(
+			container_of(mapping, struct inode, i_data)
+			struct pmfs_inode_vfs,
+			vfs_inode),
+		struct pmfs_inode_vfs_container,
+		pmfs_inode_vfs);
+	/*
+	 * We now pass the ref to the inode (instead), and do rpc.
+	 */
 	lcd_set_r0(TRUNCATE_INODE_PAGES);
-	lcd_set_r1(cptr_val(a_container->their_ref));
+	lcd_set_r1(cptr_val(inode_container->their_ref));
 	lcd_set_r2(lstart);
 
 	ret = lcd_sync_call(vfs_chnl);

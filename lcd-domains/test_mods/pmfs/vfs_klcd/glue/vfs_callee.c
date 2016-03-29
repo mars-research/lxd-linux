@@ -585,6 +585,8 @@ int iget_locked_callee(void)
 	 * XXX: For pmfs, we know it implements alloc_inode, so we
 	 * expect the alloc has already been done; so this is "bind"
 	 * for pmfs.
+	 *
+	 * BUT the inode's mapping *is* callee allocated (sort of).
 	 */
 	inode = iget_locked(&sb_container->super_block, lcd_r2());
 	if (!inode) {
@@ -599,7 +601,7 @@ int iget_locked_callee(void)
 		pmfs_inode_vfs);
 	their_ref = inode_container->their_ref;
 	/*
-	 * Reply with remote ref, and the following:
+	 * Reply with remote refs for inode, and the following:
 	 *
 	 *     -- i_state
 	 *     -- i_nlink
@@ -625,14 +627,16 @@ fail1:
 
 int truncate_inode_pages_callee(void)
 {
-	struct address_space_container *a_container;
+	struct pmfs_inode_vfs_container *inode_container;
 	int ret;
 	/*
-	 * Look up our private address space object
+	 * (See notes for caller side)
+	 *
+	 * Look up our private inode object
 	 */
 	ret = glue_cap_lookup_address_space_type(pmfs_cspace,
 						__cptr(lcd_r1()),
-						&a_container);
+						&inode_container);
 	if (ret) {
 		LIBLCD_ERR("address space not found");
 		goto fail1;
@@ -640,7 +644,8 @@ int truncate_inode_pages_callee(void)
 	/*
 	 * Invoke real function
 	 */
-	truncate_inode_pages(a_container->address_space, lcd_r2());
+	truncate_inode_pages(&inode_container->pmfs_inode_vfs.vfs_inode.i_data, 
+			lcd_r2());
 	/*
 	 * Reply with nothing
 	 */
