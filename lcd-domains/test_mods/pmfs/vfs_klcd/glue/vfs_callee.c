@@ -754,3 +754,34 @@ fail1:
 		LIBLCD_ERR("double fault?");
 	return ret;
 }
+
+int iget_failed_callee(void)
+{
+	struct pmfs_inode_vfs_container *inode_container;
+	int ret;
+	/*
+	 * Look up our inode obj
+	 */
+	ret = glue_cap_lookup_pmfs_inode_vfs_type(pmfs_cspace,
+						__cptr(lcd_r1()),
+						&inode_container);
+	if (ret) {
+		LIBLCD_ERR("error looking up inode");
+		goto fail1;
+	}
+	/*
+	 * Invoke real function (this frees our private copy)
+	 */
+	iget_failed(&inode_container->pmfs_inode_vfs.vfs_inode);
+	/*
+	 * Nothing to reply with
+	 */
+	ret = 0;
+	goto out;
+
+out:
+fail1:
+	if (lcd_sync_reply())
+		LIBLCD_ERR("double fault?");
+	return ret;
+}

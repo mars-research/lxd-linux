@@ -42,6 +42,10 @@ int dispatch_vfs_channel(struct lcd_sync_channel_group_item *channel)
 	case CLEAR_INODE:
 		return clear_inode_callee();
 		break;
+		
+	case IGET_FAILED:
+		return iget_failed_callee();
+		break;
 
 	default:
 		LIBLCD_ERR("unexpected function label %d",

@@ -23,6 +23,6 @@ int super_block_alloc_inode_callee(void);
 
 int super_block_destroy_inode_callee(void);
 
-int super_block_evict_inode(void);
+int super_block_evict_inode_callee(void);
 
 #endif /* PMFS_LCD_INTERNAL_H */

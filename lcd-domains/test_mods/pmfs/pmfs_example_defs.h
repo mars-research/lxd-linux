@@ -31,6 +31,7 @@
 #define TRUNCATE_INODE_PAGES 8
 #define CLEAR_INODE 9
 #define SUPER_BLOCK_EVICT_INODE 10
+#define IGET_FAILED 11
 
 /* STRUCT DEFS -------------------------------------------------- */
 

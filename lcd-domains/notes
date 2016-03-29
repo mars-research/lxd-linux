@@ -27,7 +27,7 @@ X GLUE           U d_make_root
 X REDEF  DONE    U get_random_bytes
 X REDEF  DONE    U get_seconds
                  U __get_user_4
-X GLUE           U iget_failed
+X GLUE DONE      U iget_failed
 X GLUE DONE      U iget_locked
                  U ihold
                  U inc_nlink
@@ -100,7 +100,7 @@ glue for super ops
      alloc_inode DONE
      destroy_inode DONE
      put_super
-     evict_inode
+     evict_inode DONE
         -- assume i links > 0, truncate list is empty
 
 glue for mount fn pointer

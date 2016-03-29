@@ -430,6 +430,37 @@ fail1:
 	return;
 }
 
+void iget_failed(struct inode *inode)
+{
+	struct inode_container *inode_container;
+	int ret;
+	/*
+	 * Get remote ref, do rpc. (This will ultimately free the inode.)
+	 */
+	inode_container = container_of(
+		container_of(inode,
+			struct pmfs_inode_vfs,
+			vfs_inode),
+		struct pmfs_inode_vfs_container,
+		pmfs_inode_vfs);
+
+	lcd_set_r0(IGET_FAILED);
+	lcd_set_r1(cptr_val(inode_container->their_ref));
+	ret = lcd_sync_call(vfs_chnl);
+	if (ret) {
+		LIBLCD_ERR("iget_failed failed");
+		goto fail1;
+	}
+	/*
+	 * Nothing in reply
+	 */
+	goto out;
+
+out:
+fail1:
+	return;
+}
+
 /* CALLEE FUNCTIONS (FUNCTION POINTERS) ------------------------------ */
 
 int super_block_alloc_inode_callee(void)
@@ -536,7 +567,7 @@ reply:
 	return ret;
 }
 
-int super_block_evict_inode(void)
+int super_block_evict_inode_callee(void)
 {
 	struct super_block_container *sb_container;
 	struct pmfs_inode_vfs_container *inode_container;
