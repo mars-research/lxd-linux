@@ -35,6 +35,13 @@ struct super_block_evict_inode_hidden_args {
 	struct lcd_trampoline_handle *t_handle;
 };
 
+struct mount_nodev_fill_super_hidden_args {
+	struct mount_nodev_fill_super_container *mount_nodev_fill_super_container;
+	struct glue_cspace *cspace;
+	cptr_t channel;
+	struct lcd_trampoline_handle *t_handle;
+};
+
 /* FUNCTIONS -------------------------------------------------- */
 
 int dispatch_vfs_channel(struct lcd_sync_channel_group_item *chnl);
@@ -60,5 +67,7 @@ int clear_inode_callee(void);
 int iget_failed_callee(void);
 
 int d_make_root_callee(void);
+
+int mount_nodev_callee(void);
 
 #endif /* VFS_KLCD_INTERNAL_H */

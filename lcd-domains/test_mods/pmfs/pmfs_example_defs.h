@@ -35,6 +35,7 @@
 #define UNLOCK_NEW_INODE 12
 #define D_MAKE_ROOT 13
 #define MOUNT_NODEV_FILL_SUPER 14
+#define MOUNT_NODEV 15
 
 /* STRUCT DEFS -------------------------------------------------- */
 

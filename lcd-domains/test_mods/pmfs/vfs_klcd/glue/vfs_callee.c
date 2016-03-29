@@ -1148,3 +1148,136 @@ fail1:
 		LIBLCD_ERR("double fault?");
 	return ret;
 }
+
+int mount_nodev_callee(void)
+{
+	struct file_system_type_container *fs_container;
+	struct mount_nodev_fill_super_container *fill_sup_container;
+	struct mount_nodev_fill_super_hidden_args *fill_sup_args;
+	int ret;
+	cptr_t data_cptr;
+	unsigned int mem_order;
+	unsigned long data_offset;
+	gva_t data_gva;
+	int flags;
+	cptr_t fill_sup_their_ref;
+	int (*fill_super_p)(struct super_block *, void *, int);
+	struct dentry *dentry;
+	struct dentry_container *dentry_container;
+	cptr_t dentry_ref = CAP_CPTR_NULL;
+	/*
+	 * Unmarshal args:
+	 *
+	 *   -- ref to fs type
+	 *   -- void * data stuff
+	 *   -- flags
+	 *   -- fill_sup ref
+	 */
+	ret = glue_cap_lookup_file_system_type_type(pmfs_cspace,
+						__cptr(lcd_r1()),
+						&fs_container);
+	if (ret) {
+		LIBLCD_ERR("couldn't find fs type");
+		goto fail1;
+	}
+	data_cptr = lcd_cr0();
+	mem_order = lcd_r2();
+	data_offset = lcd_r3();
+	flags = lcd_r4();
+	fill_sup_their_ref = __cptr(lcd_r5());
+	/*
+	 * "Map" void *data (technically already accessible)
+	 */
+	ret = lcd_map_virt(data_cptr, mem_order, &data_gva);
+	if (ret) {
+		LIBLCD_ERR("failed to 'map' void *data arg");
+		goto fail2;
+	}
+	/*
+	 * Set up crap for fill_super function pointer
+	 *
+	 * Set up our fill_sup container
+	 */
+	fill_sup_container = kzalloc(sizeof(*fill_sup_container), GFP_KERNEL);
+	if (!fill_sup_container) {
+		LIBLCD_ERR("failed to alloc fill_sup container");
+		ret = -ENOMEM;
+		goto fail3;
+	}
+	fill_sup_container->their_ref = fill_sup_their_ref;
+	/*
+	 * Set up fill_super trampoline
+	 */
+	fill_sup_args = kzalloc(sizeof(*fill_sup_args), GFP_KERNEL);
+	if (!fill_sup_args) {
+		LIBLCD_ERR("kzalloc hidden args failed");
+		ret = -ENOMEM;
+		goto fail4;
+	}
+	fill_sup_args->t_handle = LCD_DUP_TRAMPOLINE(
+		mount_nodev_fill_super_trampoline);
+	if (!fill_sup_args->t_handle) {
+		LIBLCD_ERR("dup trampoline");
+		ret = -ENOMEM;
+		goto fail5;
+	}
+	fill_sup_args->t_handle->hidden_args = fill_sup_args;
+	fill_sup_args->mount_nodev_fill_super_container = fill_sup_container;
+	fill_sup_args->cspace = cspace;
+	fill_sup_args->channel = channel;
+	/*
+	 * Invoke real function
+	 */
+	fill_super_p = LCD_HANDLE_TO_TRAMPOLINE(fill_sup_args->t_handle);
+	dentry = mount_nodev(&fs_container->file_system_type,
+			flags,
+			/* (gva = hva for non-isolated) */
+			(void *)(gva_val(data_gva) + data_offset),
+			fill_super_p);
+	if (!dentry) {
+		LIBLCD_ERR("mount_nodev failed");
+		goto fail6;
+	}
+	/*
+	 * Pass back ref to their copy of the dentry (this was set up
+	 * in a deeper part of the crisscross call graph)
+	 */
+	dentry_container = container_of(
+		dentry,
+		struct dentry_container,
+		dentry);
+	dentry_ref = dentry_container->their_ref;
+	/*
+	 * Destroy fill_super trampoline stuff
+	 */
+	kfree(fill_sup_container);
+	kfree(fill_sup_args->t_handle);
+	kfree(fill_sup_args);
+	/*
+	 * Unmap void *data and delete our cap
+	 */
+	lcd_unmap_virt(data_gva, mem_order);
+	/*
+	 * Done
+	 */
+	ret = 0;
+	goto out;
+
+fail6:
+	kfree(fill_sup_args->t_handle);
+fail5:
+	kfree(fill_sup_args);
+fail4:
+	kfree(fill_sup_container);
+fail3:
+	lcd_unmap_virt(data_gva, mem_order);	
+fail2:
+fail1:
+out:
+
+	lcd_cap_delete(data_cptr);
+
+	if (lcd_sync_reply())
+		LIBLCD_ERR("double fault?");
+	return ret;
+}

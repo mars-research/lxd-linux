@@ -69,7 +69,7 @@ X GLUE           U mount_nodev
                  U ___ratelimit
                  U _raw_spin_lock
                  U _raw_spin_unlock
-X NO-OP DONE     U __release_region   XXX: Non-isol will need to grant during mount
+X NO-OP DONE     U __release_region
 X NO-OP DONE     U __request_region
                  U __sb_end_write
                  U __sb_start_write
@@ -107,8 +107,8 @@ glue for fs type
      mount
      kill_sb
 
-glue for pmfs_fill_super
-     -- this is where we'll populate super ops
+glue for pmfs_fill_super DONE
+     -- this is where we'll populate super ops DONE
 
 Also todo: make sure containers are set up properly
      -- modify super_block alloc/free

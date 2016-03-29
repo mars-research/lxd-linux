@@ -55,6 +55,10 @@ int dispatch_vfs_channel(struct lcd_sync_channel_group_item *channel)
 		return d_make_root_callee();
 		break;
 
+	case MOUNT_NODEV:
+		return mount_nodev_callee();
+		break;
+
 	default:
 		LIBLCD_ERR("unexpected function label %d",
 			lcd_r0());

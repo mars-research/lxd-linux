@@ -562,6 +562,108 @@ fail1:
 	return NULL;
 }
 
+struct dentry *
+mount_nodev(struct file_system_type *fs_type,
+	int flags, void *data,
+	int (*fill_super)(struct super_block *, void *, int))
+{
+	struct file_system_type_container *fs_container;
+	struct mount_nodev_fill_super_container *fill_sup_container;
+	struct dentry_container *dentry_container;
+	cptr_t dentry_ref;
+	int ret;
+	cptr_t data_cptr;
+	unsigned long data_offset;
+	unsigned long mem_sz;
+	struct dentry *dentry = NULL;
+	
+	fs_container = container_of(
+		fs_type,
+		struct file_system_type_container,
+		file_system_type);
+	/*
+	 * Set up void *data arg passing
+	 */
+	ret = lcd_virt_to_cptr(__gva((unsigned long)data),
+			&data_cptr,
+			&mem_sz,
+			&data_offset);
+	if (ret) {
+		LIBLCD_ERR("virt to cptr failed");
+		goto fail1;
+	}
+	/*
+	 * Set up fill_super container
+	 */
+	fill_sup_container = kzalloc(sizeof(*fill_sup_container), GFP_KERNEL);
+	if (!fill_sup_container) {
+		LIBLCD_ERR("fill_sup alloc failed");
+		goto fail2;
+	}
+	ret = glue_cap_insert_mount_nodev_fill_super_type(vfs_cspace,
+							fill_sup_container,
+							&fill_sup_container->my_ref);
+	if (ret) {
+		LIBLCD_ERR("fill_super insert failed");
+		goto fail3;
+	}
+	fill_sup_container->fill_super = fill_super;
+	/*
+	 * Do rpc
+	 */
+	lcd_set_r0(MOUNT_NODEV);
+	lcd_set_r1(cptr_val(fs_container->their_ref));
+	/* Assumes mem_sz is 2^x pages */
+	lcd_set_r2(ilog2(mem_sz >> PAGE_SHIFT));
+	lcd_set_r3(data_offset);
+	lcd_set_cr0(cptr_val(data_cptr));
+	lcd_set_r4(flags);
+	lcd_set_r5(cptr_val(fill_sup_container->my_ref));
+
+	ret = lcd_sync_call(vfs_chnl);
+	if (ret) {
+		LIBLCD_ERR("failed to do call");
+		goto fail4;
+	}
+	/*
+	 * Unmarshal returned dentry
+	 */
+	dentry_ref = __cptr(lcd_r0());
+	if (cap_cptr_is_null(dentry_ref)) {
+		LIBLCD_ERR("got null from remote mount_nodev");
+		goto fail5;
+	}
+	ret = glue_cap_lookup_dentry_type(vfs_cspace,
+					dentry_ref,
+					&dentry_container);
+	if (ret) {
+		LIBLCD_ERR("couldn't find dentry");
+		goto fail6;
+	}
+	dentry = &dentry_container->dentry;
+	/*
+	 * Free fill_super container, etc.
+	 */
+	glue_cap_remove(vfs_cspace, fill_sup_container->my_ref);
+	kfree(fill_sup_container);
+	/*
+	 * Done
+	 */
+	goto out;
+
+fail6:
+fail5:
+fail4:
+	glue_cap_remove(vfs_cspace, fill_sup_container->my_ref);
+fail3:
+	kfree(fill_sup_container);
+fail2:
+fail1:
+out:
+	return dentry;
+}
+
+
 /* CALLEE FUNCTIONS (FUNCTION POINTERS) ------------------------------ */
 
 int super_block_alloc_inode_callee(void)
