@@ -8,5 +8,6 @@ SECTIONS
 	LCD_TRAMPOLINE_LINKER_SECTION(super_block_alloc_inode_trampoline)
 	LCD_TRAMPOLINE_LINKER_SECTION(super_block_destroy_inode_trampoline)
     	LCD_TRAMPOLINE_LINKER_SECTION(super_block_evict_inode_trampoline)
+        LCD_TRAMPOLINE_LINKER_SECTION(mount_nodev_fill_super_trampoline)
 }
 INSERT AFTER .text;

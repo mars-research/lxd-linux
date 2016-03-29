@@ -281,6 +281,139 @@ super_block_evict_inode_trampoline(struct inode *inode)
 				hidden_args->channel);
 }
 
+static void destroy_sb_trampolines(struct super_block_container *sb_container)
+{
+	struct super_operations *s_ops = sb_container->super_block.s_op;
+	struct super_block_alloc_inode_hidden_args *alloc_args;
+	struct super_block_destroy_inode_hidden_args *destroy_args;
+	struct super_block_evict_inode_hidden_args *evict_args;
+	
+	if (!s_ops)
+		return;
+
+	if (s_ops->alloc_inode) {
+		alloc_args = LCD_TRAMPOLINE_TO_HIDDEN_ARGS(
+			s_ops->alloc_inode);
+		kfree(alloc_args->t_handle);
+		kfree(alloc_args);
+	}
+	if (s_ops->destroy_inode) {
+		destroy_args = LCD_TRAMPOLINE_TO_HIDDEN_ARGS(
+			s_ops->destroy_inode);
+		kfree(destroy_args->t_handle);
+		kfree(destroy_args);
+	}
+	if (s_ops->evict_inode) {
+		evict_args = LCD_TRAMPOLINE_TO_HIDDEN_ARGS(
+			s_ops->evict_inode);
+		kfree(evict_args->t_handle);
+		kfree(evict_args);
+	}
+
+	kfree(s_ops);
+}
+
+static int setup_sb_trampolines(struct super_block_container *sb_container,
+				struct glue_cspace *cspace,
+				cptr_t channel)
+{
+	struct super_operations *s_ops;
+	struct super_block_alloc_inode_hidden_args *alloc_args;
+	struct super_block_destroy_inode_hidden_args *destroy_args;
+	struct super_block_evict_inode_hidden_args *evict_args;
+	int ret;
+	/*
+	 * Alloc struct of function pointers
+	 */
+	s_ops = kzalloc(sizeof(*s_ops), GFP_KERNEL);
+	if (!s_ops) {
+		LIBLCD_ERR("s_ops alloc failed");
+		ret = -ENOMEM;
+		goto fail0;
+	}
+	/*
+	 * alloc_inode trampoline
+	 */
+	alloc_args = kzalloc(sizeof(*alloc_args), GFP_KERNEL);
+	if (!alloc_args) {
+		LIBLCD_ERR("kzalloc hidden args failed");
+		ret = -ENOMEM;
+		goto fail1;
+	}
+	alloc_args->t_handle = LCD_DUP_TRAMPOLINE(
+		super_block_alloc_inode_trampoline);
+	if (!alloc_args->t_handle) {
+		LIBLCD_ERR("dup trampoline");
+		ret = -ENOMEM;
+		goto fail2;
+	}
+	alloc_args->t_handle->hidden_args = alloc_args;
+	alloc_args->super_block_container = sb_container;
+	alloc_args->cspace = cspace;
+	alloc_args->channel = channel;
+	s_ops->alloc_inode =
+		LCD_HANDLE_TO_TRAMPOLINE(alloc_args->t_handle);
+	/*
+	 * destroy_inode trampoline
+	 */
+	destroy_args = kzalloc(sizeof(*destroy_args), GFP_KERNEL);
+	if (!destroy_args) {
+		LIBLCD_ERR("kzalloc hidden args failed");
+		ret = -ENOMEM;
+		goto fail3;
+	}
+	destroy_args->t_handle = LCD_DUP_TRAMPOLINE(
+		super_block_destroy_inode_trampoline);
+	if (!destroy_args->t_handle) {
+		LIBLCD_ERR("dup trampoline");
+		ret = -ENOMEM;
+		goto fail4;
+	}
+	destroy_args->t_handle->hidden_args = destroy_args;
+	destroy_args->super_block_container = sb_container;
+	destroy_args->cspace = cspace;
+	destroy_args->channel = channel;
+	s_ops->destroy_inode =
+		LCD_HANDLE_TO_TRAMPOLINE(destroy_args->t_handle);
+	/*
+	 * evict_inode trampoline
+	 */
+	evict_args = kzalloc(sizeof(*evict_args), GFP_KERNEL);
+	if (!evict_args) {
+		LIBLCD_ERR("kzalloc hidden args failed");
+		ret = -ENOMEM;
+		goto fail5;
+	}
+	evict_args->t_handle = LCD_DUP_TRAMPOLINE(
+		super_block_evict_inode_trampoline);
+	if (!evict_args->t_handle) {
+		LIBLCD_ERR("dup trampoline");
+		ret = -ENOMEM;
+		goto fail6;
+	}
+	evict_args->t_handle->hidden_args = evict_args;
+	evict_args->super_block_container = sb_container;
+	evict_args->cspace = cspace;
+	evict_args->channel = channel;
+	s_ops->evict_inode =
+		LCD_HANDLE_TO_TRAMPOLINE(evict_args->t_handle);
+	/*
+	 * Install ops
+	 */
+	sb_container->super_block.s_op = s_ops;
+	
+	return 0;
+
+fail6:
+fail5:
+fail4:
+fail3:
+fail2:
+fail1:
+	destroy_sb_trampolines(sb_container);
+	return ret;
+}
+
 int
 noinline
 mount_nodev_fill_super(struct super_block *sb,
@@ -296,13 +429,23 @@ mount_nodev_fill_super(struct super_block *sb,
 	cptr_t data_cptr;
 	unsigned long mem_sz;
 	unsigned long data_offset;
-	/*
-	 * Insert super block into cspace
-	 */
+
 	sb_container = container_of(
 		sb,
 		struct super_block_container,
 		super_block);
+
+	/*
+	 * Set up super block trampolines
+	 */
+	ret = setup_sb_trampolines(sb_container);
+	if (ret) {
+		LIBLCD_ERR("error setting up sb trampolines");
+		goto fail0;
+	}
+	/*
+	 * Insert super block into cspace
+	 */
 	ret = glue_cap_insert_super_block_type(pmfs_cspace,
 					sb_container,
 					&sb_container->my_ref);
@@ -367,9 +510,11 @@ mount_nodev_fill_super(struct super_block *sb,
 fail5:
 	/* nothing we can really undo ... */
 fail4:
-fail3
+fail3:
 fail2:
 fail1:
+	destroy_sb_trampolines(sb_container);
+fail0:
 out:
 	return ret;
 }

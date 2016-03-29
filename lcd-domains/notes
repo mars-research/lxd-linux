@@ -99,7 +99,7 @@ current fsuid, fsgid, ns --> elide DONE
 glue for super ops
      alloc_inode DONE
      destroy_inode DONE
-     put_super
+     put_super (make sure to add sb trampoline)
      evict_inode DONE
         -- assume i links > 0, truncate list is empty
 
