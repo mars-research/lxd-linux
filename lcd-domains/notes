@@ -102,8 +102,10 @@ glue for super ops
      put_super
      evict_inode
         -- assume i links > 0, truncate list is empty
+
 glue for mount fn pointer
 
 glue for pmfs_fill_super
+     -- this is where we'll populate super ops
 
 Also todo: make sure containers are set up properly

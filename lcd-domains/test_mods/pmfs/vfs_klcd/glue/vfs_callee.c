@@ -170,6 +170,12 @@ super_block_destroy_inode(struct inode *inode,
 	/*
 	 * Call remote destroy inode
 	 */
+	inode_container = container_of(
+		container_of(inode,
+			struct pmfs_inode_vfs,
+			vfs_inode),
+		struct pmfs_inode_vfs_container,
+		pmfs_inode_vfs);
 	lcd_set_r0(SUPER_BLOCK_DESTROY_INODE);
 	lcd_set_r1(cptr_val(super_block_container->their_ref));
 	lcd_set_r2(cptr_val(inode_container->their_ref));
@@ -203,7 +209,7 @@ super_block_destroy_inode_trampoline(struct inode *inode)
 		struct super_block_container *,
 		struct glue_cspace *,
 		cptr_t);
-	struct super_block_alloc_inode_hidden_args *hidden_args;
+	struct super_block_destroy_inode_hidden_args *hidden_args;
 
 	LCD_TRAMPOLINE_PROLOGUE(hidden_args, 
 				super_block_destroy_inode_trampoline);
@@ -211,6 +217,65 @@ super_block_destroy_inode_trampoline(struct inode *inode)
 	super_block_destroy_inode_p = super_block_destroy_inode;
 
 	super_block_destroy_inode_p(super_block,
+				hidden_args->super_block_container,
+				hidden_args->cspace,
+				hidden_args->channel);
+}
+
+void
+noinline
+super_block_evict_inode(struct inode *inode,
+			struct super_block_container *super_block_container,
+			struct glue_cspace *cspace,
+			cptr_t channel)
+{
+	struct pmfs_inode_vfs_container *inode_container;
+	int ret;
+	/*
+	 * Call remote evict inode
+	 */
+	inode_container = container_of(
+		container_of(inode,
+			struct pmfs_inode_vfs,
+			vfs_inode),
+		struct pmfs_inode_vfs_container,
+		pmfs_inode_vfs);
+	lcd_set_r0(SUPER_BLOCK_EVICT_INODE);
+	lcd_set_r1(cptr_val(super_block_container->their_ref));
+	lcd_set_r2(cptr_val(inode_container->their_ref));
+	ret = lcd_sync_call(channel);
+	if (ret) {
+		LIBLCD_ERR("error calling remote evict inode");
+		goto fail1;
+	}
+
+	/* Done */
+	goto out;
+
+out:
+fail1:
+
+	return;
+}
+
+LCD_TRAMPOLINE_DATA(super_block_evict_inode_trampoline);
+void
+LCD_TRAMPOLINE_LINKAGE(super_block_evict_inode_trampoline)
+super_block_evict_inode_trampoline(struct inode *inode)
+{
+	void (*volatile super_block_evict_inode_p)(
+		struct inode *,
+		struct super_block_container *,
+		struct glue_cspace *,
+		cptr_t);
+	struct super_block_evict_inode_hidden_args *hidden_args;
+
+	LCD_TRAMPOLINE_PROLOGUE(hidden_args, 
+				super_block_evict_inode_trampoline);
+
+	super_block_evict_inode_p = super_block_evict_inode;
+
+	super_block_evict_inode_p(super_block,
 				hidden_args->super_block_container,
 				hidden_args->cspace,
 				hidden_args->channel);

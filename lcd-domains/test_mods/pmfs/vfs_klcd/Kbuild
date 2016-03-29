@@ -11,4 +11,10 @@ lcd_test_mod_pmfs_vfs-y              += $(addprefix glue/, vfs_callee.o \
 
 lcd_test_mod_pmfs_vfs-y              += $(addprefix ../, cap.o )
 
+extra-y += glue/vfs_callee.lds
+
+ldflags-y += \
+	-T $(LCD_TEST_MODULES_BUILD_DIR)/pmfs/vfs_klcd/glue/vfs_callee.lds
+
+
 ccflags-y += $(NONISOLATED_CFLAGS)

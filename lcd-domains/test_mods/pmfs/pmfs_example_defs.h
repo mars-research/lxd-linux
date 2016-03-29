@@ -30,6 +30,7 @@
 #define IGET_LOCKED 7
 #define TRUNCATE_INODE_PAGES 8
 #define CLEAR_INODE 9
+#define SUPER_BLOCK_EVICT_INODE 10
 
 /* STRUCT DEFS -------------------------------------------------- */
 

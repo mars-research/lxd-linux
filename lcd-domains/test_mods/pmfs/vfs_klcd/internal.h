@@ -28,6 +28,13 @@ struct super_block_destroy_inode_hidden_args {
 	struct lcd_trampoline_handle *t_handle;
 };
 
+struct super_block_evict_inode_hidden_args {
+	struct super_block_container *super_block_container;
+	struct glue_cspace *cspace;
+	cptr_t channel;
+	struct lcd_trampoline_handle *t_handle;
+};
+
 /* FUNCTIONS -------------------------------------------------- */
 
 int dispatch_vfs_channel(struct lcd_sync_channel_group_item *chnl);

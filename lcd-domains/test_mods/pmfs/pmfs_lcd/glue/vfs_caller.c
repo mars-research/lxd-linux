@@ -345,6 +345,11 @@ struct inode *iget_locked(struct super_block *sb, unsigned long ino)
 	inode_container->pmfs_inode_vfs.vfs_inode.i_mapping =
 		&inode_container->pmfs_inode_vfs.vfs_inode.i_data;
 	/*
+	 * We also need to set back pointer to super block (this is done
+	 * by the callee)
+	 */
+	inode_container->pmfs_inode_vfs.vfs_inode.i_sb = sb;
+	/*
 	 * Done
 	 */
 	return &inode_container->pmfs_inode_vfs.vfs_inode;
@@ -526,6 +531,48 @@ int super_block_destroy_inode_callee(void)
 fail2:
 fail1:
 reply:
+	if (lcd_sync_reply())
+		LIBLCD_ERR("double fault?");
+	return ret;
+}
+
+int super_block_evict_inode(void)
+{
+	struct super_block_container *sb_container;
+	struct pmfs_inode_vfs_container *inode_container;
+	int ret;
+	/*
+	 * Look up private copies of super block and inode
+	 */
+	ret = glue_cap_lookup_super_block_type(vfs_cspace,
+					__cptr(lcd_r1()),
+					&sb_container);
+	if (ret) {
+		LIBLCD_ERR("super block not found");
+		goto fail1;
+	}
+	ret = glue_cap_lookup_pmfs_inode_vfs_type(vfs_cspace,
+					__cptr(lcd_r2()),
+					&inode_container);
+	if (ret) {
+		LIBLCD_ERR("inode not found");
+		goto fail2;
+	}
+	/*
+	 * Invoke real evict inode
+	 */
+	sb_container->super_block->s_op->evict_inode(
+		&inode_container->pmfs_inode_vfs.vfs_inode
+		);
+	/*
+	 * Nothing to reply with
+	 */
+	ret = 0;
+	goto out;
+
+out:
+fail2:
+fail1:
 	if (lcd_sync_reply())
 		LIBLCD_ERR("double fault?");
 	return ret;
