@@ -11,5 +11,6 @@ SECTIONS
     	LCD_TRAMPOLINE_LINKER_SECTION(super_block_put_super_trampoline)    
         LCD_TRAMPOLINE_LINKER_SECTION(mount_nodev_fill_super_trampoline)
         LCD_TRAMPOLINE_LINKER_SECTION(file_system_type_mount_trampoline)
+        LCD_TRAMPOLINE_LINKER_SECTION(file_system_type_kill_sb_trampoline)    
 }
 INSERT AFTER .text;

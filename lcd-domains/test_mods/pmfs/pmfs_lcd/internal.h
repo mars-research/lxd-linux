@@ -31,4 +31,6 @@ int file_system_type_mount_callee(void);
 
 int super_block_put_super_callee(void);
 
+int file_system_type_kill_sb_callee(void);
+
 #endif /* PMFS_LCD_INTERNAL_H */

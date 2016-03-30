@@ -1085,6 +1085,50 @@ out:
 	return ret;
 }
 
+int file_system_type_kill_sb_callee(void)
+{
+	struct file_system_type_container *fs_container;
+	struct super_block_container *sb_container;
+	int ret;
+	/*
+	 * Bind on fs type and super_block
+	 */
+	ret = glue_cap_lookup_file_system_type_type(vfs_cspace,
+						__cptr(lcd_r1()),
+						&fs_container);
+	if (ret) {
+		LIBLCD_ERR("couldn't find fs type");
+		goto fail1;
+	}
+	ret = glue_cap_lookup_super_block_type(vfs_cspace,
+					__cptr(lcd_r2()),
+					&sb_container);
+	if (ret) {
+		LIBLCD_ERR("couldn't find super_block");
+		goto fail2;
+	}
+	/*
+	 * Invoke real function (will call kill_anon_super)
+	 */
+	fs_container->file_system_type.kill_sb(&sb_container->super_block);
+	/*
+	 * Remove our sb container from cspace, and free it.
+	 */
+	glue_cap_remove(vfs_cspace, sb_container->my_ref);
+	kfree(sb_container);
+	/*
+	 * Nothing to reply with
+	 */
+	goto out;
+
+fail2:
+fail1:
+out:
+	if (lcd_sync_reply())
+		LIBLCD_ERR("double fault?");
+	return ret;
+}
+
 /* Stolen from part of pmfs/super.c:pmfs_put_super */
 static void do_unmap(struct super_block *sb)
 {

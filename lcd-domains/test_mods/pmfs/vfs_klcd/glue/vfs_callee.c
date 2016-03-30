@@ -334,9 +334,8 @@ super_block_put_super_trampoline(struct super_block *sb)
 }
 
 
-static void destroy_sb_trampolines(struct super_block_container *sb_container)
+static void destroy_sb_trampolines(struct super_operations *s_ops)
 {
-	struct super_operations *s_ops = sb_container->super_block.s_op;
 	struct super_block_alloc_inode_hidden_args *alloc_args;
 	struct super_block_destroy_inode_hidden_args *destroy_args;
 	struct super_block_evict_inode_hidden_args *evict_args;
@@ -495,7 +494,7 @@ fail4:
 fail3:
 fail2:
 fail1:
-	destroy_sb_trampolines(sb_container);
+	destroy_sb_trampolines(sb_container->super_block.s_op);
 	return ret;
 }
 
@@ -598,7 +597,7 @@ fail4:
 fail3:
 fail2:
 fail1:
-	destroy_sb_trampolines(sb_container);
+	destroy_sb_trampolines(sb_container->super_block.s_op);
 fail0:
 out:
 	return ret;
@@ -862,6 +861,96 @@ fail1:
 fail0:
 out:
 	return dentry;
+}
+
+LCD_TRAMPOLINE_DATA(file_system_type_mount_trampoline);
+struct dentry *
+LCD_TRAMPOLINE_LINKAGE(file_system_type_mount_trampoline)
+file_system_type_mount_trampoline(struct file_system_type *fs_type,
+				int flags,
+				const char *dev_name,
+				void *data)
+{
+	struct dentry* (*volatile file_system_type_mount_p)(
+		struct file_system_type *,
+		int,
+		const char *,
+		void *,
+		struct file_system_type_container *,
+		struct glue_cspace *,
+		cptr_t)
+	struct file_system_type_mount_hidden_args *hidden_args;
+
+	LCD_TRAMPOLINE_PROLOGUE(hidden_args, 
+				file_system_type_mount_trampoline);
+
+	file_system_type_mount_p = file_system_type_mount;
+
+	return file_system_type_mount_p(fs_type,
+					flags,
+					dev_name,
+					data,
+					hidden_args->file_system_type_container,
+					hidden_args->cspace,
+					hidden_args->channel);
+}
+
+void
+noinline
+file_system_type_kill_sb(struct super_block *sb,
+		struct file_system_type_container *fs_container,
+		struct glue_cspace *cspace,
+		cptr_t channel)
+{
+	struct super_block_container *sb_container;
+	struct super_operations *s_ops;
+	cptr_t fs_mem_cptr;
+	int ret;
+	/*
+	 * Get ref to s_op and fs mem before we kill the super_block, so we can
+	 * tear down the trampolines *after* we call kill_sb. (We can't do
+	 * it before, because some of the s_op's will be used in the body/
+	 * call graph of kill_sb.)
+	 */
+	s_ops = sb->s_op;
+	fs_mem_cptr = sb_container->fs_mem;
+	/*
+	 * Marshal refs to fs type and super block, and do rpc.
+	 *
+	 * sb_container will get freed in the process ...
+	 */
+	sb_container = container_of(sb,
+				struct super_block_container,
+				super_block);
+	lcd_set_r0(FILE_SYSTEM_TYPE_KILL_SB);
+	lcd_set_r1(cptr_val(fs_container->their_ref));
+	lcd_set_r2(cptr_val(sb_container->their_ref));
+
+	ret = lcd_sync_call(channel);
+	if (ret) {
+		LIBLCD_ERR("call failed");
+		goto fail1;
+	}
+	/*
+	 * sb_container is now invalid (was freed)
+	 */
+	sb_container = NULL;
+	/*
+	 * Destroy trampolines
+	 */
+	destroy_sb_trampolines(s_ops);
+	/*
+	 * Unvolunteer fs memory
+	 */
+	lcd_unvolunteer_dev_mem(fs_mem_cptr);
+	/*
+	 * Done
+	 */
+	goto out;
+
+fail1:
+out:
+	return;
 }
 
 LCD_TRAMPOLINE_DATA(file_system_type_mount_trampoline);
@@ -1644,6 +1733,11 @@ int kill_anon_super_callee(void)
 		LIBLCD_ERR("couldn't find super block");
 		goto fail1;
 	}
+	/*
+	 * super block is going to get freed during call to kill_anon_super;
+	 * remove from cspace before
+	 */
+	glue_cap_remove(pmfs_cspace, sb_container->my_ref);
 	/*
 	 * Call real function
 	 */

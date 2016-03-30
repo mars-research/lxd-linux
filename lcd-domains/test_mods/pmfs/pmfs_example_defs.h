@@ -21,24 +21,27 @@
 /* MACROS/FLAGS -------------------------------------------------- */
 
 /* Function flags */
-#define REGISTER_FS 1
-#define UNREGISTER_FS 2
-#define BDI_INIT 3
-#define BDI_DESTROY 4
-#define SUPER_BLOCK_ALLOC_INODE 5
-#define SUPER_BLOCK_DESTROY_INODE 6
-#define IGET_LOCKED 7
-#define TRUNCATE_INODE_PAGES 8
-#define CLEAR_INODE 9
-#define SUPER_BLOCK_EVICT_INODE 10
-#define IGET_FAILED 11
-#define UNLOCK_NEW_INODE 12
-#define D_MAKE_ROOT 13
-#define MOUNT_NODEV_FILL_SUPER 14
-#define MOUNT_NODEV 15
-#define FILE_SYSTEM_TYPE_MOUNT 16
-#define SUPER_BLOCK_PUT_SUPER 17
-#define KILL_ANON_SUPER 18
+enum {
+	REGISTER_FS,
+	UNREGISTER_FS,
+	BDI_INIT,
+	BDI_DESTROY,
+	SUPER_BLOCK_ALLOC_INODE,
+	SUPER_BLOCK_DESTROY_INODE,
+	SUPER_BLOCK_EVICT_INODE,
+	SUPER_BLOCK_PUT_SUPER,
+	IGET_LOCKED,
+	IGET_FAILED,
+	TRUNCATE_INODE_PAGES,
+	CLEAR_INODE,
+	UNLOCK_NEW_INODE,
+	D_MAKE_ROOT,
+	MOUNT_NODEV_FILL_SUPER,
+	MOUNT_NODEV,
+	FILE_SYSTEM_TYPE_MOUNT,
+	FILE_SYSTEM_TYPE_KILL_SB,
+	KILL_ANON_SUPER,
+};
 
 /* STRUCT DEFS -------------------------------------------------- */
 
@@ -66,6 +69,7 @@ struct super_block_container {
 	struct super_block super_block;
 	cptr_t my_ref;
 	cptr_t their_ref;
+	cptr_t fs_memory; /* for convenience */
 };
 
 struct pmfs_inode_vfs_container {

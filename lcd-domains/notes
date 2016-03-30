@@ -47,7 +47,7 @@ X LIBLCD DONE    U ioremap_hpage_cache_ro
 X LIBLCD DONE    U iounmap
                  U iput
                  U is_bad_inode
-X GLUE           U kill_anon_super
+X GLUE DONE      U kill_anon_super
 X NO-OP DONE     U kthread_create_on_node
 X NO-OP DONE     U kthread_should_stop
 X NO-OP DONE     U kthread_stop
@@ -104,13 +104,13 @@ glue for super ops
         -- assume i links > 0, truncate list is empty
 
 glue for fs type
+     -- populate fn pointers in register_filesystem
+     -- kill fn pointers in unregister_filesystem
      mount DONE
            -- need to volunteer fs phys mem DONE
-     kill_sb 
-           -- this will unvolunteer fs phys mem
-           -- populate fn pointers in register_filesystem
-           -- kill fn pointers in unregister_filesystem
-           -- kill super_block trampolines after kill_sb rpc
+     kill_sb DONE
+           -- this will unvolunteer fs phys mem DONE
+           -- kill super_block trampolines after kill_sb rpc DONE
 
 glue for pmfs_fill_super DONE
      -- this is where we'll populate super ops DONE

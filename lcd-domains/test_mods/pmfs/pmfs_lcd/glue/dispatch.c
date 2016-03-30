@@ -26,6 +26,8 @@ int dispatch_fs_channel(struct lcd_sync_channel_group_item *chnl)
 		return mount_nodev_fill_super_callee();
 	case FILE_SYSTEM_TYPE_MOUNT:
 		return file_system_type_mount_callee();
+	case FILE_SYSTEM_TYPE_KILL_SB:
+		return file_system_type_kill_sb_callee();
 	default:
 		LIBLCD_ERR("unexpected function tag %d", lcd_r0());
 		return -EINVAL;
