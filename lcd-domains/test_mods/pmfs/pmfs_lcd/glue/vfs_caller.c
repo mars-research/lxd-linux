@@ -914,6 +914,37 @@ out:
 	return ret;
 }
 
+static void *update_cmdline(char *old_cmdline, gpa_t new_fs_mem_gpa)
+{
+	int ret;
+	char *new_cmdline;
+	/* 
+	 * Stolen from pmfs/super.c:get_phys_addr. Looks like they
+	 * assume physaddr= is always the first mount option, so we
+	 * do too.
+	 */
+	if (!old_cmdline || strncmp(old_cmdline, "physaddr=", 9) != 0)
+		return NULL;
+	old_cmdline += 9;
+	/*
+	 * Skim over old physaddr
+	 */
+	simple_strtoull(old_cmdline, &old_cmdline, 0);
+	/*
+	 * Create new dup of cmdline, but with new physaddr
+	 */
+	new_cmdline = kzalloc(strlen(old_cmdline) + 9 + 18 + 1, GFP_KERNEL);
+	if (!new_cmdline) {
+		LIBLCD_ERR("kzalloc failed");
+		return NULL;
+	}
+	snprintf(new_cmdline, strlen(old_cmdline) + 9 + 16 + 1,
+		"physaddr=0x%016lx,%s", gpa_val(new_fs_mem_gpa),
+		old_cmdline);
+
+	return (void *)new_cmdline;
+}
+
 int file_system_type_mount_callee(void)
 {
 	struct file_system_type_container *fs_container;
@@ -923,8 +954,12 @@ int file_system_type_mount_callee(void)
 	unsigned int mem_order;
 	unsigned long data_offset;
 	gva_t data_gva;
+	void *new_cmdline;
 	int flags;
 	cptr_t dentry_ref = CAP_CPTR_NULL;
+	cptr_t fs_mem_cptr;
+	unsigned int fs_mem_order;
+	gpa_t fs_mem_gpa;
 	/*
 	 * Unmarshal args. We expect:
 	 *
@@ -932,6 +967,7 @@ int file_system_type_mount_callee(void)
 	 * XXX:  -- nothing for dev_name (pmfs doesn't use it)
 	 *       -- flags
 	 *       -- void *data stuff
+	 *       -- cap to memory for fs
 	 */
 	ret = glue_cap_lookup_file_system_type_type(vfs_cspace,
 						__cptr(lcd_r1()),
@@ -954,17 +990,37 @@ int file_system_type_mount_callee(void)
 		goto fail2;
 	}
 	/*
+	 * Map fs memory
+	 */
+	fs_mem_cptr = lcd_cr1();
+	fs_mem_order = lcd_r5();
+
+	ret = lcd_map_phys(fs_mem_cptr, fs_mem_order, &fs_mem_gpa);
+	if (ret) {
+		LIBLCD_ERR("error mapping fs memory");
+		goto fail3;
+	}
+	/*
+	 * Update cmd line args with new gpa
+	 */
+	new_cmdline = update_cmdline((char *)(gva_val(data_gva) + data_offset),
+				fs_mem_gpa);
+	if (!new_cmdline) {
+		LIBLCD_ERR("failed to update cmdline");
+		goto fail4;
+	}
+	/*
 	 * Call real function
 	 */
 	dentry = fs_container->file_system_type.mount(
 		&fs_container->file_system_type,
 		flags,
 		NULL,
-		(void *)(gva_val(data_gva) + data_offset));
+		new_cmdline);
 	if (!dentry) {
 		LIBLCD_ERR("got null from mount");
 		ret = -EINVAL;
-		goto fail3;
+		goto fail5;
 	}
 	dentry_container = container_of(dentry,
 					struct dentry_container,
@@ -975,11 +1031,19 @@ int file_system_type_mount_callee(void)
 	 */
 	lcd_unmap_virt(data_gva, mem_order);
 	/*
+	 * Free new_cmdline
+	 */
+	kfree(new_cmdline);
+	/*
 	 * Done
 	 */
 	ret = 0;
 	goto out;
 
+fail5:
+	kfree(new_cmdline);
+fail4:
+	lcd_unmap_virt(fs_mem_gva, fs_mem_order);
 fail3:
 	lcd_unmap_virt(data_gva, mem_order);
 fail2:
@@ -992,4 +1056,19 @@ out:
 	if (lcd_sync_reply())
 		LIBLCD_ERR("double fault?");
 	return ret;
+}
+
+int super_block_put_super_callee(void)
+{
+
+
+
+
+
+
+
+
+
+
+
 }

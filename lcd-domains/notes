@@ -104,8 +104,8 @@ glue for super ops
         -- assume i links > 0, truncate list is empty
 
 glue for fs type
-     mount DONE
-     kill_sb
+     mount -- need to volunteer fs phys mem
+     kill_sb -- this will unvolunteer fs phys mem
      -- populate fn pointers in register_filesystem
      -- kill fn pointers in unregister_filesystem
      -- kill super_block trampolines after kill_sb rpc
@@ -117,6 +117,8 @@ Also todo: make sure containers are set up properly
      -- modify super_block alloc/free
      -- modify dentry alloc/free
 
-
-        
-
+Not going to have user level do mount call, because too complicated
+to interface user thread with the dispatch loop on non-isolated side.
+Just have non-isolated side call mount system call or something, same
+for umount. Maybe. May not work - maybe only real threads (non-kthreads) 
+are allowed to call mount, since kthreads may not have a root dir.

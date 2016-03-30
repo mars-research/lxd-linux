@@ -548,6 +548,150 @@ mount_nodev_fill_super_trampoline(struct super_block *super_block,
 					hidden_args->channel);
 }
 
+static int get_phys_addr(char *cmdline, unsigned long *phys_addr)
+{
+	/*
+	 * Taken from pmfs/super.c. Looks like they assume
+	 * physaddr is first mount option.
+	 */
+	if (!cmdline || strncmp(options, "physaddr=", 9) != 0)
+		return -EINVAL;
+	cmdline += 9;
+	*phys_addr = (unsigned long)simple_strtoull(cmdline, &cmdline, 0);
+	if ((*phys_addr) & (PAGE_SIZE - 1)) {
+		LIBLCD_ERR("phys_addr not page aligned");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+/* adapted from pmfs/super.c:pmfs_parse_options */
+static int get_size(char *cmdline, unsigned long *size)
+{
+	char *p, *rest;
+	substring_t args[MAX_OPT_ARGS];
+	match_table_t tokens = {
+		{ 0,	     "init=%s"		  },
+		{ 1,         NULL                 },
+	};
+
+	while ((p = strsep(&cmdline, ",")) != NULL) {
+		int token;
+		if (!*p)
+			continue;
+
+		token = match_token(p, tokens, args);
+		switch (token) {
+		case 0:
+			/* memparse() will accept a K/M/G without a digit */
+			if (!isdigit(*args[0].from))
+				return -EINVAL;
+			*size = (unsigned long)memparse(args[0].from, &rest);
+			return 0;
+		default:
+			break;
+		}
+	}
+	/*
+	 * No "init=" mount option. Fail.
+	 */
+	LIBLCD_ERR("no init= mount option?");
+	return -EINVAL;
+}
+
+static int setup_fs_memory(char *cmdline, cptr_t *fs_mem_cptr,
+			unsigned int *fs_mem_order)
+{
+	unsigned long phys_addr, size;
+	unsigned int order;
+	int ret;
+	/*
+	 * Parse cmdline to get phys address and size
+	 */
+	ret = get_phys_addr(cmdline, &phys_addr);
+	if (ret) {
+		LIBLCD_ERR("failed to get phys addr");
+		goto fail1;
+	}
+	ret = get_size(cmdline, &size);
+	if (ret) {
+		LIBLCD_ERR("failed to get size");
+		goto fail2;
+	}
+	size >>= PAGE_SHIFT;
+	if (!size) {
+		LIBLCD_ERR("size too small");
+		ret = -EINVAL;
+		goto fail3;
+	}
+	order = ilog2(size);
+	if (size & ((1UL << order) - 1)) {
+		LIBLCD_ERR("size not 2^x pages");
+		ret = -EINVAL;
+		goto fail4;
+	}
+	/*
+	 * Volunteer fs memory
+	 */
+	*fs_mem_order = order;
+	ret = lcd_volunteer_dev_mem(__gpa(phys_addr), order, fs_mem_cptr);
+	if (ret) {
+		LIBLCD_ERR("failed to volunteer fs mem");
+		goto fail5;
+	}
+	/*
+	 * Done
+	 */
+	return 0;
+
+fail5:
+fail4:
+fail3:
+fail2:
+fail1:
+	return ret;
+}
+
+static int setup_data(void *data, cptr_t *data_cptr, 
+		unsigned int *mem_order, unsigned long *data_offset)
+{
+	int ret;
+	struct page *p;
+	unsigned long data_len;
+	unsigned long mem_len;
+	/*
+	 * Determine page that contains (start of) data
+	 */
+	p = virt_to_head_page(data);
+	if (!p) {
+		LIBLCD_ERR("failed to translate to page");
+		ret = -EINVAL;
+		goto fail1;
+	}
+	data_len = strlen(data);
+	mem_len = roundup_power_of_two(ALIGN(data + data_len - page_address(p),
+								PAGE_SIZE));
+	*mem_order = ilog2(mem_len >> PAGE_SHIFT);
+	/*
+	 * Volunteer memory
+	 */
+	*data_offset = data - page_address(p);
+	ret = lcd_volunteer_pages(p, *mem_order, data_cptr);
+	if (ret) {
+		LIBLCD_ERR("failed to volunteer memory");
+		goto fail2;
+	}
+	/*
+	 * Done
+	 */
+	return 0;
+
+fail2:
+fail1:
+	return ret;
+}
+
 struct dentry *
 noinline
 file_system_type_mount(struct file_system_type *fs_type,
@@ -565,6 +709,16 @@ file_system_type_mount(struct file_system_type *fs_type,
 	cptr_t data_cptr;
 	unsigned int mem_order;
 	unsigned long data_offset;
+	cptr_t fs_mem_cptr;
+	unsigned int fs_mem_order;
+	/*
+	 * Volunteer fs memory
+	 */
+	ret = setup_fs_memory(data, &fs_mem_cptr, &fs_mem_order);
+	if (ret) {
+		LIBLCD_ERR("failed to volunteer fs memory");
+		goto fail0;
+	}
 	/*
 	 * Volunteer memory that contains void *data
 	 */
@@ -609,7 +763,7 @@ file_system_type_mount(struct file_system_type *fs_type,
 	/*
 	 * Unvolunteer void *data
 	 */
-	unsetup_data(data_cptr);
+	lcd_cap_delete(data_cptr);
 	/*
 	 * Done
 	 */
@@ -617,8 +771,10 @@ file_system_type_mount(struct file_system_type *fs_type,
 
 fail3:
 fail2:
-	unsetup_data(data_cptr);
+	lcd_cap_delete(data_cptr);
 fail1:
+	lcd_cap_delete(fs_mem_cptr);
+fail0:
 out:
 	return dentry;
 }
