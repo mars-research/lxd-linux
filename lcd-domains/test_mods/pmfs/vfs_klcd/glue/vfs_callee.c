@@ -281,12 +281,65 @@ super_block_evict_inode_trampoline(struct inode *inode)
 				hidden_args->channel);
 }
 
+void
+noinline
+super_block_put_super(struct super_block *sb,
+		struct super_block_container *super_block_container,
+		struct glue_cspace *cspace,
+		cptr_t channel)
+{
+	int ret;
+	/*
+	 * Call remote put_super
+	 */
+	lcd_set_r0(SUPER_BLOCK_PUT_SUPER);
+	lcd_set_r1(cptr_val(super_block_container->their_ref));
+	ret = lcd_sync_call(channel);
+	if (ret) {
+		LIBLCD_ERR("error calling remote put_super");
+		goto fail1;
+	}
+
+	/* Done */
+	goto out;
+
+out:
+fail1:
+
+	return;
+}
+
+LCD_TRAMPOLINE_DATA(super_block_put_super_trampoline);
+void
+LCD_TRAMPOLINE_LINKAGE(super_block_put_super_trampoline)
+super_block_put_super_trampoline(struct super_block *sb)
+{
+	void (*volatile super_block_put_super_p)(
+		struct super_block *,
+		struct super_block_container *,
+		struct glue_cspace *,
+		cptr_t);
+	struct super_block_put_super_hidden_args *hidden_args;
+
+	LCD_TRAMPOLINE_PROLOGUE(hidden_args, 
+				super_block_put_super_trampoline);
+
+	super_block_put_super_p = super_block_put_super;
+
+	super_block_put_super_p(super_block,
+				hidden_args->super_block_container,
+				hidden_args->cspace,
+				hidden_args->channel);
+}
+
+
 static void destroy_sb_trampolines(struct super_block_container *sb_container)
 {
 	struct super_operations *s_ops = sb_container->super_block.s_op;
 	struct super_block_alloc_inode_hidden_args *alloc_args;
 	struct super_block_destroy_inode_hidden_args *destroy_args;
 	struct super_block_evict_inode_hidden_args *evict_args;
+	struct super_block_put_super_hidden_args *put_args;
 	
 	if (!s_ops)
 		return;
@@ -309,6 +362,12 @@ static void destroy_sb_trampolines(struct super_block_container *sb_container)
 		kfree(evict_args->t_handle);
 		kfree(evict_args);
 	}
+	if (s_ops->put_super) {
+		put_args = LCD_TRAMPOLINE_TO_HIDDEN_ARGS(
+			s_ops->put_super);
+		kfree(put_args->t_handle);
+		kfree(put_args);
+	}
 
 	kfree(s_ops);
 }
@@ -321,6 +380,7 @@ static int setup_sb_trampolines(struct super_block_container *sb_container,
 	struct super_block_alloc_inode_hidden_args *alloc_args;
 	struct super_block_destroy_inode_hidden_args *destroy_args;
 	struct super_block_evict_inode_hidden_args *evict_args;
+	struct super_block_put_super_hidden_args *put_args;
 	int ret;
 	/*
 	 * Alloc struct of function pointers
@@ -398,12 +458,36 @@ static int setup_sb_trampolines(struct super_block_container *sb_container,
 	s_ops->evict_inode =
 		LCD_HANDLE_TO_TRAMPOLINE(evict_args->t_handle);
 	/*
+	 * put_super trampoline
+	 */
+	put_args = kzalloc(sizeof(*put_args), GFP_KERNEL);
+	if (!put_args) {
+		LIBLCD_ERR("kzalloc hidden args failed");
+		ret = -ENOMEM;
+		goto fail7;
+	}
+	put_args->t_handle = LCD_DUP_TRAMPOLINE(
+		super_block_put_super_trampoline);
+	if (!put_args->t_handle) {
+		LIBLCD_ERR("dup trampoline");
+		ret = -ENOMEM;
+		goto fail8;
+	}
+	put_args->t_handle->hidden_args = put_args;
+	put_args->super_block_container = sb_container;
+	put_args->cspace = cspace;
+	put_args->channel = channel;
+	s_ops->put_super =
+		LCD_HANDLE_TO_TRAMPOLINE(put_args->t_handle);
+	/*
 	 * Install ops
 	 */
 	sb_container->super_block.s_op = s_ops;
 	
 	return 0;
 
+fail8:
+fail7:
 fail6:
 fail5:
 fail4:

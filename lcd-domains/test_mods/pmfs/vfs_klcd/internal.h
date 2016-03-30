@@ -35,6 +35,13 @@ struct super_block_evict_inode_hidden_args {
 	struct lcd_trampoline_handle *t_handle;
 };
 
+struct super_block_put_super_hidden_args {
+	struct super_block_container *super_block_container;
+	struct glue_cspace *cspace;
+	cptr_t channel;
+	struct lcd_trampoline_handle *t_handle;
+};
+
 struct mount_nodev_fill_super_hidden_args {
 	struct mount_nodev_fill_super_container *mount_nodev_fill_super_container;
 	struct glue_cspace *cspace;

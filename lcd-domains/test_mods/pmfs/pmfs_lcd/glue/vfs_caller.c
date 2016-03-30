@@ -1058,17 +1058,69 @@ out:
 	return ret;
 }
 
+/* Stolen from part of pmfs/super.c:pmfs_put_super */
+static void do_unmap(struct super_block *sb)
+{
+	struct pmfs_sb_info *sbi = PMFS_SB(sb);
+	struct pmfs_super_block *ps = pmfs_get_super(sb);
+	u64 size = le64_to_cpu(ps->s_size);
+	gpa_t fs_mem_gpa;
+	cptr_t fs_mem_cptr;
+	int ret;
+	unsigned long unused1, unused2;
+
+	if (sbi->virt_addr) {
+		/*
+		 * Translate fs mem gva -> gpa
+		 */
+		fs_mem_gpa = isolated_lcd_gva2gpa(
+			__gva((unsigned long)sbi->virt_addr));
+		/*
+		 * Look up capability for fs mem
+		 */
+		ret = lcd_phys_to_cptr(fs_mem_gpa, &fs_mem_cptr, &unused1,
+				&unused2);
+		if (ret) {
+			LIBLCD_ERR("failed to resolve phys to cptr");
+			fs_mem_cptr = CAP_CPTR_NULL;
+		}
+		/*
+		 * Unmap the memory from our address space
+		 */
+		lcd_unmap_phys(fs_mem_gpa, ilog2(size >> PAGE_SHIFT));
+		/*
+		 * Delete our capability
+		 */
+		if (!cap_cptr_is_null(fs_mem_cptr))
+			lcd_cap_delete(fs_mem_cptr);
+	}
+}
+
 int super_block_put_super_callee(void)
 {
+	struct super_block_container *sb_container;
+	int ret;
+	/*
+	 * Bind on super_block
+	 */
+	ret = glue_cap_lookup_super_block(vfs_cspace,
+					__cptr(lcd_r1()),
+					&sb_container);
+	if (ret) {
+		LIBLCD_ERR("couldn't find super block");
+		goto fail1;
+	}
+	/*
+	 * Invoke real function
+	 */
+	sb_container->super_block.s_op->put_super(&sb_container->super_block);
+	/*
+	 * Unmap fs memory and delete cap
+	 */
+	do_unmap(&sb_container->super_block);
 
+	return 0;
 
-
-
-
-
-
-
-
-
-
+fail1:
+	return ret;
 }
