@@ -16,39 +16,57 @@
 
 /* GLOBALS -------------------------------------------------- */
 
+/* vfs_chnl is only used in register_filesystem for the first rpc
+ * to vfs. Thereafter, we use the async channel (setup as part of
+ * register_filesystem rpc). */
 static cptr_t vfs_chnl;
 static struct glue_cspace *vfs_cspace;
-static struct lcd_sync_channel_group *group;
+static struct thc_channel_group *group;
 
-/* INIT/EXIT -------------------------------------------------- */
+/* For simplicity, we use the same async channel for rpc's in both
+ * directions (to and from vfs). For this reason, these variables need
+ * to be globals. (Yes, for the specific glue code below, we could maybe
+ * tuck these away in some container structs that are passed in as arguments.
+ * But in general - think of a function that only takes scalar args - the
+ * channel for doing rpc's *to* the vfs needs to be a global.) */
+static cptr_t pmfs_sync_endpoint;
+static struct fipc_ring_channel *pmfs_async_chnl;
+static struct thc_channel_group_item *pmfs_async_chnl_group_item;
 
-int glue_vfs_init(cptr_t _vfs_channel, struct lcd_sync_channel_group *_group)
+/* GLUE SUPPORT CODE -------------------------------------------------- */
+
+int glue_vfs_init(cptr_t _vfs_channel, struct thc_channel_group *_group)
 {
 	int ret;
-
-	/* Store a reference to the dispatch loop context, so we
-	 * can dynamically add channels to the loop later. */
+	/*
+	 * Store ref to group and channel so we can access them later,
+	 * in register/unregister filesystem.
+	 */
 	group = _group;
-
-	/* Store reference to vfs channel so we can invoke functions
-	 * on it later. */
 	vfs_chnl = _vfs_channel;
-
-	/* Initialize cspace system */
+	/*
+	 * Initialize cspace stuff
+	 */
 	ret = glue_cap_init();
 	if (ret) {
 		LIBLCD_ERR("cap init");
-		return ret;
+		goto fail1;
 	}
-
-	/* Initialize glue cspace. */
+	/*
+	 * Create a glue cspace to hold remote refs for vfs
+	 */
 	ret = glue_cap_create(&vfs_cspace);
 	if (ret) {
 		LIBLCD_ERR("glue cspace init");
-		return ret;
+		goto fail2;
 	}
 
 	return 0;
+
+fail2:
+	glue_cap_exit();
+fail1:
+	return ret;
 }
 
 void glue_vfs_exit(void)
@@ -60,6 +78,134 @@ void glue_vfs_exit(void)
 	glue_cap_exit();
 }
 
+static int setup_async_channel(cptr_t *buf1_cptr_out, cptr_t *buf2_cptr_out,
+			struct fipc_ring_channel **chnl_out)
+{
+	int ret;
+	cptr_t buf1_cptr, buf2_cptr;
+	gva_t buf1_addr, buf2_addr;
+	struct fipc_ring_channel *chnl;
+	unsigned int pg_order = PMFS_ASYNC_RPC_BUFFER_ORDER - PAGE_SHIFT;
+	/*
+	 * Allocate buffers
+	 *
+	 * (We use the lower level alloc. If we used the heap, even though
+	 * we may alloc only 1 - 2 pages, we would end up sharing around
+	 * 4 MB chunks of memory, since the heap uses coarse microkernel
+	 * allocations.)
+	 */
+	ret = _lcd_alloc_pages(GFP_KERNEL, pg_order, &buf1_cptr);
+	if (ret) {
+		LIBLCD_ERR("buf1 alloc");
+		goto fail1;
+	}
+	ret = _lcd_alloc_pages(GFP_KERNEL, pg_order, &buf2_cptr);
+	if (ret) {
+		LIBLCD_ERR("buf2 alloc");
+		goto fail2;
+	}
+	/*
+	 * Map them somewhere
+	 */
+	ret = lcd_map_virt(buf1_cptr, pg_order, &buf1_addr);
+	if (ret) {
+		LIBLCD_ERR("error mapping buf1");
+		goto fail3;
+	}
+	ret = lcd_map_virt(buf2_cptr, pg_order, &buf2_addr);
+	if (ret) {
+		LIBLCD_ERR("error mapping buf2");
+		goto fail4;
+	}
+	/*
+	 * Prep buffers for rpc
+	 */
+	ret = fipc_prep_buffers(ASYNC_RPC_EXAMPLE_BUFFER_ORDER,
+				(void *)gva_val(buf1_addr),
+				(void *)gva_val(buf2_addr));
+	if (ret) {
+		LIBLCD_ERR("prep buffers");
+		goto fail5;
+	}
+	/*
+	 * Alloc and init channel header
+	 */
+	chnl = kmalloc(sizeof(*chnl), GFP_KERNEL);
+	if (!chnl) {
+		ret = -ENOMEM;
+		LIBLCD_ERR("chnl alloc");
+		goto fail6;
+	}
+	ret = fipc_ring_channel_init(chnl, ASYNC_RPC_EXAMPLE_BUFFER_ORDER,
+				(void *)gva_val(buf1_addr),
+				(void *)gva_val(buf2_addr));
+	if (ret) {
+		LIBLCD_ERR("ring chnl init");
+		goto fail7;
+	}
+
+	*buf1_cptr_out = buf1_cptr;
+	*buf2_cptr_out = buf2_cptr;
+	*chnl_out = chnl;
+
+	return 0;
+
+fail7:
+	kfree(chnl);
+fail6:
+fail5:
+	lcd_unmap_virt(buf1_addr, pg_order);
+fail4:
+	lcd_unmap_virt(buf1_addr, pg_order);
+fail3:
+	lcd_cap_delete(buf2_cptr);
+fail2:
+	lcd_cap_delete(buf1_cptr);
+fail1:
+	return ret; 
+}
+
+static void destroy_async_channel(struct fipc_ring_channel *chnl)
+{
+	unsigned int pg_order = PMFS_ASYNC_RPC_BUFFER_ORDER - PAGE_SHIFT;
+	gva_t tx_gva, rx_gva;
+	cptr_t tx, rx;
+	int ret;
+	unsigned long unused1, unused2;
+	/*
+	 * Translate ring buffers to cptrs
+	 */
+	tx_gva = __gva((unsigned long)chnl->tx.buffer);
+	rx_gva = __gva((unsigned long)chnl->rx.buffer);
+	ret = lcd_virt_to_cptr(tx_gva, &tx, &unused1, &unused2);
+	if (ret) {
+		LIBLCD_ERR("failed to translate tx to cptr");
+		goto fail1;
+	}
+	ret = lcd_virt_to_cptr(rx_gva, &rx, &unused1, &unused2);
+	if (ret) {
+		LIBLCD_ERR("failed to translate rx to cptr");
+		goto fail2;
+	}
+	/*
+	 * Unmap and kill tx/rx
+	 */
+	lcd_unmap_virt(tx_gva, pg_order);
+	lcd_cap_delete(tx);
+	lcd_unmap_virt(rx_gva, pg_order);
+	lcd_cap_delete(rx);
+	/*
+	 * Free chnl header
+	 */
+	kfree(chnl);
+
+	return;
+
+fail2:
+fail1:
+	return;
+}
+
 /* CALLER FUNCTIONS -------------------------------------------------- */
 
 int register_filesystem(struct file_system_type *fs)
@@ -67,9 +213,39 @@ int register_filesystem(struct file_system_type *fs)
 	struct file_system_type_container *fs_container;
 	struct module_container *module_container;
 	int ret;
-	cptr_t endpoint;
+	cptr_t tx, rx;
 	/*
-	 * Get containers
+	 * Set up async and sync channels
+	 */
+	ret = lcd_create_sync_endpoint(&pmfs_sync_endpoint);
+	if (ret) {
+		LIBLCD_ERR("lcd_create_sync_endpoint");
+		goto fail1;
+	}
+	ret = setup_async_channel(&tx, &rx, &pmfs_async_chnl);
+	if (ret) {
+		LIBLCD_ERR("async chnl setup failed");
+		goto fail2;
+	}
+	/*
+	 * Install async channel in async dispatch loop
+	 */
+	pmfs_async_chnl_group_item = kzalloc(
+		sizeof(*pmfs_async_chnl_group_item),
+		GFP_KERNEL);
+	if (!pmfs_async_chnl_group_item) {
+		ret = -ENOMEM;
+		LIBLCD_ERR("alloc failed");
+		goto fail3;
+	}
+	ret = thc_channel_group_item_add(group,
+					pmfs_async_chnl_group_item);
+	if (ret) {
+		LIBLCD_ERR("group item add failed");
+		goto fail4;
+	}
+	/*
+	 * Insert containers into vfs cspace
 	 */
 	fs_container = container_of(fs, 
 				struct file_system_type_container,
@@ -77,34 +253,13 @@ int register_filesystem(struct file_system_type *fs)
 	module_container = container_of(fs->owner,
 					struct module_container,
 					module);
-	/*
-	 * SET UP CHANNEL ----------------------------------------
-	 *
-	 *
-	 * Create the sync endpoint for function calls back to us (pmfs)
-	 */
-	ret = lcd_create_sync_endpoint(&endpoint);
-	if (ret) {
-		LIBLCD_ERR("lcd_create_sync_endpoint");
-		lcd_exit(ret);
-	}
-	/*
-	 * Install in dispatch loop
-	 */
-	lcd_sync_channel_group_item_init(&fs_container->chnl, endpoint, 0,
-					dispatch_fs_channel);
-	lcd_sync_channel_group_add(group, &fs_container->chnl);
-	/*
-	 * INSERT INTO DATA STORE ------------------------------
-	 *
-	 */
 	ret = glue_cap_insert_file_system_type_type(
 		vfs_cspace, 
 		fs_container,
 		&fs_container->my_ref);
 	if (ret) {
 		LIBLCD_ERR("insert");
-		lcd_exit(ret); /* abort */
+		goto fail5;
 	}
 	ret = glue_cap_insert_module_type(
 		vfs_cspace, 
@@ -112,49 +267,67 @@ int register_filesystem(struct file_system_type *fs)
 		&module_container->my_ref);
 	if (ret) {
 		LIBLCD_ERR("insert");
-		lcd_exit(ret); /* abort */
+		goto fail6;
 	}
-
 	/*
-	 * IPC MARSHALING --------------------------------------------------
+	 * Do rpc, sending:
 	 *
+	 *    -- r1: our ref to fs type
+	 *    -- r2: our ref to module
+	 *    -- cr0: cap to pmfs_sync_endpoint
+	 *    -- cr1: cap to buffer for callee to use for tx (this is our rx)
+	 *    -- cr2: cap to buffer for callee to use for rx (this is our tx)
 	 */
+	lcd_set_r0(REGISTER_FS);
 	lcd_set_r1(cptr_val(fs_container->my_ref));
 	lcd_set_r2(cptr_val(module_container->my_ref));
-	/*
-	 * XXX: We don't even pass the name string (otherwise the callee
-	 * needs to keep track of a pesky 5 byte alloc). We just hard
-	 * code it on the callee side for now.
-	 *
-	 * Will grant cap to endpoint
-	 */
-	lcd_set_cr0(endpoint);
-	/*
-	 * IPC CALL ----------------------------------------
-	 */
+	lcd_set_cr0(pmfs_sync_endpoint);
+	lcd_set_cr1(rx);
+	lcd_set_cr2(tx);
 
-	lcd_set_r0(REGISTER_FS);
 	ret = lcd_sync_call(vfs_chnl);
 	if (ret) {
 		LIBLCD_ERR("lcd_call");
-		lcd_exit(ret);
+		goto fail7;
 	}
-
-	/* IPC UNMARSHALING ---------------------------------------- */
-
 	/*
-	 * We expect a remote ref coming back
+	 * Flush cap registers
 	 */
+	lcd_set_cr0(CAP_CPTR_NULL);
+	lcd_set_cr1(CAP_CPTR_NULL);
+	lcd_set_cr2(CAP_CPTR_NULL);
+	/*
+	 * Reply:
+	 *
+	 *    -- r0: register_filesystem return value
+	 *    -- r1: ref to their fs type
+	 *    -- r2: ref to their module
+	 */
+	ret = lcd_r0();
+	if (ret) {
+		LIBLCD_ERR("remote register fs failed");
+		goto fail8;
+	}
 	fs_container->their_ref = __cptr(lcd_r1());
 	module_container->their_ref = __cptr(lcd_r2());
 
-	/* Clear capability register */
-	lcd_set_cr0(CAP_CPTR_NULL);
+	return ret;
 
-	/*
-	 * Pass back return value
-	 */
-	return lcd_r0();
+fail8:
+fail7:
+	glue_cap_remove(vfs_cspace, module_container->my_ref);
+fail6:
+	glue_cap_remove(vfs_cspace, fs_container->my_ref);
+fail5:
+	thc_channel_group_item_remove(group, pmfs_async_chnl_group_item);
+fail4:
+	kfree(pmfs_async_chnl_group_item);
+fail3:
+	destroy_async_channel(pmfs_async_chnl);
+fail2:
+	lcd_cap_delete(pmfs_sync_endpoint);
+fail1:
+	return ret;
 }
 
 int unregister_filesystem(struct file_system_type *fs)

@@ -43,20 +43,25 @@ enum {
 	KILL_ANON_SUPER,
 };
 
+/* async rpc buffers are 2^PMFS_ASYNC_RPC_BUFFER_ORDER bytes */
+#define PMFS_ASYNC_RPC_BUFFER_ORDER 12
+
 /* STRUCT DEFS -------------------------------------------------- */
 
 struct file_system_type_container {
 	struct file_system_type file_system_type;
 	cptr_t my_ref;
 	cptr_t their_ref;
-	struct lcd_sync_channel_group_item chnl;
+	/* Used on vfs side: */
+	struct glue_cspace *fs_cspace;
+	cptr_t fs_sync_endpoint;
+	struct thc_channel_group_item *fs_async_chnl;
 };
 
 struct backing_dev_info_container {
 	struct backing_dev_info backing_dev_info;
 	cptr_t my_ref;
 	cptr_t their_ref;
-	/* no channel since pmfs doesn't implement function ptrs */
 };
 
 struct module_container {

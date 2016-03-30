@@ -16,63 +16,187 @@
 
 /* GLOBALS -------------------------------------------------- */
 
-static struct lcd_sync_channel_group *group;
-static struct lcd_sync_channel_group_item vfs_channel;
-static struct glue_cspace *pmfs_cspace;
+static struct lcd_sync_channel_group_item vfs_channel_group_item;
+static struct thc_channel_group *async_channel_group;
 
-/* INIT/EXIT -------------------------------------------------- */
+/* GLUE SUPPORT -------------------------------------------------- */
 
-int glue_vfs_init(cptr_t vfs_chnl, struct lcd_sync_channel_group *_group)
+int glue_vfs_init(cptr_t vfs_chnl, 
+		struct lcd_sync_channel_group *sync_channel_group,
+		struct thc_channel_group *_async_channel_group)
 {
 	int ret;
-
-	/* Set up ipc channel */
-	lcd_sync_channel_group_item_init(&vfs_channel, vfs_chnl, 1,
+	/*
+	 * Set up sync ipc endpoint for register_filesystem
+	 *
+	 * We expect to be granted 3 cptrs:
+	 *   -- sync endpoint capability
+	 *   -- tx ring buffer memory capability
+	 *   -- rx ring buffer memory capability
+	 */
+	lcd_sync_channel_group_item_init(&vfs_channel_group_item, vfs_chnl, 3,
 					dispatch_vfs_channel);
-
-	group = _group;
-
-	/* Add it to dispatch loop */
-	lcd_sync_channel_group_add(group, &vfs_channel);
-
-	/* Initialize pmfs data store. (This obviously doesn't generalize
-	 * well. In general, the data store should be set up upon receiving
-	 * a register call?) */
+	/*
+	 * Store ref to async channel group so we can add async channels
+	 * in register_filesystem_callee
+	 */
+	async_channel_group = _async_channel_group;
+	/*
+	 * Add it to sync channel group
+	 */
+	lcd_sync_channel_group_add(sync_channel_group, &vfs_channel_group_item);
+	/*
+	 * Initialize cap code
+	 */
 	ret = glue_cap_init();
 	if (ret) {
 		LIBLCD_ERR("cap init");
 		goto fail1;
 	}
 
-	ret = glue_cap_create(&pmfs_cspace);
-	if (ret) {
-		LIBLCD_ERR("create");
-		goto fail2;
-	}
-
 	return 0;
 
-fail2:
-	glue_cap_exit();
 fail1:
 	return ret;
 }
 
-void glue_vfs_exit(void)
+void glue_vfs_exit(struct lcd_sync_channel_group *sync_channel_group,
+		struct thc_channel_group *_async_channel_group)
 {
 	/*
-	 * Destroy pmfs data stroe
+	 * Remove vfs channel from loop, and tear down cap code.
 	 */
-	glue_cap_destroy(pmfs_cspace);
-	/*
-	 * Remove vfs channel from loop
-	 */
-	lcd_sync_channel_group_remove(group, &vfs_channel);
-
+	lcd_sync_channel_group_remove(sync_channel_group, 
+				&vfs_channel_group_item);
 	glue_cap_exit();
 }
 
-/* FUNCTION POINTERS ---------------------------------------- */
+static void destroy_async_fs_ring_channel(struct fipc_ring_channel *chnl,
+					struct thc_channel_group_item *chnl_group_item)
+{
+	cptr_t tx, rx;
+	gva_t tx_gva, rx_gva;
+	unsigned long unused1, unused2;
+	/*
+	 * Translate ring buffers to cptrs
+	 */
+	tx_gva = __gva((unsigned long)chnl->tx.buffer);
+	rx_gva = __gva((unsigned long)chnl->rx.buffer);
+	ret = lcd_virt_to_cptr(tx_gva, &tx, &unused1, &unused2);
+	if (ret) {
+		LIBLCD_ERR("failed to translate tx to cptr");
+		goto fail1;
+	}
+	ret = lcd_virt_to_cptr(rx_gva, &rx, &unused1, &unused2);
+	if (ret) {
+		LIBLCD_ERR("failed to translate rx to cptr");
+		goto fail2;
+	}
+	/*
+	 * Unmap and kill tx/rx
+	 */
+	lcd_unmap_virt(tx_gva, pg_order);
+	lcd_cap_delete(tx);
+	lcd_unmap_virt(rx_gva, pg_order);
+	lcd_cap_delete(rx);
+	/*
+	 * Free chnl header
+	 */
+	kfree(chnl);
+	/*
+	 * Remove and free async channel group item
+	 */
+	thc_channel_group_item_remove(async_channel_group, chnl_group_item);
+	kfree(chnl_group_item);
+}
+
+static int setup_async_fs_ring_channel(cptr_t tx, cptr_t rx, 
+				struct fipc_ring_channel **chnl_out,
+				struct thc_channel_group_item **chnl_group_item_out)
+{
+	gva_t tx_gva, rx_gva;
+	int ret;
+	struct fipc_ring_channel *chnl;
+	struct thc_channel_group_item *chnl_group_item;
+	unsigned int pg_order = PMFS_ASYNC_RPC_BUFFER_ORDER - PAGE_SHIFT;
+	/*
+	 * Map tx and rx buffers (caller has already prep'd buffers)
+	 */
+	ret = lcd_map_virt(tx, pg_order, &tx_gva);
+	if (ret) {
+		LIBLCD_ERR("failed to map tx");
+		goto fail1;
+	}
+	ret = lcd_map_virt(rx, pg_order, &rx_gva);
+	if (ret) {
+		LIBLCD_ERR("failed to map rx");
+		goto fail2;
+	}
+	/*
+	 * Alloc and init channel header
+	 */
+	chnl = kmalloc(sizeof(*chnl), GFP_KERNEL);
+	if (!chnl) {
+		ret = -ENOMEM;
+		LIBLCD_ERR("malloc failed");
+		goto fail3;
+	}
+	ret = fipc_ring_channel_init(chnl,
+				PMFS_ASYNC_RPC_BUFFER_ORDER,
+				/* (note: gva == hva for non-isolated) */
+				(void *)gva_val(tx_gva),
+				(void *)gva_val(rx_gva));
+	if (ret) {
+		LIBLCD_ERR("channel init failed");
+		goto fail4;
+	}
+	/*
+	 * Add to async channel group
+	 */
+	chnl_group_item = kzalloc(sizeof(*chnl_group_item), GFP_KERNEL);
+	if (!chnl_group_item) {
+		ret = -ENOMEM;
+		LIBLCD_ERR("malloc failed");
+		goto fail5;
+	}
+	ret = thc_channel_group_item_add(async_channel_group,
+					chnl_group_item);
+	if (ret) {
+		LIBLCD_ERR("group item add failed");
+		goto fail6;
+	}
+
+	*chnl_out = chnl;
+	*chnl_group_item_out = chnl_group_item;
+	return 0;
+
+fail6:
+	kfree(chnl_group_item);
+fail5:
+fail4:
+	kfree(chnl);
+fail3:
+	lcd_unmap_virt(rx_gva, pg_order);
+fail2:
+	lcd_unmap_virt(tx_gva, pg_order);
+fail1:
+	return 0;
+}
+
+static void destroy_sb_trampolines(struct super_operations *s_ops);
+static int setup_sb_trampolines(struct super_block_container *sb_container,
+				struct glue_cspace *fs_cspace,
+				cptr_t fs_sync_endpoint,
+				struct fipc_ring_channel *fs_async_chnl);
+static void destroy_fs_type_trampolines(
+	struct file_system_type_container *fs_container);
+static int setup_fs_type_trampolines(
+	struct file_system_type_container *fs_container,
+	struct glue_cspace *fs_cspace,
+	cptr_t fs_sync_endpoint,
+	struct fipc_ring_channel *fs_async_chnl);
+
+/* TRAMPOLINES / FUNCTION POINTERS ---------------------------------------- */
 
 struct inode* 
 noinline
@@ -331,175 +455,6 @@ super_block_put_super_trampoline(struct super_block *sb)
 				hidden_args->super_block_container,
 				hidden_args->cspace,
 				hidden_args->channel);
-}
-
-
-static void destroy_sb_trampolines(struct super_operations *s_ops)
-{
-	struct super_block_alloc_inode_hidden_args *alloc_args;
-	struct super_block_destroy_inode_hidden_args *destroy_args;
-	struct super_block_evict_inode_hidden_args *evict_args;
-	struct super_block_put_super_hidden_args *put_args;
-	
-	if (!s_ops)
-		return;
-
-	if (s_ops->alloc_inode) {
-		alloc_args = LCD_TRAMPOLINE_TO_HIDDEN_ARGS(
-			s_ops->alloc_inode);
-		kfree(alloc_args->t_handle);
-		kfree(alloc_args);
-	}
-	if (s_ops->destroy_inode) {
-		destroy_args = LCD_TRAMPOLINE_TO_HIDDEN_ARGS(
-			s_ops->destroy_inode);
-		kfree(destroy_args->t_handle);
-		kfree(destroy_args);
-	}
-	if (s_ops->evict_inode) {
-		evict_args = LCD_TRAMPOLINE_TO_HIDDEN_ARGS(
-			s_ops->evict_inode);
-		kfree(evict_args->t_handle);
-		kfree(evict_args);
-	}
-	if (s_ops->put_super) {
-		put_args = LCD_TRAMPOLINE_TO_HIDDEN_ARGS(
-			s_ops->put_super);
-		kfree(put_args->t_handle);
-		kfree(put_args);
-	}
-
-	kfree(s_ops);
-}
-
-static int setup_sb_trampolines(struct super_block_container *sb_container,
-				struct glue_cspace *cspace,
-				cptr_t channel)
-{
-	struct super_operations *s_ops;
-	struct super_block_alloc_inode_hidden_args *alloc_args;
-	struct super_block_destroy_inode_hidden_args *destroy_args;
-	struct super_block_evict_inode_hidden_args *evict_args;
-	struct super_block_put_super_hidden_args *put_args;
-	int ret;
-	/*
-	 * Alloc struct of function pointers
-	 */
-	s_ops = kzalloc(sizeof(*s_ops), GFP_KERNEL);
-	if (!s_ops) {
-		LIBLCD_ERR("s_ops alloc failed");
-		ret = -ENOMEM;
-		goto fail0;
-	}
-	/*
-	 * alloc_inode trampoline
-	 */
-	alloc_args = kzalloc(sizeof(*alloc_args), GFP_KERNEL);
-	if (!alloc_args) {
-		LIBLCD_ERR("kzalloc hidden args failed");
-		ret = -ENOMEM;
-		goto fail1;
-	}
-	alloc_args->t_handle = LCD_DUP_TRAMPOLINE(
-		super_block_alloc_inode_trampoline);
-	if (!alloc_args->t_handle) {
-		LIBLCD_ERR("dup trampoline");
-		ret = -ENOMEM;
-		kfree(alloc_args);
-		goto fail2;
-	}
-	alloc_args->t_handle->hidden_args = alloc_args;
-	alloc_args->super_block_container = sb_container;
-	alloc_args->cspace = cspace;
-	alloc_args->channel = channel;
-	s_ops->alloc_inode =
-		LCD_HANDLE_TO_TRAMPOLINE(alloc_args->t_handle);
-	/*
-	 * destroy_inode trampoline
-	 */
-	destroy_args = kzalloc(sizeof(*destroy_args), GFP_KERNEL);
-	if (!destroy_args) {
-		LIBLCD_ERR("kzalloc hidden args failed");
-		ret = -ENOMEM;
-		goto fail3;
-	}
-	destroy_args->t_handle = LCD_DUP_TRAMPOLINE(
-		super_block_destroy_inode_trampoline);
-	if (!destroy_args->t_handle) {
-		LIBLCD_ERR("dup trampoline");
-		ret = -ENOMEM;
-		kfree(destroy_args);
-		goto fail4;
-	}
-	destroy_args->t_handle->hidden_args = destroy_args;
-	destroy_args->super_block_container = sb_container;
-	destroy_args->cspace = cspace;
-	destroy_args->channel = channel;
-	s_ops->destroy_inode =
-		LCD_HANDLE_TO_TRAMPOLINE(destroy_args->t_handle);
-	/*
-	 * evict_inode trampoline
-	 */
-	evict_args = kzalloc(sizeof(*evict_args), GFP_KERNEL);
-	if (!evict_args) {
-		LIBLCD_ERR("kzalloc hidden args failed");
-		ret = -ENOMEM;
-		goto fail5;
-	}
-	evict_args->t_handle = LCD_DUP_TRAMPOLINE(
-		super_block_evict_inode_trampoline);
-	if (!evict_args->t_handle) {
-		LIBLCD_ERR("dup trampoline");
-		ret = -ENOMEM;
-		kfree(evict_args);
-		goto fail6;
-	}
-	evict_args->t_handle->hidden_args = evict_args;
-	evict_args->super_block_container = sb_container;
-	evict_args->cspace = cspace;
-	evict_args->channel = channel;
-	s_ops->evict_inode =
-		LCD_HANDLE_TO_TRAMPOLINE(evict_args->t_handle);
-	/*
-	 * put_super trampoline
-	 */
-	put_args = kzalloc(sizeof(*put_args), GFP_KERNEL);
-	if (!put_args) {
-		LIBLCD_ERR("kzalloc hidden args failed");
-		ret = -ENOMEM;
-		goto fail7;
-	}
-	put_args->t_handle = LCD_DUP_TRAMPOLINE(
-		super_block_put_super_trampoline);
-	if (!put_args->t_handle) {
-		LIBLCD_ERR("dup trampoline");
-		ret = -ENOMEM;
-		kfree(put_args);
-		goto fail8;
-	}
-	put_args->t_handle->hidden_args = put_args;
-	put_args->super_block_container = sb_container;
-	put_args->cspace = cspace;
-	put_args->channel = channel;
-	s_ops->put_super =
-		LCD_HANDLE_TO_TRAMPOLINE(put_args->t_handle);
-	/*
-	 * Install ops
-	 */
-	sb_container->super_block.s_op = s_ops;
-	
-	return 0;
-
-fail8:
-fail7:
-fail6:
-fail5:
-fail4:
-fail3:
-fail2:
-fail1:
-	destroy_sb_trampolines(sb_container->super_block.s_op);
-	return ret;
 }
 
 int
@@ -989,13 +944,182 @@ file_system_type_mount_trampoline(struct file_system_type *fs_type,
 					hidden_args->channel);
 }
 
-/* CALLEE FUNCTIONS -------------------------------------------------- */
+/* TRAMPOLINE SETUP / TEARDOWN ---------------------------------------- */
+
+static void setup_rest_of_args(struct trampoline_hidden_args *args,
+			void *struct_container,
+			struct glue_cspace *fs_cspace,
+			cptr_t fs_sync_endpoint,
+			struct fipc_ring_channel *fs_async_chnl)
+{
+	args->t_handle->hidden_args = args;
+	args->struct_container = fs_container;
+	args->fs_cspace = cspace;
+	args->fs_sync_endpoint = fs_sync_endpoint;
+	args->fs_async_chnl = fs_async_chnl;
+}
+
+static void destroy_sb_trampolines(struct super_operations *s_ops)
+{
+	struct trampoline_hidden_args *alloc_args,
+		*destroy_args, *evict_args, *put_args;
+	
+	if (!s_ops)
+		return;
+
+	if (s_ops->alloc_inode) {
+		alloc_args = LCD_TRAMPOLINE_TO_HIDDEN_ARGS(
+			s_ops->alloc_inode);
+		kfree(alloc_args->t_handle);
+		kfree(alloc_args);
+	}
+	if (s_ops->destroy_inode) {
+		destroy_args = LCD_TRAMPOLINE_TO_HIDDEN_ARGS(
+			s_ops->destroy_inode);
+		kfree(destroy_args->t_handle);
+		kfree(destroy_args);
+	}
+	if (s_ops->evict_inode) {
+		evict_args = LCD_TRAMPOLINE_TO_HIDDEN_ARGS(
+			s_ops->evict_inode);
+		kfree(evict_args->t_handle);
+		kfree(evict_args);
+	}
+	if (s_ops->put_super) {
+		put_args = LCD_TRAMPOLINE_TO_HIDDEN_ARGS(
+			s_ops->put_super);
+		kfree(put_args->t_handle);
+		kfree(put_args);
+	}
+
+	kfree(s_ops);
+}
+
+static int setup_sb_trampolines(struct super_block_container *sb_container,
+				struct glue_cspace *fs_cspace,
+				cptr_t fs_sync_endpoint,
+				struct fipc_ring_channel *fs_async_chnl)
+{
+	struct super_operations *s_ops;
+	struct trampoline_hidden_args *alloc_args, *destroy_args,
+		*evict_args, *put_args;
+	int ret;
+	/*
+	 * Alloc struct of function pointers
+	 */
+	s_ops = kzalloc(sizeof(*s_ops), GFP_KERNEL);
+	if (!s_ops) {
+		LIBLCD_ERR("s_ops alloc failed");
+		ret = -ENOMEM;
+		goto fail0;
+	}
+	/*
+	 * alloc_inode trampoline
+	 */
+	alloc_args = kzalloc(sizeof(*alloc_args), GFP_KERNEL);
+	if (!alloc_args) {
+		LIBLCD_ERR("kzalloc hidden args failed");
+		ret = -ENOMEM;
+		goto fail1;
+	}
+	alloc_args->t_handle = LCD_DUP_TRAMPOLINE(
+		super_block_alloc_inode_trampoline);
+	if (!alloc_args->t_handle) {
+		LIBLCD_ERR("dup trampoline");
+		ret = -ENOMEM;
+		kfree(alloc_args);
+		goto fail2;
+	}
+	setup_rest_of_args(alloc_args, sb_container, fs_cspace,
+			fs_sync_endpoint, fs_async_chnl);
+	s_ops->alloc_inode =
+		LCD_HANDLE_TO_TRAMPOLINE(alloc_args->t_handle);
+	/*
+	 * destroy_inode trampoline
+	 */
+	destroy_args = kzalloc(sizeof(*destroy_args), GFP_KERNEL);
+	if (!destroy_args) {
+		LIBLCD_ERR("kzalloc hidden args failed");
+		ret = -ENOMEM;
+		goto fail3;
+	}
+	destroy_args->t_handle = LCD_DUP_TRAMPOLINE(
+		super_block_destroy_inode_trampoline);
+	if (!destroy_args->t_handle) {
+		LIBLCD_ERR("dup trampoline");
+		ret = -ENOMEM;
+		kfree(destroy_args);
+		goto fail4;
+	}
+	setup_rest_of_args(destroy_args, sb_container, fs_cspace,
+			fs_sync_endpoint, fs_async_chnl);
+	s_ops->destroy_inode =
+		LCD_HANDLE_TO_TRAMPOLINE(destroy_args->t_handle);
+	/*
+	 * evict_inode trampoline
+	 */
+	evict_args = kzalloc(sizeof(*evict_args), GFP_KERNEL);
+	if (!evict_args) {
+		LIBLCD_ERR("kzalloc hidden args failed");
+		ret = -ENOMEM;
+		goto fail5;
+	}
+	evict_args->t_handle = LCD_DUP_TRAMPOLINE(
+		super_block_evict_inode_trampoline);
+	if (!evict_args->t_handle) {
+		LIBLCD_ERR("dup trampoline");
+		ret = -ENOMEM;
+		kfree(evict_args);
+		goto fail6;
+	}
+	setup_rest_of_args(evict_args, sb_container, fs_cspace,
+			fs_sync_endpoint, fs_async_chnl);
+	s_ops->evict_inode =
+		LCD_HANDLE_TO_TRAMPOLINE(evict_args->t_handle);
+	/*
+	 * put_super trampoline
+	 */
+	put_args = kzalloc(sizeof(*put_args), GFP_KERNEL);
+	if (!put_args) {
+		LIBLCD_ERR("kzalloc hidden args failed");
+		ret = -ENOMEM;
+		goto fail7;
+	}
+	put_args->t_handle = LCD_DUP_TRAMPOLINE(
+		super_block_put_super_trampoline);
+	if (!put_args->t_handle) {
+		LIBLCD_ERR("dup trampoline");
+		ret = -ENOMEM;
+		kfree(put_args);
+		goto fail8;
+	}
+	setup_rest_of_args(put_args, sb_container, fs_cspace,
+			fs_sync_endpoint, fs_async_chnl);
+	s_ops->put_super =
+		LCD_HANDLE_TO_TRAMPOLINE(put_args->t_handle);
+	/*
+	 * Install ops
+	 */
+	sb_container->super_block.s_op = s_ops;
+	
+	return 0;
+
+fail8:
+fail7:
+fail6:
+fail5:
+fail4:
+fail3:
+fail2:
+fail1:
+	destroy_sb_trampolines(sb_container->super_block.s_op);
+	return ret;
+}
 
 static void destroy_fs_type_trampolines(
 	struct file_system_type_container *fs_container)
 {
-	struct file_system_type_mount_hidden_args *mount_args;
-	struct file_system_type_kill_sb_hidden_args *kill_sb_args;
+	struct trampoline_hidden_args *mount_args, *kill_sb_args;
 
 	if (fs_container->file_system_type.mount) {
 		mount_args = LCD_TRAMPOLINE_TO_HIDDEN_ARGS(
@@ -1012,10 +1136,12 @@ static void destroy_fs_type_trampolines(
 }
 
 static int setup_fs_type_trampolines(
-	struct file_system_type_container *fs_container)
+	struct file_system_type_container *fs_container,
+	struct glue_cspace *fs_cspace,
+	cptr_t fs_sync_endpoint,
+	struct fipc_ring_channel *fs_async_chnl)
 {
-	struct file_system_type_mount_hidden_args *mount_args;
-	struct file_system_type_kill_sb_hidden_args *kill_sb_args;
+	struct trampoline_hidden_args *mount_args, *kill_sb_args;
 	/*
 	 * mount trampoline
 	 */
@@ -1033,10 +1159,8 @@ static int setup_fs_type_trampolines(
 		kfree(mount_args);
 		goto fail2;
 	}
-	mount_args->t_handle->hidden_args = mount_args;
-	mount_args->file_system_type_container = fs_container;
-	mount_args->cspace = cspace;
-	mount_args->channel = channel;
+	setup_rest_of_args(mount_args, fs_container, fs_cspace,
+			fs_sync_endpoint, fs_async_chnl);
 	fs_container->file_system_type.mount = 
 		LCD_HANDLE_TO_TRAMPOLINE(mount_args->t_handle);
 	/*
@@ -1056,10 +1180,8 @@ static int setup_fs_type_trampolines(
 		kfree(kill_sb_args);
 		goto fail4;
 	}
-	kill_sb_args->t_handle->hidden_args = kill_sb_args;
-	kill_sb_args->file_system_type_container = fs_container;
-	kill_sb_args->cspace = cspace;
-	kill_sb_args->channel = channel;
+	setup_rest_of_args(kill_sb_args, fs_container, fs_cspace,
+			fs_sync_endpoint, fs_async_chnl);
 	fs_container->file_system_type.kill_sb = 
 		LCD_HANDLE_TO_TRAMPOLINE(kill_sb_args->t_handle);
 	/*
@@ -1075,12 +1197,26 @@ fail1:
 	return ret;
 }
 	
+/* CALLEE FUNCTIONS -------------------------------------------------- */
 
 int register_filesystem_callee(void)
 {
 	struct file_system_type_container *fs_container;
 	struct module_container *module_container;
 	int ret;
+	cptr_t fs_sync_endpoint;
+	cptr_t tx, rx;
+	struct fipc_ring_channel *chnl;
+	struct thc_channel_group_item *chnl_group_item;
+	struct glue_cspace *fs_cspace;
+	/*
+	 * Set up a cspace for fs remote refs
+	 */
+	ret = glue_cap_create(&fs_cspace);
+	if (ret) {
+		LIBLCD_ERR("failed to create glue cspace");
+		goto fail0;
+	}
 	/*
 	 * Set up our containers (callee alloc)
 	 */
@@ -1091,7 +1227,7 @@ int register_filesystem_callee(void)
 		goto fail1;
 	}
 	ret = glue_cap_insert_file_system_type_type(
-		pmfs_cspace,
+		fs_cspace,
 		fs_container,
 		&fs_container->my_ref);
 	if (ret) {
@@ -1105,7 +1241,7 @@ int register_filesystem_callee(void)
 		goto fail3;
 	}
 	ret = glue_cap_insert_module_type(
-		pmfs_cspace,
+		fs_cspace,
 		module_container,
 		&module_container->my_ref);
 	if (ret) {
@@ -1117,26 +1253,48 @@ int register_filesystem_callee(void)
 	 *
 	 *    -- r1: fs type ref
 	 *    -- r2: module ref
-	 *    -- cr0: cap to pmfs channel
+	 *    -- cr0: cap to pmfs_sync_endpoint
+	 *    -- cr1: our tx ring buffer
+	 *    -- cr2: our rx ring buffer
 	 *
 	 * XXX: We don't bother passing fs name for now. Just hard code
 	 * it to "pmfs".
 	 */
 	fs_container->their_ref = __cptr(lcd_r1());
 	fs_container->file_system_type.name = "pmfs";
-	fs_container->pmfs_channel = lcd_cr0();
 	module_container->their_ref = __cptr(lcd_r2());
+	fs_sync_endpoint = lcd_cr0();
+	tx = lcd_cr1();
+	rx = lcd_cr2();
 	/*
 	 * Set up object linkage
 	 */
 	fs_container->file_system_type.owner = &module_container->module;
 	/*
+	 * Set up async ring channel
+	 */
+	ret = setup_async_fs_ring_channel(tx, rx, &chnl, &chnl_group_item);
+	if (ret) {
+		LIBLCD_ERR("error setting up ring channel");
+		goto fail5;
+	}
+	/*
+	 * Store refs to fs-specific data so we can tear stuff down
+	 * in unregister_filesystem.
+	 */
+	fs_container->fs_cspace = fs_cspace;
+	fs_container->fs_sync_endpoint = fs_sync_endpoint;
+	fs_container->fs_async_chnl = chnl_group_item
+	/*
 	 * Set up fn pointer trampolines
 	 */
-	ret = setup_fs_type_trampolines(fs_container);
+	ret = setup_fs_type_trampolines(fs_container,
+					fs_cspace,
+					fs_sync_endpoint,
+					chnl);
 	if (ret) {
 		LIBLCD_ERR("error setting up trampolines");
-		goto fail5;
+		goto fail6;
 	}
 	/*
 	 * Call real function
@@ -1144,7 +1302,7 @@ int register_filesystem_callee(void)
 	ret = register_filesystem(&fs_container->file_system_type);
 	if (ret) {
 		LIBLCD_ERR("register fs failed");
-		goto fail6;
+		goto fail7;
 	}
 	/*
 	 * Reply with:
@@ -1153,32 +1311,36 @@ int register_filesystem_callee(void)
 	 *   -- r1: ref to our fs type copy
 	 *   -- r2: ref to our module
 	 */
-
 	lcd_set_r1(cptr_val(fs_container->my_ref));
 	lcd_set_r2(cptr_val(module_container->my_ref));
 	
 	goto out;
 
-fail6:
+fail7:
 	destroy_fs_type_trampolines(fs_container);
+fail6:
+	destroy_async_fs_ring_channel(chnl, chnl_group_item);
 fail5:
-	glue_cap_remove(pmfs_cspace, module_container->my_ref);
+	glue_cap_remove(fs_cspace, module_container->my_ref);
 fail4:
 	kfree(module_container);
 fail3:
-	glue_cap_remove(pmfs_cspace, fs_container->my_ref);
+	glue_cap_remove(fs_cspace, fs_container->my_ref);
 fail2:
 	kfree(fs_container);
 fail1:
-	/* XXX: For now, we assume the grant was successful, so we need
-	 * to delete the cap and free the cptr */
+	glue_cap_destroy(fs_cspace);
+fail0:
 	lcd_cap_delete(lcd_cr0());
-	lcd_cptr_free(lcd_cr0());
+	lcd_cap_delete(lcd_cr1());
+	lcd_cap_delete(lcd_cr2());
 out:
 	/*
-	 * Clear cr0
+	 * Flush capability registers
 	 */
 	lcd_set_cr0(CAP_CPTR_NULL);
+	lcd_set_cr1(CAP_CPTR_NULL);
+	lcd_set_cr2(CAP_CPTR_NULL);
 
 	lcd_set_r0(ret);
 
