@@ -59,6 +59,10 @@ int dispatch_vfs_channel(struct lcd_sync_channel_group_item *channel)
 		return mount_nodev_callee();
 		break;
 
+	case SUPER_BLOCK_PUT_SUPER:
+		return kill_anon_super_callee();
+		break;
+
 	default:
 		LIBLCD_ERR("unexpected function label %d",
 			lcd_r0());

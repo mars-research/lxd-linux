@@ -299,8 +299,9 @@ super_block_put_super(struct super_block *sb,
 		LIBLCD_ERR("error calling remote put_super");
 		goto fail1;
 	}
-
-	/* Done */
+	/*
+	 * Nothing in reply
+	 */
 	goto out;
 
 out:
@@ -1624,6 +1625,37 @@ out:
 
 	lcd_cap_delete(data_cptr);
 
+	if (lcd_sync_reply())
+		LIBLCD_ERR("double fault?");
+	return ret;
+}
+
+int kill_anon_super_callee(void)
+{
+	struct super_block_container *sb_container;
+	int ret;
+	/*
+	 * Bind on our private super_block
+	 */
+	ret = glue_cap_lookup_super_block_type(pmfs_cspace,
+					__cptr(lcd_r1()),
+					&sb_container);
+	if (ret) {
+		LIBLCD_ERR("couldn't find super block");
+		goto fail1;
+	}
+	/*
+	 * Call real function
+	 */
+	kill_anon_super(&sb_container->super_block);
+	/*
+	 * Nothing to reply with
+	 */
+	ret = 0;
+	goto out;
+
+fail1:
+out:
 	if (lcd_sync_reply())
 		LIBLCD_ERR("double fault?");
 	return ret;

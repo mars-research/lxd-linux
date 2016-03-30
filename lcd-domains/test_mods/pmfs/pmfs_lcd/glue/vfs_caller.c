@@ -663,6 +663,33 @@ out:
 	return dentry;
 }
 
+void kill_anon_super(struct super_block *sb)
+{
+	struct super_block_container *sb_container;
+	int ret;
+	/*
+	 * Do rpc, passing remote ref to super_block
+	 */
+	container_of(sb,
+		struct super_block_container,
+		super_block);
+	lcd_set_r0(KILL_ANON_SUPER);
+	lcd_set_r1(cptr_val(sb_container->their_ref));
+	
+	ret = lcd_sync_call(vfs_chnl);
+	if (ret) {
+		LIBLCD_ERR("call failed");
+		goto fail1;
+	}
+	/*
+	 * Nothing in reply
+	 */
+	goto out;
+
+fail1:
+out:
+	return;
+}
 
 /* CALLEE FUNCTIONS (FUNCTION POINTERS) ------------------------------ */
 
@@ -1103,7 +1130,7 @@ int super_block_put_super_callee(void)
 	/*
 	 * Bind on super_block
 	 */
-	ret = glue_cap_lookup_super_block(vfs_cspace,
+	ret = glue_cap_lookup_super_block_type(vfs_cspace,
 					__cptr(lcd_r1()),
 					&sb_container);
 	if (ret) {
@@ -1118,9 +1145,16 @@ int super_block_put_super_callee(void)
 	 * Unmap fs memory and delete cap
 	 */
 	do_unmap(&sb_container->super_block);
-
-	return 0;
+	/*
+	 * Nothing to reply with
+	 */
+	ret = 0;
+	goto out;
 
 fail1:
+out:
+	if (lcd_sync_reply())
+		LIBLCD_ERR("double fault?");
+
 	return ret;
 }

@@ -84,4 +84,6 @@ int d_make_root_callee(void);
 
 int mount_nodev_callee(void);
 
+int kill_anon_super_callee(void);
+
 #endif /* VFS_KLCD_INTERNAL_H */

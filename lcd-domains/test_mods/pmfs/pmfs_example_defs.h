@@ -38,6 +38,7 @@
 #define MOUNT_NODEV 15
 #define FILE_SYSTEM_TYPE_MOUNT 16
 #define SUPER_BLOCK_PUT_SUPER 17
+#define KILL_ANON_SUPER 18
 
 /* STRUCT DEFS -------------------------------------------------- */
 

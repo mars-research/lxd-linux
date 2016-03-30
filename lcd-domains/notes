@@ -99,16 +99,18 @@ current fsuid, fsgid, ns --> elide DONE
 glue for super ops
      alloc_inode DONE
      destroy_inode DONE
-     put_super (make sure to add sb trampoline)
+     put_super DONE
      evict_inode DONE
         -- assume i links > 0, truncate list is empty
 
 glue for fs type
-     mount -- need to volunteer fs phys mem
-     kill_sb -- this will unvolunteer fs phys mem
-     -- populate fn pointers in register_filesystem
-     -- kill fn pointers in unregister_filesystem
-     -- kill super_block trampolines after kill_sb rpc
+     mount DONE
+           -- need to volunteer fs phys mem DONE
+     kill_sb 
+           -- this will unvolunteer fs phys mem
+           -- populate fn pointers in register_filesystem
+           -- kill fn pointers in unregister_filesystem
+           -- kill super_block trampolines after kill_sb rpc
 
 glue for pmfs_fill_super DONE
      -- this is where we'll populate super ops DONE
