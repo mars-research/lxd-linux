@@ -9,7 +9,8 @@
 #include <lcd_config/pre_hook.h>
 
 #include <liblcd/enter_exit.h>
-#include <liblcd/thc.h>
+#include <thc.h>
+#include <libfipc.h>
 #include <lcd_domains/liblcd.h>
 #include <asm/lcd_domains/liblcd.h>
 
@@ -17,7 +18,9 @@
 
 static int thc_initialized;
 
-int lcd_enter(void)
+int 
+LIBLCD_FUNC_ATTR
+lcd_enter(void)
 {
 	int ret;
 	/*
@@ -61,6 +64,17 @@ int lcd_enter(void)
 		goto fail;
 	}
 	LIBLCD_MSG("RAM map initialized");
+
+	/*
+	 * Initialize ioremap map
+	 */
+	ret = __liblcd__ioremap_init();
+        if (ret) {
+                LIBLCD_ERR("failed to initialize ioremap map");
+                goto fail;
+        }
+        LIBLCD_MSG("ioremap map initialized");
+
 	/*
 	 * Initialize libcap
 	 */
@@ -71,8 +85,21 @@ int lcd_enter(void)
 	}
 	LIBLCD_MSG("libcap initialized");
 	/*
+	 * Initialize libfipc
+	 */
+	ret = fipc_init();
+	if (ret) {
+		LIBLCD_ERR("failed to init libfipc");
+		goto fail;
+	}
+	/*
 	 * Set up async runtime
 	 */
+	ret = thc_global_init();
+	if (ret) {
+		LIBLCD_ERR("failed to init libasync");
+		goto fail;
+	}
 	thc_init();
 	thc_initialized = 1;
 	LIBLCD_MSG("async runtime initialized");
@@ -87,7 +114,9 @@ fail:
 	return ret;
 }
 
-void __noreturn lcd_exit(int retval)
+void 
+LIBLCD_FUNC_ATTR
+__noreturn lcd_exit(int retval)
 {
 	lcd_printk("=================");
 	lcd_printk("LCD SHUTTING DOWN");

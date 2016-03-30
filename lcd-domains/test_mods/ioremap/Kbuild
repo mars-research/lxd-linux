@@ -1,0 +1,3 @@
+
+obj-$(LCD_CONFIG_BUILD_IOREMAP_BOOT) += boot/
+obj-$(LCD_CONFIG_BUILD_IOREMAP_LCD) += lcd/
