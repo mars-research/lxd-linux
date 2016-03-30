@@ -103,9 +103,9 @@ glue for super ops
      evict_inode DONE
         -- assume i links > 0, truncate list is empty
 
-glue for fs type
-     -- populate fn pointers in register_filesystem
-     -- kill fn pointers in unregister_filesystem
+glue for fs type DONE
+     -- populate fn pointers in register_filesystem DONE
+     -- kill fn pointers in unregister_filesystem DONE
      mount DONE
            -- need to volunteer fs phys mem DONE
      kill_sb DONE
@@ -118,6 +118,8 @@ glue for pmfs_fill_super DONE
 Also todo: make sure containers are set up properly
      -- modify super_block alloc/free
      -- modify dentry alloc/free
+
+TODO: Need to marshal module crap over in register fs
 
 Not going to have user level do mount call, because too complicated
 to interface user thread with the dispatch loop on non-isolated side.

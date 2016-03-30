@@ -405,6 +405,7 @@ static int setup_sb_trampolines(struct super_block_container *sb_container,
 	if (!alloc_args->t_handle) {
 		LIBLCD_ERR("dup trampoline");
 		ret = -ENOMEM;
+		kfree(alloc_args);
 		goto fail2;
 	}
 	alloc_args->t_handle->hidden_args = alloc_args;
@@ -427,6 +428,7 @@ static int setup_sb_trampolines(struct super_block_container *sb_container,
 	if (!destroy_args->t_handle) {
 		LIBLCD_ERR("dup trampoline");
 		ret = -ENOMEM;
+		kfree(destroy_args);
 		goto fail4;
 	}
 	destroy_args->t_handle->hidden_args = destroy_args;
@@ -449,6 +451,7 @@ static int setup_sb_trampolines(struct super_block_container *sb_container,
 	if (!evict_args->t_handle) {
 		LIBLCD_ERR("dup trampoline");
 		ret = -ENOMEM;
+		kfree(evict_args);
 		goto fail6;
 	}
 	evict_args->t_handle->hidden_args = evict_args;
@@ -471,6 +474,7 @@ static int setup_sb_trampolines(struct super_block_container *sb_container,
 	if (!put_args->t_handle) {
 		LIBLCD_ERR("dup trampoline");
 		ret = -ENOMEM;
+		kfree(put_args);
 		goto fail8;
 	}
 	put_args->t_handle->hidden_args = put_args;
@@ -987,14 +991,98 @@ file_system_type_mount_trampoline(struct file_system_type *fs_type,
 
 /* CALLEE FUNCTIONS -------------------------------------------------- */
 
+static void destroy_fs_type_trampolines(
+	struct file_system_type_container *fs_container)
+{
+	struct file_system_type_mount_hidden_args *mount_args;
+	struct file_system_type_kill_sb_hidden_args *kill_sb_args;
+
+	if (fs_container->file_system_type.mount) {
+		mount_args = LCD_TRAMPOLINE_TO_HIDDEN_ARGS(
+			fs_container->file_system_type.mount);
+		kfree(mount_args->t_handle);
+		kfree(mount_args);
+	}
+	if (fs_container->file_system_type.kill_sb) {
+		kill_sb_args = LCD_TRAMPOLINE_TO_HIDDEN_ARGS(
+			fs_container->file_system_type.kill_sb);
+		kfree(kill_sb_args->t_handle);
+		kfree(kill_sb_args);
+	}
+}
+
+static int setup_fs_type_trampolines(
+	struct file_system_type_container *fs_container)
+{
+	struct file_system_type_mount_hidden_args *mount_args;
+	struct file_system_type_kill_sb_hidden_args *kill_sb_args;
+	/*
+	 * mount trampoline
+	 */
+	mount_args = kzalloc(sizeof(*mount_args), GFP_KERNEL);
+	if (!mount_args) {
+		LIBLCD_ERR("kzalloc hidden args failed");
+		ret = -ENOMEM;
+		goto fail1;
+	}
+	mount_args->t_handle = LCD_DUP_TRAMPOLINE(
+		file_system_type_mount_trampoline);
+	if (!mount_args->t_handle) {
+		LIBLCD_ERR("dup trampoline");
+		ret = -ENOMEM;
+		kfree(mount_args);
+		goto fail2;
+	}
+	mount_args->t_handle->hidden_args = mount_args;
+	mount_args->file_system_type_container = fs_container;
+	mount_args->cspace = cspace;
+	mount_args->channel = channel;
+	fs_container->file_system_type.mount = 
+		LCD_HANDLE_TO_TRAMPOLINE(mount_args->t_handle);
+	/*
+	 * kill_sb trampoline
+	 */
+	kill_sb_args = kzalloc(sizeof(*kill_sb_args), GFP_KERNEL);
+	if (!kill_sb_args) {
+		LIBLCD_ERR("kzalloc hidden args failed");
+		ret = -ENOMEM;
+		goto fail3;
+	}
+	kill_sb_args->t_handle = LCD_DUP_TRAMPOLINE(
+		file_system_type_kill_sb_trampoline);
+	if (!kill_sb_args->t_handle) {
+		LIBLCD_ERR("dup trampoline");
+		ret = -ENOMEM;
+		kfree(kill_sb_args);
+		goto fail4;
+	}
+	kill_sb_args->t_handle->hidden_args = kill_sb_args;
+	kill_sb_args->file_system_type_container = fs_container;
+	kill_sb_args->cspace = cspace;
+	kill_sb_args->channel = channel;
+	fs_container->file_system_type.kill_sb = 
+		LCD_HANDLE_TO_TRAMPOLINE(kill_sb_args->t_handle);
+	/*
+	 * Done
+	 */
+	return 0;
+
+fail4:
+fail3:
+fail2:
+fail1:
+	destroy_fs_type_trampolines(fs_container);
+	return ret;
+}
+	
+
 int register_filesystem_callee(void)
 {
 	struct file_system_type_container *fs_container;
 	struct module_container *module_container;
 	int ret;
-
 	/*
-	 * SET UP CONTAINERS ----------------------------------------
+	 * Set up our containers (callee alloc)
 	 */
 	fs_container = kzalloc(sizeof(*fs_container), GFP_KERNEL);
 	if (!fs_container) {
@@ -1002,7 +1090,6 @@ int register_filesystem_callee(void)
 		ret = -ENOMEM;
 		goto fail1;
 	}
-
 	ret = glue_cap_insert_file_system_type_type(
 		pmfs_cspace,
 		fs_container,
@@ -1011,15 +1098,12 @@ int register_filesystem_callee(void)
 		LIBLCD_ERR("dstore insert fs container");
 		goto fail2;
 	}
-
-
 	module_container = kzalloc(sizeof(*module_container), GFP_KERNEL);
 	if (!module_container) {
 		LIBLCD_ERR("kzalloc module container");
 		ret = -ENOMEM;
 		goto fail3;
 	}
-
 	ret = glue_cap_insert_module_type(
 		pmfs_cspace,
 		module_container,
@@ -1028,75 +1112,55 @@ int register_filesystem_callee(void)
 		LIBLCD_ERR("insert");
 		goto fail4;
 	}
-
-	/* IPC UNMARSHALING ---------------------------------------- */
-	
 	/*
-	 * Refs come first. 
+	 * Unmarshal data:
 	 *
-	 * struct file_system_type
-	 * -----------------------
+	 *    -- r1: fs type ref
+	 *    -- r2: module ref
+	 *    -- cr0: cap to pmfs channel
 	 *
 	 * XXX: We don't bother passing fs name for now. Just hard code
 	 * it to "pmfs".
 	 */
 	fs_container->their_ref = __cptr(lcd_r1());
 	fs_container->file_system_type.name = "pmfs";
-	/*
-	 * Get cptr to pmfs channel (the channel we will use to invoke
-	 * functions directed to pmfs - like mount)
-	 */
 	fs_container->pmfs_channel = lcd_cr0();
-	/*
-	 * struct module
-	 * -------------
-	 *
-	 * Pull out remote ref, and link with fs type
-	 */
 	module_container->their_ref = __cptr(lcd_r2());
-	fs_container->file_system_type.owner = &module_container->module;
-
 	/*
-	 * CALL REAL REGISTER_FILESYSTEM ------------------------------
+	 * Set up object linkage
 	 */
-
+	fs_container->file_system_type.owner = &module_container->module;
+	/*
+	 * Set up fn pointer trampolines
+	 */
+	ret = setup_fs_type_trampolines(fs_container);
+	if (ret) {
+		LIBLCD_ERR("error setting up trampolines");
+		goto fail5;
+	}
+	/*
+	 * Call real function
+	 */
 	ret = register_filesystem(&fs_container->file_system_type);
 	if (ret) {
 		LIBLCD_ERR("register fs failed");
-		goto fail5;
-	}
-
-	/*
-	 * MARSHAL RETURN --------------------------------------------------
-	 */
-
-	/*
-	 * Register fs return value
-	 */
-	lcd_set_r0(ret);
-	/*
-	 * Pass back a ref to our copies
-	 */
-	lcd_set_r1(cptr_val(fs_container->my_ref));
-	lcd_set_r2(cptr_val(module_container->my_ref));
-	/*
-	 * Clear cr1
-	 */
-	lcd_set_cr0(CAP_CPTR_NULL);
-
-	/* IPC REPLY -------------------------------------------------- */
-
-	ret = lcd_sync_reply();
-	if (ret) {
-		LIBLCD_ERR("lcd_reply");
 		goto fail6;
 	}
+	/*
+	 * Reply with:
+	 *
+	 *   -- r0: register_fileystem return value
+	 *   -- r1: ref to our fs type copy
+	 *   -- r2: ref to our module
+	 */
 
-	return 0;
+	lcd_set_r1(cptr_val(fs_container->my_ref));
+	lcd_set_r2(cptr_val(module_container->my_ref));
+	
+	goto out;
 
 fail6:
-	if (unregister_filesystem(&fs_container->file_system_type) != 0)
-		LIBLCD_ERR("double fault");
+	destroy_fs_type_trampolines(fs_container);
 fail5:
 	glue_cap_remove(pmfs_cspace, module_container->my_ref);
 fail4:
@@ -1110,8 +1174,16 @@ fail1:
 	 * to delete the cap and free the cptr */
 	lcd_cap_delete(lcd_cr0());
 	lcd_cptr_free(lcd_cr0());
-	/* Clear cr1 */
+out:
+	/*
+	 * Clear cr0
+	 */
 	lcd_set_cr0(CAP_CPTR_NULL);
+
+	lcd_set_r0(ret);
+
+	if (lcd_sync_reply())
+		LIBLCD_ERR("double fault?");
 	return ret;
 }
 
@@ -1181,6 +1253,10 @@ int unregister_filesystem_callee(void)
 	 * Delete cap to pmfs channel
 	 */
 	lcd_cap_delete(fs_container->pmfs_channel);
+	/*
+	 * Destroy trampolines
+	 */
+	destroy_fs_type_trampolines(fs_container);
 	/*
 	 * Free containers
 	 */
