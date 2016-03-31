@@ -79,12 +79,14 @@ void glue_vfs_exit(void)
 }
 
 static int setup_async_channel(cptr_t *buf1_cptr_out, cptr_t *buf2_cptr_out,
-			struct fipc_ring_channel **chnl_out)
+			struct fipc_ring_channel **chnl_out,
+			struct thc_channel_group_item **chnl_group_item_out)
 {
 	int ret;
 	cptr_t buf1_cptr, buf2_cptr;
 	gva_t buf1_addr, buf2_addr;
 	struct fipc_ring_channel *chnl;
+	struct thc_channel_group_item *chnl_group_item;
 	unsigned int pg_order = PMFS_ASYNC_RPC_BUFFER_ORDER - PAGE_SHIFT;
 	/*
 	 * Allocate buffers
@@ -143,13 +145,31 @@ static int setup_async_channel(cptr_t *buf1_cptr_out, cptr_t *buf2_cptr_out,
 		LIBLCD_ERR("ring chnl init");
 		goto fail7;
 	}
+	/*
+	 * Install async channel in async dispatch loop
+	 */
+	chnl_group_item = kzalloc(sizeof(*chnl_group_item), GFP_KERNEL);
+	if (!chnl_group_item) {
+		ret = -ENOMEM;
+		LIBLCD_ERR("alloc failed");
+		goto fail8;
+	}
+	ret = thc_channel_group_item_add(group,	chnl_group_item);
+	if (ret) {
+		LIBLCD_ERR("group item add failed");
+		goto fail9;
+	}
 
 	*buf1_cptr_out = buf1_cptr;
 	*buf2_cptr_out = buf2_cptr;
 	*chnl_out = chnl;
+	*chnl_group_item_out = chnl_group_item;
 
 	return 0;
 
+fail9:
+	kfree(chnl_group_item);
+fail8:
 fail7:
 	kfree(chnl);
 fail6:
@@ -165,7 +185,8 @@ fail1:
 	return ret; 
 }
 
-static void destroy_async_channel(struct fipc_ring_channel *chnl)
+static void destroy_async_channel(struct fipc_ring_channel *chnl,
+				struct thc_channel_group_item *chnl_group_item)
 {
 	unsigned int pg_order = PMFS_ASYNC_RPC_BUFFER_ORDER - PAGE_SHIFT;
 	gva_t tx_gva, rx_gva;
@@ -198,6 +219,13 @@ static void destroy_async_channel(struct fipc_ring_channel *chnl)
 	 * Free chnl header
 	 */
 	kfree(chnl);
+	/*
+	 * Remove and free async channel group item
+	 */
+	if (chnl_group_item) {
+		thc_channel_group_item_remove(group, chnl_group_item);
+		kfree(chnl_group_item);
+	}
 
 	return;
 
@@ -222,27 +250,11 @@ int register_filesystem(struct file_system_type *fs)
 		LIBLCD_ERR("lcd_create_sync_endpoint");
 		goto fail1;
 	}
-	ret = setup_async_channel(&tx, &rx, &pmfs_async_chnl);
+	ret = setup_async_channel(&tx, &rx, &pmfs_async_chnl, 
+				&pmfs_async_chnl_group_item);
 	if (ret) {
 		LIBLCD_ERR("async chnl setup failed");
 		goto fail2;
-	}
-	/*
-	 * Install async channel in async dispatch loop
-	 */
-	pmfs_async_chnl_group_item = kzalloc(
-		sizeof(*pmfs_async_chnl_group_item),
-		GFP_KERNEL);
-	if (!pmfs_async_chnl_group_item) {
-		ret = -ENOMEM;
-		LIBLCD_ERR("alloc failed");
-		goto fail3;
-	}
-	ret = thc_channel_group_item_add(group,
-					pmfs_async_chnl_group_item);
-	if (ret) {
-		LIBLCD_ERR("group item add failed");
-		goto fail4;
 	}
 	/*
 	 * Insert containers into vfs cspace
@@ -259,7 +271,7 @@ int register_filesystem(struct file_system_type *fs)
 		&fs_container->my_ref);
 	if (ret) {
 		LIBLCD_ERR("insert");
-		goto fail5;
+		goto fail3;
 	}
 	ret = glue_cap_insert_module_type(
 		vfs_cspace, 
@@ -267,7 +279,7 @@ int register_filesystem(struct file_system_type *fs)
 		&module_container->my_ref);
 	if (ret) {
 		LIBLCD_ERR("insert");
-		goto fail6;
+		goto fail4;
 	}
 	/*
 	 * Do rpc, sending:
@@ -288,7 +300,7 @@ int register_filesystem(struct file_system_type *fs)
 	ret = lcd_sync_call(vfs_chnl);
 	if (ret) {
 		LIBLCD_ERR("lcd_call");
-		goto fail7;
+		goto fail5;
 	}
 	/*
 	 * Flush cap registers
@@ -306,24 +318,20 @@ int register_filesystem(struct file_system_type *fs)
 	ret = lcd_r0();
 	if (ret) {
 		LIBLCD_ERR("remote register fs failed");
-		goto fail8;
+		goto fail6;
 	}
 	fs_container->their_ref = __cptr(lcd_r1());
 	module_container->their_ref = __cptr(lcd_r2());
 
 	return ret;
 
-fail8:
-fail7:
-	glue_cap_remove(vfs_cspace, module_container->my_ref);
 fail6:
-	glue_cap_remove(vfs_cspace, fs_container->my_ref);
 fail5:
-	thc_channel_group_item_remove(group, pmfs_async_chnl_group_item);
+	glue_cap_remove(vfs_cspace, module_container->my_ref);
 fail4:
-	kfree(pmfs_async_chnl_group_item);
+	glue_cap_remove(vfs_cspace, fs_container->my_ref);
 fail3:
-	destroy_async_channel(pmfs_async_chnl);
+	destroy_async_channel(pmfs_async_chnl, pmfs_async_chnl_group_item);
 fail2:
 	lcd_cap_delete(pmfs_sync_endpoint);
 fail1:
@@ -335,6 +343,7 @@ int unregister_filesystem(struct file_system_type *fs)
 	int ret;
 	struct file_system_type_container *fs_container;
 	struct module_container *module_container;
+	struct fipc_message *request, *response;
 
 	fs_container = container_of(fs,
 				struct file_system_type_container,
@@ -342,32 +351,39 @@ int unregister_filesystem(struct file_system_type *fs)
 	module_container = container_of(fs->owner,
 					struct module_container,
 					module);
-
-	/* IPC MARSHALING ---------------------------------------- */
-
 	/*
-	 * Pass remote refs to vfs's copies
+	 * Marshal and do rpc.
+	 *
+	 *   -- fs type ref
+	 *   -- module ref
 	 */
-	lcd_set_r1(cptr_val(fs_container->their_ref));
-	lcd_set_r2(cptr_val(module_container->their_ref));
-
-	/* IPC CALL ---------------------------------------- */
-
-	lcd_set_r0(UNREGISTER_FS);
-	ret = lcd_sync_call(vfs_chnl);
+	ret = async_msg_blocking_send_start(pmfs_async_chnl, &request);
 	if (ret) {
-		LIBLCD_ERR("lcd_call");
-		lcd_exit(ret);
+		LIBLCD_ERR("failed to get send slot");
+		goto fail1;
 	}
+	fipc_set_reg0(request, UNREGISTER_FS);
+	fipc_set_reg1(request, cptr_val(fs_container->their_ref));
+	fipc_set_reg2(request, cptr_val(module_container->their_ref));
 
-	/* POST-IPC ---------------------------------------- */
-
+	ret = thc_ipc_call(pmfs_async_chnl, request, &response);
+	if (ret) {
+		LIBLCD_ERR("async call failed");
+		goto fail2;
+	}
 	/*
-	 * Destroy pmfs channel, remove from dispatch loop
+	 * Just expecting int ret value in response
 	 */
-	lcd_sync_channel_group_remove(group, &fs_container->chnl);
-
-	lcd_cap_delete(fs_container->chnl.channel_cptr);
+	ret = fipc_get_reg0(response);
+	if (fipc_recv_msg_end(pmfs_async_chnl, response))
+		LIBLCD_ERR("failed to receive response?");
+	/*
+	 * Tear down.
+	 *
+	 * Destroy sync endpoint and async channel
+	 */
+	lcd_cap_delete(pmfs_sync_endpoint);
+	destroy_async_channel(pmfs_async_chnl);
 	/*
 	 * Remove fs type and module from data store
 	 */
@@ -376,7 +392,7 @@ int unregister_filesystem(struct file_system_type *fs)
 	/*
 	 * Pass back return value
 	 */
-	return lcd_r0();
+	return ret;
 }
 
 int bdi_init(struct backing_dev_info *bdi)

@@ -179,4 +179,42 @@ void glue_cap_remove(
 	struct glue_cspace *cspace, 
 	cptr_t c);
 
+/* ASYNC HELPERS -------------------------------------------------- */
+
+static inline
+int
+async_msg_get_fn_type(struct fipc_message *msg)
+{
+	return fipc_get_flags(msg) >> THC_RESERVED_MSG_FLAG_BITS;
+}
+
+static inline
+void
+async_msg_set_fn_type(struct fipc_message *msg, enum fn_type type)
+{
+	uint32_t flags = fipc_get_flags(msg);
+	/* ensure type is in range */
+	type &= (1 << (32 - THC_RESERVED_MSG_FLAG_BITS)) - 1;
+	/* erase old type */
+	flags &= ((1 << THC_RESERVED_MSG_FLAG_BITS) - 1);
+	/* install new type */
+	flags |= (type << THC_RESERVED_MSG_FLAG_BITS);
+	fipc_set_flags(msg, flags);
+}
+
+static inline
+int
+async_msg_blocking_send_start(struct fipc_ring_channel *chnl, 
+			struct fipc_message **out)
+{
+	int ret;
+	for (;;) {
+		/* Poll until we get a free slot or error */
+		ret = fipc_send_msg_start(chnl, out);
+		if (!ret || ret != -EWOULDBLOCK)
+			return ret;
+		cpu_relax();
+	}
+}
+
 #endif /* PMFS_EXAMPLE_DEFS_H */
