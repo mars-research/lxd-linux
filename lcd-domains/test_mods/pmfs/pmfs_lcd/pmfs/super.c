@@ -1281,13 +1281,13 @@ init_pmfs_fs(void)
 
 #ifdef LCD_ISOLATE
 
-	rc = bdi_init(&pmfs_backing_dev_info_container.backing_dev_info);
+	rc = register_filesystem(&pmfs_fs_type_container.file_system_type);
 	if (rc)
 		goto out3;
 
 #else /* !LCD_ISOLATE */
 
-	rc = bdi_init(&pmfs_backing_dev_info);
+	rc = register_filesystem(&pmfs_fs_type);
 	if (rc)
 		goto out3;
 
@@ -1295,13 +1295,13 @@ init_pmfs_fs(void)
 
 #ifdef LCD_ISOLATE
 
-	rc = register_filesystem(&pmfs_fs_type_container.file_system_type);
+	rc = bdi_init(&pmfs_backing_dev_info_container.backing_dev_info);
 	if (rc)
 		goto out4;
 
 #else /* !LCD_ISOLATE */
 
-	rc = register_filesystem(&pmfs_fs_type);
+	rc = bdi_init(&pmfs_backing_dev_info);
 	if (rc)
 		goto out4;
 
@@ -1313,11 +1313,11 @@ out4:
 
 #ifdef LCD_ISOLATE
 
-	bdi_destroy(&pmfs_backing_dev_info_container.backing_dev_info);
+	unregister_filesystem(&pmfs_fs_type_container.file_system_type);
 
-#else /* !LCD_ISOLATE */
+#else /* ! LCD_ISOLATE */
 
-	bdi_destroy(&pmfs_backing_dev_info);
+	unregister_filesystem(&pmfs_fs_type);
 
 #endif /* LCD_ISOLATE */
 
@@ -1341,21 +1341,21 @@ exit_pmfs_fs(void)
 {
 #ifdef LCD_ISOLATE
 
-	unregister_filesystem(&pmfs_fs_type_container.file_system_type);
-
-#else /* ! LCD_ISOLATE */
-
-	unregister_filesystem(&pmfs_fs_type);
-
-#endif /* LCD_ISOLATE */
-
-#ifdef LCD_ISOLATE
-
 	bdi_destroy(&pmfs_backing_dev_info_container.backing_dev_info);
 
 #else /* !LCD_ISOLATE */
 
 	bdi_destroy(&pmfs_backing_dev_info);
+
+#endif /* LCD_ISOLATE */
+
+#ifdef LCD_ISOLATE
+
+	unregister_filesystem(&pmfs_fs_type_container.file_system_type);
+
+#else /* ! LCD_ISOLATE */
+
+	unregister_filesystem(&pmfs_fs_type);
 
 #endif /* LCD_ISOLATE */
 
