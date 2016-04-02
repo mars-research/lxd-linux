@@ -2090,15 +2090,20 @@ out:
 	return ret;
 }
 
-int kill_anon_super_callee(void)
+int kill_anon_super_callee(struct fipc_message *request,
+			struct fipc_ring_channel *channel)
 {
 	struct super_block_container *sb_container;
 	int ret;
+	struct fipc_message *response;
+	cptr_t sb_ref = __cptr(fipc_get_reg0(request));
+
+	fipc_recv_msg_end(channel, request);
 	/*
 	 * Bind on our private super_block
 	 */
 	ret = glue_cap_lookup_super_block_type(pmfs_cspace,
-					__cptr(lcd_r1()),
+					sb_ref,
 					&sb_container);
 	if (ret) {
 		LIBLCD_ERR("couldn't find super block");
@@ -2121,7 +2126,14 @@ int kill_anon_super_callee(void)
 
 fail1:
 out:
-	if (lcd_sync_reply())
-		LIBLCD_ERR("double fault?");
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+
+	/* Empty response */
+
+	thc_ipc_reply(channel, request_cookie, response);
+
 	return ret;
 }

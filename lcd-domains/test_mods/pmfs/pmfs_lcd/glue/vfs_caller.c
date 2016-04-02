@@ -1009,23 +1009,36 @@ void kill_anon_super(struct super_block *sb)
 {
 	struct super_block_container *sb_container;
 	int ret;
-	/*
-	 * Do rpc, passing remote ref to super_block
-	 */
+	struct fipc_message *request, *response;
+
 	container_of(sb,
 		struct super_block_container,
 		super_block);
-	lcd_set_r0(KILL_ANON_SUPER);
-	lcd_set_r1(cptr_val(sb_container->their_ref));
-	
-	ret = lcd_sync_call(vfs_chnl);
+	/*
+	 * Marshal:
+	 *
+	 *   -- sb ref
+	 */
+	ret = async_msg_blocking_send_start(pmfs_async_chnl, &request);
 	if (ret) {
-		LIBLCD_ERR("call failed");
+		LIBLCD_ERR("failed to get send slot");
 		goto fail1;
+	}
+
+	async_msg_set_fn_type(request, KILL_ANON_SUPER);
+	fipc_set_reg0(request, cptr_val(sb_container->their_ref));
+
+	ret = thc_ipc_call(pmfs_async_chnl, request, &response);
+	if (ret) {
+		LIBLCD_ERR("error sending msg");
+		goto fail2;
 	}
 	/*
 	 * Nothing in reply
 	 */
+
+	fipc_recv_msg_end(pmfs_async_chnl, response);
+
 	goto out;
 
 fail1:
