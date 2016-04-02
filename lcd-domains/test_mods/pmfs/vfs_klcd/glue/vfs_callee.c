@@ -1765,15 +1765,21 @@ out:
 	return ret;
 }
 
-int unlock_new_inode_callee(void)
+int unlock_new_inode_callee(struct fipc_message *request,
+			struct fipc_ring_channel *channel)
 {
-	struct pmfs_inode_vfs_container *inode_container;
+	struct pmfs_inode_vfs_container *inode_container = NULL;
 	int ret;
+	cptr_t inode_ref = __cptr(fipc_get_reg0(request));
+	struct fipc_message *response;
+
+	fipc_recv_msg_end(channel, request);
+
 	/*
 	 * Look up our inode obj
 	 */
 	ret = glue_cap_lookup_pmfs_inode_vfs_type(pmfs_cspace,
-						__cptr(lcd_r1()),
+						inode_ref,
 						&inode_container);
 	if (ret) {
 		LIBLCD_ERR("couldn't find inode");
@@ -1784,34 +1790,47 @@ int unlock_new_inode_callee(void)
 	 */
 	unlock_new_inode(&inode_container->pmfs_inode_vfs.vfs_inode);
 	/*
-	 * Return new i_state
-	 */
-	lcd_set_r0(inode_container->pmfs_inode_vfs.vfs_inode.i_state);
-	/*
 	 * Reply
 	 */
 	ret = 0;
 	goto out;
 
-out:
 fail1:
-	if (lcd_sync_reply())
-		LIBLCD_ERR("double fault?");
+out:
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+	/*
+	 * Return new i_state
+	 */
+	if (inode_container)
+		fipc_set_reg0(response, inode_container->pmfs_inode_vfs.vfs_inode.i_state);
+
+	fipc_send_msg_end(channel, response);
+
 	return ret;
 }
 
-int d_make_root_callee(void)
+int d_make_root_callee(struct fipc_message *request,
+		struct fipc_ring_channel *channel)
 {
 	struct pmfs_inode_vfs_container *inode_container;
-	struct dentry_container *dentry_container;
+	struct dentry_container *dentry_container = NULL;
 	struct dentry *dentry;
 	int ret;
-	cptr_t my_ref = CAP_CPTR_NULL;
+	cptr_t inode_ref = __cptr(fipc_get_reg0(request));
+	unsigned int nlink = fipc_get_reg1(request);
+	cptr_t dentry_ref = __cptr(fipc_get_reg2(request));
+	struct fipc_message *response;
+	
+	fipc_recv_msg_end(channel, request);
+
 	/*
 	 * Get our inode obj
 	 */
 	ret = glue_cap_lookup_pmfs_inode_vfs_type(pmfs_cspace,
-						__cptr(lcd_r1()),
+						inode_ref,
 						&inode_container);
 	if (ret) {
 		LIBLCD_ERR("couldn't find inode");
@@ -1820,7 +1839,7 @@ int d_make_root_callee(void)
 	/*
 	 * Update nlink
 	 */
-	inode_container->pmfs_inode_vfs.vfs_inode.i_nlink = lcd_r2();
+	inode_container->pmfs_inode_vfs.vfs_inode.i_nlink = nlink;
 	/*
 	 * Call real function
 	 */
@@ -1842,22 +1861,33 @@ int d_make_root_callee(void)
 		LIBLCD_ERR("error inserting in cspace");
 		goto fail3;
 	}
-	my_ref = dentry_container->my_ref;
-	dentry_container->their_ref = __cptr(lcd_r3());
+	dentry_container->their_ref = dentry_ref;
 	/*
 	 * Reply with ref
 	 */
 	ret = 0;
 	goto out;
 
-out:
+
 fail3:
 	dput(dentry);
 fail2:
 fail1:
-	lcd_set_r0(cptr_val(my_ref));
-	if (lcd_sync_reply())
-		LIBLCD_ERR("double fault?");
+out:
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+	/*
+	 * Return new dentry ref
+	 */
+	if (dentry_container)
+		fipc_set_reg0(response, cptr_val(inode_container->my_ref));
+	else
+		fipc_set_reg0(response, cptr_val(CAP_CPTR_NULL));
+
+	fipc_send_msg_end(channel, response);
+
 	return ret;
 }
 

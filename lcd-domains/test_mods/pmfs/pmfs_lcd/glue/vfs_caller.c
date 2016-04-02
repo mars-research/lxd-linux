@@ -732,6 +732,7 @@ out:
 void unlock_new_inode(struct inode *inode)
 {
 	struct pmfs_inode_vfs_container *inode_container;
+	struct fipc_message *request, *response;
 	/*
 	 * Get remote ref, and do rpc.
 	 */
@@ -741,24 +742,37 @@ void unlock_new_inode(struct inode *inode)
 			vfs_inode),
 		struct pmfs_inode_vfs_container,
 		pmfs_inode_vfs);
-	
-	lcd_set_r0(UNLOCK_NEW_INODE);
-	lcd_set_r1(cptr_val(inode_container->their_ref));
-
-	ret = lcd_sync_call(vfs_chnl);
+	/*
+	 * Marshal:
+	 *
+	 *   -- ref to inode obj
+	 */
+	ret = async_msg_blocking_send_start(pmfs_async_chnl, &request);
 	if (ret) {
-		LIBLCD_ERR("call failed");
+		LIBLCD_ERR("failed to get send slot");
 		goto fail1;
+	}
+
+	async_msg_set_fn_type(request, UNLOCK_NEW_INODE);
+	fipc_set_reg0(request, cptr_val(inode_container->their_ref));
+
+	ret = thc_ipc_call(pmfs_async_chnl, request, &response);
+	if (ret) {
+		LIBLCD_ERR("error sending msg");
+		goto fail2;
 	}
 	/*
 	 * Get updated i_state
 	 */
-	inode_container->pmfs_inode_vfs.vfs_inode.i_state = lcd_r0();
+	inode_container->pmfs_inode_vfs.vfs_inode.i_state = 
+		fipc_get_reg0(response);
+
+	fipc_recv_msg_end(response);
 
 	goto out;
 
-out:
 fail1:
+out:
 	return;
 }
 
