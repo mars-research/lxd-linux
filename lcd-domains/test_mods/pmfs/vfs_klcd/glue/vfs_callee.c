@@ -19,6 +19,15 @@
 static struct lcd_sync_channel_group_item vfs_channel_group_item;
 static struct thc_channel_group *async_channel_group;
 
+/* Right now, we don't have a mechanism for identifying which cspace
+ * should be used when we receive a message. Sure, we could attach
+ * cspaces to async ipc channels. Or we could use seL4-style badges.
+ * Not clear. For now, we just assume only pmfs is interacting with
+ * the vfs, and so there is only one cspace. This global is only
+ * used in callee functions. For function pointers, we use the cspace
+ * stored in the hidden args. */
+static struct cspace *pmfs_cspace;
+
 /* GLUE SUPPORT -------------------------------------------------- */
 
 int glue_vfs_init(cptr_t vfs_chnl, 
@@ -1208,11 +1217,10 @@ int register_filesystem_callee(void)
 	cptr_t tx, rx;
 	struct fipc_ring_channel *chnl;
 	struct thc_channel_group_item *chnl_group_item;
-	struct glue_cspace *fs_cspace;
 	/*
 	 * Set up a cspace for fs remote refs
 	 */
-	ret = glue_cap_create(&fs_cspace);
+	ret = glue_cap_create(&pmfs_cspace);
 	if (ret) {
 		LIBLCD_ERR("failed to create glue cspace");
 		goto fail0;
@@ -1227,7 +1235,7 @@ int register_filesystem_callee(void)
 		goto fail1;
 	}
 	ret = glue_cap_insert_file_system_type_type(
-		fs_cspace,
+		pmfs_cspace,
 		fs_container,
 		&fs_container->my_ref);
 	if (ret) {
@@ -1241,7 +1249,7 @@ int register_filesystem_callee(void)
 		goto fail3;
 	}
 	ret = glue_cap_insert_module_type(
-		fs_cspace,
+		pmfs_cspace,
 		module_container,
 		&module_container->my_ref);
 	if (ret) {
@@ -1282,14 +1290,13 @@ int register_filesystem_callee(void)
 	 * Store refs to fs-specific data so we can tear stuff down
 	 * in unregister_filesystem.
 	 */
-	fs_container->fs_cspace = fs_cspace;
 	fs_container->fs_sync_endpoint = fs_sync_endpoint;
 	fs_container->fs_async_chnl = chnl_group_item
 	/*
 	 * Set up fn pointer trampolines
 	 */
 	ret = setup_fs_type_trampolines(fs_container,
-					fs_cspace,
+					pmfs_cspace,
 					fs_sync_endpoint,
 					chnl);
 	if (ret) {
@@ -1321,15 +1328,15 @@ fail7:
 fail6:
 	destroy_async_fs_ring_channel(chnl, chnl_group_item);
 fail5:
-	glue_cap_remove(fs_cspace, module_container->my_ref);
+	glue_cap_remove(pmfs_cspace, module_container->my_ref);
 fail4:
 	kfree(module_container);
 fail3:
-	glue_cap_remove(fs_cspace, fs_container->my_ref);
+	glue_cap_remove(pmfs_cspace, fs_container->my_ref);
 fail2:
 	kfree(fs_container);
 fail1:
-	glue_cap_destroy(fs_cspace);
+	glue_cap_destroy(pmfs_cspace);
 fail0:
 	lcd_cap_delete(lcd_cr0());
 	lcd_cap_delete(lcd_cr1());
@@ -1349,102 +1356,97 @@ out:
 	return ret;
 }
 
-int unregister_filesystem_callee(void)
+int unregister_filesystem_callee(struct fipc_message *request,
+				struct fipc_ring_channel *channel)
 {
 	struct file_system_type_container *fs_container;
 	struct module_container *module_container;
 	int ret;
 	cptr_t fs_ref, m_ref;
-
-	/* CLEAR UNUSED SLOT ------------------------------ */
-	
-	/* Unlike register, we don't expect a capability. */
-
-	/* XXX: Really need to update microkernel, otherwise this
-	 * could be a vulnerability (caller could grant us something
-	 * and fill up the slot). */
-
-	lcd_cptr_free(lcd_cr0());
-	lcd_set_cr0(CAP_CPTR_NULL);
-
-	/* IPC UNMARSHALING ---------------------------------------- */
-
+	struct fipc_message *response;
 	/*
-	 * We expect refs to our copies
+	 * Unmarshal refs:
+	 *
+	 *   -- fs ref
+	 *   -- module ref
 	 */
-
-	fs_ref = __cptr(lcd_r1());
-	m_ref = __cptr(lcd_r2());
-
-	/* LOOK UP CONTAINERS  ---------------------------------------- */
-
+	fs_ref = __cptr(fipc_get_reg0(msg));
+	m_ref = __cptr(fipc_get_reg1(msg));
+	ret = fipc_recv_msg_end(channel, request);
+	if (ret) {
+		LIBLCD_ERR("failed to mark msg as recvd");
+		goto fail1;
+	}
+	/*
+	 * Bind
+	 */
 	ret = glue_cap_lookup_file_system_type_type(
 		pmfs_cspace,
 		fs_ref,
 		&fs_container);
 	if (ret) {
 		LIBLCD_ERR("lookup");
-		goto out;
+		goto fail2;
 	}
-
 	ret = glue_cap_lookup_module_type(
 		pmfs_cspace,
 		m_ref,
 		&module_container);
 	if (ret) {
 		LIBLCD_ERR("lookup");
-		goto out;
+		goto fail3;
 	}
-
-	/* CALL REAL FUNCTION ---------------------------------------- */
-
+	/*
+	 * Invoke real function, get return value
+	 */
 	ret = unregister_filesystem(&fs_container->file_system_type);
 	if (ret) {
 		LIBLCD_ERR("unregister fs");
-		goto out;
+		goto fail4;
 	}
-
-	/* CONTAINER DESTORY ---------------------------------------- */
-
 	/*
-	 * Remove from data store
-	 */
-	glue_cap_remove(pmfs_cspace, fs_container->my_ref);
-	glue_cap_remove(pmfs_cspace, module_container->my_ref);
-	/*
-	 * Delete cap to pmfs channel
-	 */
-	lcd_cap_delete(fs_container->pmfs_channel);
-	/*
-	 * Destroy trampolines
+	 * Tear down everything
 	 */
 	destroy_fs_type_trampolines(fs_container);
-	/*
-	 * Free containers
-	 */
+	lcd_cap_delete(fs_container->fs_sync_endpoint);
+	destroy_async_fs_ring_channel(fs_container->fs_async_chnl->channel,
+				fs_container->fs_async_chnl);
+	glue_cap_remove(fs_container->pmfs_cspace, fs_container->my_ref);
+	glue_cap_remove(fs_container->pmfs_cspace, module_container->my_ref);
+	glue_cap_destroy(pmfs_cspace);
 	kfree(fs_container);
 	kfree(module_container);
-
-	/* IPC REPLY -------------------------------------------------- */
-
-
-	ret = 0;
+	/*
+	 * Reply 
+	 */
 	goto out;
 
+fail4:
+fail3:
+fail2:
+fail1:
 out:
-	lcd_set_r0(ret);
-	if (lcd_sync_reply())
-		LIBLCD_ERR("double fault");
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+
+	fipc_set_reg0(response, ret);
+	
+	fipc_send_msg_end(channel, response);
+
 	return ret;
 }
 
-int bdi_init_callee(void)
+int bdi_init_callee(struct fipc_message *request,
+		struct fipc_ring_channel *channel)
 {
 	struct backing_dev_info_container *bdi_container;
 	int ret;
-
+	cptr_t bdi_obj_ref = CAP_CPTR_NULL;
+	struct fipc_message *response;
 	/*
-	 * SET UP CONTAINER ----------------------------------------
+	 * Set up our own private copy
 	 */
 	bdi_container = kzalloc(sizeof(*bdi_container), GFP_KERNEL);
 	if (!bdi_container) {
@@ -1452,87 +1454,71 @@ int bdi_init_callee(void)
 		ret = -ENOMEM;
 		goto fail1;
 	}
-
 	ret = glue_cap_insert_backing_dev_info_type(
 		pmfs_cspace,
 		bdi_container,
 		&bdi_container->my_ref);
 	if (ret) {
-		LIBLCD_ERR("dstore insert bdi container");
+		LIBLCD_ERR("cspace insert bdi container");
 		goto fail2;
 	}
-
-	/* IPC UNMARSHALING ---------------------------------------- */
-	
 	/*
-	 * Ref comes first, followed by two fields.
+	 * Unmarshal:
 	 *
-	 * XXX: For now, this is tailored for pmfs. (Don't worry about
-	 * other unused fields.)
-	 *
+	 *   -- bdi object ref
+	 *   -- bdi.ra_pages
+	 *   -- bdi.capabilities
 	 */
-	bdi_container->their_ref = __cptr(lcd_r1());
-	bdi_container->backing_dev_info.ra_pages = lcd_r2();
-	bdi_container->backing_dev_info.capabilities = lcd_r3();
-
+	bdi_container->their_ref = __cptr(fipc_get_reg0(request));
+	bdi_container->backing_dev_info.ra_pages = fipc_get_reg1(request);
+	bdi_container->backing_dev_info.capabilities = fipc_get_reg2(request);
+	fipc_recv_msg_end(channel, request);
 	/*
-	 * CALL REAL BDI_INIT ------------------------------
+	 * Invoke real function
 	 */
-
 	ret = bdi_init(&bdi_container->backing_dev_info);
 	if (ret) {
 		LIBLCD_ERR("bdi init failed");
 		goto fail3;
 	}
-
 	/*
-	 * MARSHAL RETURN --------------------------------------------------
+	 * Reply with return value and our ref
 	 */
+	bdi_obj_ref = bdi_container->my_ref;
+	goto out;
 
-	/*
-	 * Register fs return value
-	 */
-	lcd_set_r0(ret);
-	/*
-	 * Pass back a ref to our copy
-	 */
-	lcd_set_r1(cptr_val(bdi_container->my_ref));
-
-	/* IPC REPLY -------------------------------------------------- */
-
-	ret = lcd_sync_reply();
-	if (ret) {
-		LIBLCD_ERR("lcd_sync_reply");
-		goto fail4;
-	}
-
-	return 0;
-
-fail4:
-	bdi_destroy(&bdi_container->backing_dev_info);
 fail3:
 	glue_cap_remove(pmfs_cspace, bdi_container->my_ref);
 fail2:
 	kfree(bdi_container);
 fail1:
+out:
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+
+	fipc_set_reg0(response, ret);
+	fipc_set_reg1(response, cptr_val(bdi_obj_ref));
+
+	fipc_send_msg_end(channel, response);
+
 	return ret;
 }
 
-int bdi_destroy_callee(void)
+int bdi_destroy_callee(struct fipc_message *request,
+		struct fipc_ring_channel *channel)
 {
 	struct backing_dev_info_container *bdi_container;
 	int ret;
 	cptr_t ref;
-
-	/* IPC UNMARSHALING ---------------------------------------- */
-
+	struct fipc_message *response,
 	/*
-	 * We expect one ref to our copy
+	 * Unmarshal ref to our bdi obj copy, and bind.
 	 */
+	ref = __cptr(fipc_get_reg0(request));
 
-	ref = __cptr(lcd_r1());
-
-	/* LOOK UP CONTAINER  ---------------------------------------- */
+	fipc_recv_msg_end(request, channel);
 
 	ret = glue_cap_lookup_backing_dev_info_type(
 		pmfs_cspace,
@@ -1540,32 +1526,33 @@ int bdi_destroy_callee(void)
 		&bdi_container);
 	if (ret) {
 		LIBLCD_ERR("lookup");
-		goto out;
+		goto fail2;
 	}
-
-	/* CALL REAL FUNCTION ---------------------------------------- */
-
-	bdi_destroy(&bdi_container->backing_dev_info);
-
-	/* CONTAINER DESTORY ---------------------------------------- */
-
 	/*
-	 * Remove from data store
+	 * Invoke real function
+	 */
+	bdi_destroy(&bdi_container->backing_dev_info);
+	/*
+	 * Tear down container
 	 */
 	glue_cap_remove(pmfs_cspace, bdi_container->my_ref);
-	/*
-	 * Free container
-	 */
 	kfree(bdi_container);
-
-	/* IPC REPLY -------------------------------------------------- */
 
 	ret = 0;
 	goto out;
 
+fail2:
+fail1:
 out:
-	if (lcd_sync_reply())
-		LIBLCD_ERR("double fault");
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+	
+	/* empty response */
+
+	fipc_send_msg_end(channel, response);
+
 	return ret;
 }
 

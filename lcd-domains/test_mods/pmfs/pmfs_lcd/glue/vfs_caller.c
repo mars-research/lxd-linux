@@ -362,9 +362,9 @@ int unregister_filesystem(struct file_system_type *fs)
 		LIBLCD_ERR("failed to get send slot");
 		goto fail1;
 	}
-	fipc_set_reg0(request, UNREGISTER_FS);
-	fipc_set_reg1(request, cptr_val(fs_container->their_ref));
-	fipc_set_reg2(request, cptr_val(module_container->their_ref));
+	async_msg_set_fn_type(request, UNREGISTER_FS);
+	fipc_set_reg0(request, cptr_val(fs_container->their_ref));
+	fipc_set_reg1(request, cptr_val(module_container->their_ref));
 
 	ret = thc_ipc_call(pmfs_async_chnl, request, &response);
 	if (ret) {
@@ -375,8 +375,7 @@ int unregister_filesystem(struct file_system_type *fs)
 	 * Just expecting int ret value in response
 	 */
 	ret = fipc_get_reg0(response);
-	if (fipc_recv_msg_end(pmfs_async_chnl, response))
-		LIBLCD_ERR("failed to receive response?");
+	fipc_recv_msg_end(pmfs_async_chnl, response);
 	/*
 	 * Tear down.
 	 *
@@ -399,84 +398,100 @@ int bdi_init(struct backing_dev_info *bdi)
 {
 	struct backing_dev_info_container *bdi_container;
 	int ret;
+	struct fipc_message *request, *response;
 	/*
-	 * Get container
+	 * Insert bdi object into cspace
 	 */
 	bdi_container = container_of(bdi, 
 				struct backing_dev_info_container,
 				backing_dev_info);
-	/*
-	 * INSERT INTO DATA STORE ------------------------------
-	 *
-	 */
 	ret = glue_cap_insert_backing_dev_info_type(
 		vfs_cspace, 
 		bdi_container,
 		&bdi_container->my_ref);
 	if (ret) {
 		LIBLCD_ERR("insert");
-		lcd_exit(ret); /* abort */
+		goto fail1;
 	}
 	/*
-	 * IPC MARSHALING --------------------------------------------------
+	 * Marshal and send:
 	 *
+	 *   -- bdi ref
+	 *   -- bdi.ra_pages
+	 *   -- bdi.capabilities
 	 */
-	lcd_set_r1(cptr_val(bdi_container->my_ref));
-	lcd_set_r2(bdi_container->backing_dev_info.ra_pages);
-	lcd_set_r3(bdi_container->backing_dev_info.capabilities);
-	/*
-	 * IPC CALL ----------------------------------------
-	 */
-
-	lcd_set_r0(BDI_INIT);
-	ret = lcd_sync_call(vfs_chnl);
+	ret = async_msg_blocking_send_start(pmfs_async_chnl, &request);
 	if (ret) {
-		LIBLCD_ERR("lcd_call");
-		lcd_exit(ret);
+		LIBLCD_ERR("failed to get send slot");
+		goto fail2;
 	}
 
-	/* IPC UNMARSHALING ---------------------------------------- */
+	async_msg_set_fn_type(request, BDI_INIT);
+	fipc_set_reg0(request, cptr_val(bdi_container->my_ref));
+	fipc_set_reg1(request, bdi_container->backing_dev_info.ra_pages);
+	fipc_set_reg2(request, bdi_container->backing_dev_info.capabilities);
 
+	ret = thc_ipc_call(pmfs_async_chnl, request, &response);
+	if (ret) {
+		LIBLCD_ERR("error sending msg");
+		goto fail3;
+	}
 	/*
-	 * We expect a remote ref coming back
+	 * Unmarshal:
+	 *
+	 *   -- return value
+	 *   -- remote ref
 	 */
-	bdi_container->their_ref = __cptr(lcd_r1());
-
+	ret = fipc_get_reg0(response);
+	bdi_container->their_ref = __cptr(fipc_get_reg1(response));
 	/*
 	 * Pass back return value
 	 */
-	return lcd_r0();
+	goto out;
+
+fail3:
+	fipc_send_msg_end(pmfs_async_chnl, request);
+fail2:
+	glue_cap_remove(vfs_cspace, bdi_container->my_ref);
+fail1:
+out:
+	return ret;
 }
 
 void bdi_destroy(struct backing_dev_info *bdi)
 {
 	int ret;
 	struct backing_dev_info_container *bdi_container;
+	struct fipc_message *request, *response;
 
 	bdi_container = container_of(bdi,
 				struct backing_dev_info_container,
 				backing_dev_info);
-
-	/* IPC MARSHALING ---------------------------------------- */
-
 	/*
-	 * Pass remote ref to bdi's copy
+	 * Marshal:
+	 *
+	 *   -- ref to bdi obj
 	 */
-	lcd_set_r1(cptr_val(bdi_container->their_ref));
-
-	/* IPC CALL ---------------------------------------- */
-
-	lcd_set_r0(BDI_DESTROY);
-	ret = lcd_sync_call(vfs_chnl);
+	ret = async_msg_blocking_send_start(pmfs_async_chnl, &request);
 	if (ret) {
-		LIBLCD_ERR("lcd_call");
-		lcd_exit(ret);
+		LIBLCD_ERR("failed to get send slot");
+		goto fail1;
 	}
 
-	/* POST-IPC ---------------------------------------- */
+	async_msg_set_fn_type(request, BDI_DESTROY);
+	fipc_set_reg0(request, cptr_val(bdi_container->my_ref));
 
+	ret = thc_ipc_call(pmfs_async_chnl, request, &response);
+	if (ret) {
+		LIBLCD_ERR("error sending msg");
+		goto fail2;
+	}
 	/*
-	 * Remove bdi from data store
+	 * Nothing is in response
+	 */
+	fipc_recv_msg_end(pmfs_async_chnl, response);
+	/*
+	 * Remove bdi obj from cspace
 	 */
 	glue_cap_remove(vfs_cspace, bdi_container->my_ref);
 	/*
