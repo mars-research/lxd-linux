@@ -1630,18 +1630,25 @@ out:
 	return ret;
 }
 
-int truncate_inode_pages_callee(void)
+int truncate_inode_pages_callee(struct fipc_message *request,
+				struct fipc_ring_channel *channel)
 {
 	struct pmfs_inode_vfs_container *inode_container;
 	int ret;
+	struct fipc_message *response;
+	cptr_t inode_ref = __cptr(fipc_get_reg0(request));
+	loff_t lstart = fipc_get_reg1(request);
+	
+	fipc_recv_msg_end(channel, request);
+
 	/*
 	 * (See notes for caller side)
 	 *
 	 * Look up our private inode object
 	 */
-	ret = glue_cap_lookup_address_space_type(pmfs_cspace,
-						__cptr(lcd_r1()),
-						&inode_container);
+	ret = glue_cap_lookup_inode_type(pmfs_cspace,
+					inode_ref,
+					&inode_container);
 	if (ret) {
 		LIBLCD_ERR("address space not found");
 		goto fail1;
@@ -1650,17 +1657,24 @@ int truncate_inode_pages_callee(void)
 	 * Invoke real function
 	 */
 	truncate_inode_pages(&inode_container->pmfs_inode_vfs.vfs_inode.i_data, 
-			lcd_r2());
+			lstart);
 	/*
 	 * Reply with nothing
 	 */
 	ret = 0;
 	goto out;
 
-out:
 fail1:
-	if (lcd_sync_reply())
-		LIBLCD_ERR("double fault?");
+out:
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+	
+	/* empty response */
+
+	fipc_send_msg_end(channel, response);
+
 	return ret;
 }
 

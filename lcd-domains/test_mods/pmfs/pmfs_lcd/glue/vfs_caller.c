@@ -591,6 +591,7 @@ void truncate_inode_pages(struct address_space *mapping, loff_t lstart)
 {
 	struct pmfs_inode_vfs_container *inode_container;
 	int ret;
+	struct fipc_message *request, *response;
 	/*
 	 * At least for pmfs, we know that mapping points to
 	 * i_data for the corresponding inode. So, we resolve ...
@@ -603,24 +604,36 @@ void truncate_inode_pages(struct address_space *mapping, loff_t lstart)
 		struct pmfs_inode_vfs_container,
 		pmfs_inode_vfs);
 	/*
-	 * We now pass the ref to the inode (instead), and do rpc.
+	 * Marshal:
+	 *
+	 *   -- ref to inode obj
+	 *   -- lstart
 	 */
-	lcd_set_r0(TRUNCATE_INODE_PAGES);
-	lcd_set_r1(cptr_val(inode_container->their_ref));
-	lcd_set_r2(lstart);
-
-	ret = lcd_sync_call(vfs_chnl);
+	ret = async_msg_blocking_send_start(pmfs_async_chnl, &request);
 	if (ret) {
-		LIBLCD_ERR("truncate inode pages rpc failed");
+		LIBLCD_ERR("failed to get send slot");
 		goto fail1;
 	}
+
+	async_msg_set_fn_type(request, TRUNCATE_INODE_PAGES);
+	fipc_set_reg0(request, cptr_val(inode_container->their_ref));
+	fipc_set_reg1(request, lstart);
+
+	ret = thc_ipc_call(pmfs_async_chnl, request, &response);
+	if (ret) {
+		LIBLCD_ERR("error sending msg");
+		goto fail2;
+	}
 	/*
-	 * Nothing else to do
+	 * Nothing in response
 	 */
+
+	fipc_recv_msg_end(channel, response);
+
 	goto out;
 
-out:
 fail1:
+out:
 	return;
 }
 
