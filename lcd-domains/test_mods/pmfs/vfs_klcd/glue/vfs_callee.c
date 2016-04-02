@@ -25,8 +25,14 @@ static struct thc_channel_group *async_channel_group;
  * Not clear. For now, we just assume only pmfs is interacting with
  * the vfs, and so there is only one cspace. This global is only
  * used in callee functions. For function pointers, we use the cspace
- * stored in the hidden args. */
+ * stored in the hidden args (so that we are sort of close to not using
+ * globals, but not quite). */
 static struct cspace *pmfs_cspace;
+/* A similar issue arises with the synchronous channel. Again, we could
+ * attach it to / associate it with the async channel, but it's not
+ * clear whether this is the right choice. For now, we just make it a
+ * global. */
+static cptr_t pmfs_sync_endpoint;
 
 /* GLUE SUPPORT -------------------------------------------------- */
 
@@ -1213,7 +1219,6 @@ int register_filesystem_callee(void)
 	struct file_system_type_container *fs_container;
 	struct module_container *module_container;
 	int ret;
-	cptr_t fs_sync_endpoint;
 	cptr_t tx, rx;
 	struct fipc_ring_channel *chnl;
 	struct thc_channel_group_item *chnl_group_item;
@@ -1271,7 +1276,7 @@ int register_filesystem_callee(void)
 	fs_container->their_ref = __cptr(lcd_r1());
 	fs_container->file_system_type.name = "pmfs";
 	module_container->their_ref = __cptr(lcd_r2());
-	fs_sync_endpoint = lcd_cr0();
+	pmfs_sync_endpoint = lcd_cr0();
 	tx = lcd_cr1();
 	rx = lcd_cr2();
 	/*
@@ -1290,14 +1295,13 @@ int register_filesystem_callee(void)
 	 * Store refs to fs-specific data so we can tear stuff down
 	 * in unregister_filesystem.
 	 */
-	fs_container->fs_sync_endpoint = fs_sync_endpoint;
 	fs_container->fs_async_chnl = chnl_group_item
 	/*
 	 * Set up fn pointer trampolines
 	 */
 	ret = setup_fs_type_trampolines(fs_container,
 					pmfs_cspace,
-					fs_sync_endpoint,
+					pmfs_sync_endpoint,
 					chnl);
 	if (ret) {
 		LIBLCD_ERR("error setting up trampolines");
@@ -1364,6 +1368,7 @@ int unregister_filesystem_callee(struct fipc_message *request,
 	int ret;
 	cptr_t fs_ref, m_ref;
 	struct fipc_message *response;
+	uint32_t request_cookie = thc_get_request_cookie(request);
 	/*
 	 * Unmarshal refs:
 	 *
@@ -1408,7 +1413,7 @@ int unregister_filesystem_callee(struct fipc_message *request,
 	 * Tear down everything
 	 */
 	destroy_fs_type_trampolines(fs_container);
-	lcd_cap_delete(fs_container->fs_sync_endpoint);
+	lcd_cap_delete(pmfs_sync_endpoint);
 	destroy_async_fs_ring_channel(fs_container->fs_async_chnl->channel,
 				fs_container->fs_async_chnl);
 	glue_cap_remove(fs_container->pmfs_cspace, fs_container->my_ref);
@@ -1433,7 +1438,7 @@ out:
 
 	fipc_set_reg0(response, ret);
 	
-	fipc_send_msg_end(channel, response);
+	thc_ipc_reply(channel, request_cookie, response);
 
 	return ret;
 }
@@ -1445,6 +1450,7 @@ int bdi_init_callee(struct fipc_message *request,
 	int ret;
 	cptr_t bdi_obj_ref = CAP_CPTR_NULL;
 	struct fipc_message *response;
+	uint32_t request_cookie = thc_get_request_cookie(request);
 	/*
 	 * Set up our own private copy
 	 */
@@ -1501,7 +1507,7 @@ out:
 	fipc_set_reg0(response, ret);
 	fipc_set_reg1(response, cptr_val(bdi_obj_ref));
 
-	fipc_send_msg_end(channel, response);
+	thc_ipc_reply(channel, request_cookie, response);
 
 	return ret;
 }
@@ -1513,6 +1519,7 @@ int bdi_destroy_callee(struct fipc_message *request,
 	int ret;
 	cptr_t ref;
 	struct fipc_message *response;
+	uint32_t request_cookie = thc_get_request_cookie(request);
 	/*
 	 * Unmarshal ref to our bdi obj copy, and bind.
 	 */
@@ -1551,7 +1558,7 @@ out:
 	
 	/* empty response */
 
-	fipc_send_msg_end(channel, response);
+	thc_ipc_reply(channel, request_cookie, response);
 
 	return ret;
 }
@@ -1566,6 +1573,7 @@ int iget_locked_callee(struct fipc_message *request,
 	struct fipc_message *response;
 	cptr_t sb_ref = __cptr(fipc_get_reg0(request));
 	unsigned long ino = fipc_get_reg1(request);
+	uint32_t request_cookie = thc_get_request_cookie(request);
 
 	fipc_recv_msg_end(channel, request);
 	/*
@@ -1625,7 +1633,7 @@ out:
 		fipc_set_reg0(response, cptr_val(CAP_CPTR_NULL));
 	}
 
-	fipc_send_msg_end(channel, response);
+	thc_ipc_reply(channel, request_cookie, response);
 
 	return ret;
 }
@@ -1638,6 +1646,7 @@ int truncate_inode_pages_callee(struct fipc_message *request,
 	struct fipc_message *response;
 	cptr_t inode_ref = __cptr(fipc_get_reg0(request));
 	loff_t lstart = fipc_get_reg1(request);
+	uint32_t request_cookie = thc_get_request_cookie(request);
 	
 	fipc_recv_msg_end(channel, request);
 
@@ -1673,7 +1682,7 @@ out:
 	
 	/* empty response */
 
-	fipc_send_msg_end(channel, response);
+	thc_ipc_reply(channel, request_cookie, response);
 
 	return ret;
 }
@@ -1685,6 +1694,7 @@ int clear_inode_callee(struct fipc_message *request,
 	int ret;
 	cptr_t inode_ref = __cptr(fipc_get_reg0(request));
 	struct fipc_message *response;
+	uint32_t request_cookie = thc_get_request_cookie(request);
 
 	fipc_recv_msg_end(channel, request);
 	/*
@@ -1715,8 +1725,8 @@ out:
 	}
 	
 	/* empty response */
-
-	fipc_send_msg_end(channel, response);
+	
+	thc_ipc_reply(channel, request_cookie, response);
 
 	return ret;
 }
@@ -1728,6 +1738,7 @@ int iget_failed_callee(struct fipc_message *request,
 	int ret;
 	struct fipc_message *response;
 	cptr_t inode_ref = __cptr(fipc_get_reg0(request));
+	uint32_t request_cookie = thc_get_request_cookie(request);
 
 	fipc_recv_msg_end(channel, request);
 
@@ -1760,7 +1771,7 @@ out:
 	
 	/* empty response */
 
-	fipc_send_msg_end(channel, response);
+	thc_ipc_reply(channel, request_cookie, response);
 
 	return ret;
 }
@@ -1772,6 +1783,7 @@ int unlock_new_inode_callee(struct fipc_message *request,
 	int ret;
 	cptr_t inode_ref = __cptr(fipc_get_reg0(request));
 	struct fipc_message *response;
+	uint32_t request_cookie;
 
 	fipc_recv_msg_end(channel, request);
 
@@ -1805,9 +1817,10 @@ out:
 	 * Return new i_state
 	 */
 	if (inode_container)
-		fipc_set_reg0(response, inode_container->pmfs_inode_vfs.vfs_inode.i_state);
+		fipc_set_reg0(response, 
+			inode_container->pmfs_inode_vfs.vfs_inode.i_state);
 
-	fipc_send_msg_end(channel, response);
+	thc_ipc_reply(channel, request_cookie, response);
 
 	return ret;
 }
@@ -1823,6 +1836,7 @@ int d_make_root_callee(struct fipc_message *request,
 	unsigned int nlink = fipc_get_reg1(request);
 	cptr_t dentry_ref = __cptr(fipc_get_reg2(request));
 	struct fipc_message *response;
+	uint32_t request_cookie;
 	
 	fipc_recv_msg_end(channel, request);
 
@@ -1882,57 +1896,100 @@ out:
 	 * Return new dentry ref
 	 */
 	if (dentry_container)
-		fipc_set_reg0(response, cptr_val(inode_container->my_ref));
+		fipc_set_reg0(response, cptr_val(dentry_container->my_ref));
 	else
 		fipc_set_reg0(response, cptr_val(CAP_CPTR_NULL));
 
-	fipc_send_msg_end(channel, response);
+	thc_ipc_reply(channel, request_cookie, response);
 
 	return ret;
 }
 
-int mount_nodev_callee(void)
+static int sync_mount_nodev_callee(cptr_t fs_sync_endpoint,
+				cptr_t *data_cptr,
+				gva_t *data_gva,
+				unsigned long *mem_order,
+				unsigned long *data_offset)
+{
+	int ret;
+	/*
+	 * Alloc cptr for void *data memory, and do sync receive
+	 */
+	ret = lcd_alloc_cptr(data_cptr);
+	if (ret) {
+		LIBLCD_ERR("failed to get cptr");
+		goto fail1;
+	}
+	lcd_set_cr0(*data_cptr);
+	ret = lcd_sync_recv(fs_sync_endpoint);
+	if (ret) {
+		LIBLCD_ERR("failed to recv");
+		goto fail2;
+	}
+	/*
+	 * Receive values
+	 */
+	*mem_order = lcd_r0();
+	*data_offset = lcd_r1();
+	/*
+	 * Map data
+	 */
+	ret = lcd_map_virt(*data_cptr, *mem_order, data_gva);
+	if (ret) {
+		LIBLCD_ERR("failed to 'map' void *data arg");
+		lcd_cap_delete(*data_cptr);
+		return ret;
+	}
+
+	return 0;
+
+fail2:
+	lcd_cptr_free(*data_cptr);
+fail1:
+	return ret;
+}
+
+int mount_nodev_callee(struct fipc_message *request,
+		struct fipc_ring_channel *channel)
 {
 	struct file_system_type_container *fs_container;
 	struct mount_nodev_fill_super_container *fill_sup_container;
-	struct mount_nodev_fill_super_hidden_args *fill_sup_args;
+	struct trampoline_hidden_args *fill_sup_args;
 	int ret;
+	cptr_t fs_type_ref = __cptr(fipc_get_reg0(request));
+	int flags = fipc_get_r1(request);
+	cptr_t fill_sup_ref = __cptr(fipc_get_reg2(request));
 	cptr_t data_cptr;
-	unsigned int mem_order;
-	unsigned long data_offset;
 	gva_t data_gva;
-	int flags;
-	cptr_t fill_sup_their_ref;
+	unsigned long mem_order;
+	unsigned long data_offset;
 	int (*fill_super_p)(struct super_block *, void *, int);
 	struct dentry *dentry;
 	struct dentry_container *dentry_container;
-	cptr_t dentry_ref = CAP_CPTR_NULL;
+	uint32_t request_cookie = thc_get_request_cookie(request);
+
+	fipc_recv_msg_end(channel, request);
 	/*
-	 * Unmarshal args:
-	 *
-	 *   -- ref to fs type
-	 *   -- void * data stuff
-	 *   -- flags
-	 *   -- fill_sup ref
+	 * We also need to do a sync receive in order to get the void *data
+	 * argument
+	 */
+	ret = sync_mount_nodev_callee(pmfs_sync_endpoint,
+				&data_cptr,
+				&data_gva,
+				&mem_order,
+				&data_offset);
+	if (ret) {
+		LIBLCD_ERR("error doing sync part of mount_nodev");
+		return ret; /* do not do async reply */
+	}
+	/*
+	 * Look up fs type
 	 */
 	ret = glue_cap_lookup_file_system_type_type(pmfs_cspace,
-						__cptr(lcd_r1()),
+						fs_type_ref,
 						&fs_container);
 	if (ret) {
 		LIBLCD_ERR("couldn't find fs type");
-		goto fail1;
-	}
-	data_cptr = lcd_cr0();
-	mem_order = lcd_r2();
-	data_offset = lcd_r3();
-	flags = lcd_r4();
-	fill_sup_their_ref = __cptr(lcd_r5());
-	/*
-	 * "Map" void *data (technically already accessible)
-	 */
-	ret = lcd_map_virt(data_cptr, mem_order, &data_gva);
-	if (ret) {
-		LIBLCD_ERR("failed to 'map' void *data arg");
 		goto fail2;
 	}
 	/*
@@ -1946,7 +2003,7 @@ int mount_nodev_callee(void)
 		ret = -ENOMEM;
 		goto fail3;
 	}
-	fill_sup_container->their_ref = fill_sup_their_ref;
+	fill_sup_container->their_ref = fill_sup_ref;
 	/*
 	 * Set up fill_super trampoline
 	 */
@@ -1964,9 +2021,10 @@ int mount_nodev_callee(void)
 		goto fail5;
 	}
 	fill_sup_args->t_handle->hidden_args = fill_sup_args;
-	fill_sup_args->mount_nodev_fill_super_container = fill_sup_container;
-	fill_sup_args->cspace = cspace;
-	fill_sup_args->channel = channel;
+	fill_sup_args->struct_container = fill_sup_container;
+	fill_sup_args->fs_cspace = pmfs_cspace;
+	fill_sup_args->fs_sync_endpoint = pmfs_sync_endpoint;
+	fill_sup_args->fs_async_chnl = channel;
 	/*
 	 * Invoke real function
 	 */
@@ -1988,7 +2046,6 @@ int mount_nodev_callee(void)
 		dentry,
 		struct dentry_container,
 		dentry);
-	dentry_ref = dentry_container->their_ref;
 	/*
 	 * Destroy fill_super trampoline stuff
 	 */
@@ -2012,15 +2069,24 @@ fail5:
 fail4:
 	kfree(fill_sup_container);
 fail3:
-	lcd_unmap_virt(data_gva, mem_order);	
 fail2:
-fail1:
-out:
-
+	lcd_unmap_virt(data_gva, mem_order);
 	lcd_cap_delete(data_cptr);
+out:
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+	/*
+	 * Return ref to their dentry
+	 */
+	if (dentry_container)
+		fipc_set_reg0(response, cptr_val(dentry_container->their_ref));
+	else
+		fipc_set_reg0(response, cptr_val(CAP_CPTR_NULL));
 
-	if (lcd_sync_reply())
-		LIBLCD_ERR("double fault?");
+	fipc_send_msg_end(channel, response);
+
 	return ret;
 }
 

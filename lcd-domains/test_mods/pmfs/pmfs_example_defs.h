@@ -53,7 +53,6 @@ struct file_system_type_container {
 	cptr_t my_ref;
 	cptr_t their_ref;
 	/* Used on vfs side: */
-	cptr_t fs_sync_endpoint;
 	struct thc_channel_group_item *fs_async_chnl;
 };
 

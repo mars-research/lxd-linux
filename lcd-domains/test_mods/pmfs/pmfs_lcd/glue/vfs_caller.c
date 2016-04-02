@@ -782,6 +782,7 @@ d_make_root(struct inode *inode)
 	struct pmfs_inode_vfs_container *inode_container;
 	struct dentry_container *dentry_container;
 	int ret;
+	struct fipc_message *request, *response;
 	/*
 	 * Get inode container
 	 */
@@ -807,34 +808,49 @@ d_make_root(struct inode *inode)
 		goto fail2;
 	}
 	/*
-	 * Set up links to other private objects
+	 * Set up links to other private objects (normally the callee does
+	 * this)
 	 */
 	dentry_container->dentry.d_sb = inode->i_sb;
 	dentry_container->dentry.d_inode = inode;
 	/*
-	 * Do rpc
+	 * Marshal:
+	 *
+	 *   -- inode ref
+	 *   -- i_nlinks
+	 *   -- dentry ref
 	 */
-	lcd_set_r0(D_MAKE_ROOT);
-	lcd_set_r1(cptr_val(inode_container->their_ref));
-	lcd_set_r2(inode_container->pmfs_inode_vfs.vfs_inode.i_nlinks);
-	lcd_set_r3(cptr_val(dentry_container->my_ref));
-	
-	ret = lcd_sync_call(vfs_chnl);
+	ret = async_msg_blocking_send_start(pmfs_async_chnl, &request);
 	if (ret) {
-		LIBLCD_ERR("call failed");
+		LIBLCD_ERR("failed to get send slot");
 		goto fail3;
+	}
+
+	async_msg_set_fn_type(request, D_MAKE_ROOT);
+	fipc_set_reg0(request, cptr_val(inode_container->their_ref));
+	fipc_set_reg1(request, 
+		inode_container->pmfs_inode_vfs.vfs_inode.i_nlinks);
+	fipc_set_reg2(request, cptr_val(dentry_container->my_ref));
+
+	ret = thc_ipc_call(pmfs_async_chnl, request, &response);
+	if (ret) {
+		LIBLCD_ERR("error sending msg");
+		goto fail4;
 	}
 	/*
 	 * Get remote ref to dentry in response
 	 */
-	if (cap_cptr_is_null(__cptr(lcd_r0()))) {
+	if (cap_cptr_is_null(__cptr(fipc_get_reg0(response)))) {
 		LIBLCD_ERR("got null from d_make_root");
-		goto fail4;
+		goto fail5;
 	}
-	dentry_container->their_ref = __cptr(lcd_r0());
+	dentry_container->their_ref = __cptr(fipc_get_reg0(response));
+
+	fipc_recv_msg_end(channel, response);
 	
 	return &dentry_container->dentry;
 
+fail5:
 fail4:
 fail3:
 	glue_cap_remove(dentry_container->my_ref);
@@ -852,12 +868,11 @@ mount_nodev(struct file_system_type *fs_type,
 	struct file_system_type_container *fs_container;
 	struct mount_nodev_fill_super_container *fill_sup_container;
 	struct dentry_container *dentry_container;
-	cptr_t dentry_ref;
 	int ret;
 	cptr_t data_cptr;
 	unsigned long data_offset;
 	unsigned long mem_sz;
-	struct dentry *dentry = NULL;
+	uint32_t request_cookie;
 	
 	fs_container = container_of(
 		fs_type,
@@ -891,49 +906,94 @@ mount_nodev(struct file_system_type *fs_type,
 	}
 	fill_sup_container->fill_super = fill_super;
 	/*
-	 * Do rpc
+	 * Do async half:
+	 *
+	 * Marshal:
+	 *
+	 *   -- fs type ref
+	 *   -- flags
+	 *   -- fill sup ref
+	 *
+	 * We will also do a sync send (see below) to transfer
+	 * void *data.
 	 */
-	lcd_set_r0(MOUNT_NODEV);
-	lcd_set_r1(cptr_val(fs_container->their_ref));
-	/* Assumes mem_sz is 2^x pages */
-	lcd_set_r2(ilog2(mem_sz >> PAGE_SHIFT));
-	lcd_set_r3(data_offset);
-	lcd_set_cr0(cptr_val(data_cptr));
-	lcd_set_r4(flags);
-	lcd_set_r5(cptr_val(fill_sup_container->my_ref));
-
-	ret = lcd_sync_call(vfs_chnl);
+	ret = async_msg_blocking_send_start(pmfs_async_chnl, &request);
 	if (ret) {
-		LIBLCD_ERR("failed to do call");
+		LIBLCD_ERR("failed to get send slot");
 		goto fail4;
+	}
+
+	async_msg_set_fn_type(request, MOUNT_NODEV);
+	fipc_set_reg0(request, cptr_val(fs_container->their_ref));
+	fipc_set_reg1(request, flags);
+	fipc_set_reg2(request, cptr_val(fill_sup_container->my_ref));
+
+	ret = thc_ipc_send(pmfs_async_chnl, request, &request_cookie);
+	if (ret) {
+		LIBLCD_ERR("error sending request");
+		goto fail5;
+	}
+	/*
+	 * Do sync half:
+	 *
+	 * Marshal:
+	 *
+	 *   -- cptr for memory that contains void *data
+	 *   -- memory size (assumes mem_sz is 2^x pages)
+	 *   -- void *data offset into memory
+	 */
+	lcd_set_r0(ilog2(mem_sz >> PAGE_SHIFT));
+	lcd_set_r1(data_offset);
+	lcd_set_cr0(data_cptr);
+
+	ret = lcd_sync_send(vfs_chnl);
+	if (ret) {
+		LIBLCD_ERR("failed to do sync half of mount_nodev");
+		goto fail6;
+	}
+	/*
+	 * Get *async* response
+	 */
+	ret = thc_ipc_recv(pmfs_async_chnl, request_cookie, &response);
+	if (ret) {
+		LIBLCD_ERR("async recv failed");
+		goto fail7;
 	}
 	/*
 	 * Unmarshal returned dentry
 	 */
-	dentry_ref = __cptr(lcd_r0());
-	if (cap_cptr_is_null(dentry_ref)) {
+	if (cap_cptr_is_null(__cptr(fipc_get_reg0(response)))) {
 		LIBLCD_ERR("got null from remote mount_nodev");
-		goto fail5;
+		goto fail8;
 	}
 	ret = glue_cap_lookup_dentry_type(vfs_cspace,
-					dentry_ref,
+					__cptr(fipc_get_reg0(response)),
 					&dentry_container);
 	if (ret) {
 		LIBLCD_ERR("couldn't find dentry");
-		goto fail6;
+		goto fail9;
 	}
-	dentry = &dentry_container->dentry;
 	/*
-	 * Free fill_super container, etc.
+	 * Tear down
+	 *
+	 * Free fill_super container, etc., and unshare void *data memory
 	 */
 	glue_cap_remove(vfs_cspace, fill_sup_container->my_ref);
 	kfree(fill_sup_container);
+	lcd_cap_revoke(data_cptr);
 	/*
 	 * Done
 	 */
-	goto out;
+	return &dentry_container->dentry;
 
+fail9:
+fail8:
+fail7:
 fail6:
+	/* The callee will not be sending us a response. This is under the
+	 * assumption that if we fail to do a sync send, the callee failed
+	 * to do a sync receive, and will just cancel the "transaction". */
+	thc_kill_request_cookie(request_cookie);
 fail5:
 fail4:
 	glue_cap_remove(vfs_cspace, fill_sup_container->my_ref);
@@ -941,8 +1001,7 @@ fail3:
 	kfree(fill_sup_container);
 fail2:
 fail1:
-out:
-	return dentry;
+	return NULL;
 }
 
 void kill_anon_super(struct super_block *sb)
