@@ -1678,15 +1678,20 @@ out:
 	return ret;
 }
 
-int clear_inode_callee(void)
+int clear_inode_callee(struct fipc_message *request,
+		struct fipc_ring_channel *channel)
 {
 	struct pmfs_inode_vfs_container *inode_container;
 	int ret;
+	cptr_t inode_ref = __cptr(fipc_get_reg0(request));
+	struct fipc_message *response;
+
+	fipc_recv_msg_end(channel, request);
 	/*
 	 * Look up our private copy of the inode object
 	 */
 	ret = glue_cap_lookup_pmfs_inode_vfs_type(pmfs_cspace,
-						__cptr(lcd_r1()),
+						inode_ref,
 						&inode_container);
 	if (ret) {
 		LIBLCD_ERR("error lookup inode");
@@ -1702,22 +1707,35 @@ int clear_inode_callee(void)
 	ret = 0;
 	goto out;
 
-out:
 fail1:
-	if (lcd_sync_reply())
-		LIBLCD_ERR("double fault?");
+out:
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+	
+	/* empty response */
+
+	fipc_send_msg_end(channel, response);
+
 	return ret;
 }
 
-int iget_failed_callee(void)
+int iget_failed_callee(struct fipc_message *request,
+		struct fipc_ring_channel *channel)
 {
 	struct pmfs_inode_vfs_container *inode_container;
 	int ret;
+	struct fipc_message *response;
+	cptr_t inode_ref = __cptr(fipc_get_reg0(request));
+
+	fipc_recv_msg_end(channel, request);
+
 	/*
 	 * Look up our inode obj
 	 */
 	ret = glue_cap_lookup_pmfs_inode_vfs_type(pmfs_cspace,
-						__cptr(lcd_r1()),
+						inode_ref,
 						&inode_container);
 	if (ret) {
 		LIBLCD_ERR("error looking up inode");
@@ -1733,10 +1751,17 @@ int iget_failed_callee(void)
 	ret = 0;
 	goto out;
 
-out:
 fail1:
-	if (lcd_sync_reply())
-		LIBLCD_ERR("double fault?");
+out:
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+	
+	/* empty response */
+
+	fipc_send_msg_end(channel, response);
+
 	return ret;
 }
 

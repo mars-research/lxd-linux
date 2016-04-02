@@ -641,6 +641,7 @@ void clear_inode(struct inode *inode)
 {
 	struct pmfs_inode_vfs_container *inode_container;
 	int ret;
+	struct fipc_message *request, *response;
 	/*
 	 * Marshal remote ref, and do rpc.
 	 */
@@ -650,21 +651,35 @@ void clear_inode(struct inode *inode)
 			vfs_inode),
 		struct pmfs_inode_vfs_container,
 		pmfs_inode_vfs);
-	lcd_set_r0(CLEAR_INODE);
-	lcd_set_r1(cptr_val(inode_container->their_ref));
-	
-	ret = lcd_sync_call(vfs_chnl);
+	/*
+	 * Marshal:
+	 *
+	 *   -- ref to inode obj
+	 */
+	ret = async_msg_blocking_send_start(pmfs_async_chnl, &request);
 	if (ret) {
-		LIBLCD_ERR("lcd call failed");
+		LIBLCD_ERR("failed to get send slot");
 		goto fail1;
 	}
+
+	async_msg_set_fn_type(request, CLEAR_INODE);
+	fipc_set_reg0(request, cptr_val(inode_container->their_ref));
+
+	ret = thc_ipc_call(pmfs_async_chnl, request, &response);
+	if (ret) {
+		LIBLCD_ERR("error sending msg");
+		goto fail2;
+	}
 	/*
-	 * No reply stuff
+	 * Nothing in response
 	 */
+
+	fipc_recv_msg_end(channel, response);
+
 	goto out;
 
-out:
 fail1:
+out:
 	return;
 }
 
@@ -672,6 +687,7 @@ void iget_failed(struct inode *inode)
 {
 	struct inode_container *inode_container;
 	int ret;
+	struct fipc_message *request, *response;
 	/*
 	 * Get remote ref, do rpc. (This will ultimately free the inode.)
 	 */
@@ -681,21 +697,35 @@ void iget_failed(struct inode *inode)
 			vfs_inode),
 		struct pmfs_inode_vfs_container,
 		pmfs_inode_vfs);
-
-	lcd_set_r0(IGET_FAILED);
-	lcd_set_r1(cptr_val(inode_container->their_ref));
-	ret = lcd_sync_call(vfs_chnl);
+	/*
+	 * Marshal:
+	 *
+	 *   -- ref to inode obj
+	 */
+	ret = async_msg_blocking_send_start(pmfs_async_chnl, &request);
 	if (ret) {
-		LIBLCD_ERR("iget_failed failed");
+		LIBLCD_ERR("failed to get send slot");
 		goto fail1;
 	}
+
+	async_msg_set_fn_type(request, IGET_FAILED);
+	fipc_set_reg0(request, cptr_val(inode_container->their_ref));
+
+	ret = thc_ipc_call(pmfs_async_chnl, request, &response);
+	if (ret) {
+		LIBLCD_ERR("error sending msg");
+		goto fail2;
+	}
 	/*
-	 * Nothing in reply
+	 * Nothing in response
 	 */
+
+	fipc_recv_msg_end(channel, response);
+
 	goto out;
 
-out:
 fail1:
+out:
 	return;
 }
 
