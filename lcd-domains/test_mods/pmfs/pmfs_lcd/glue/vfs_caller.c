@@ -479,7 +479,7 @@ void bdi_destroy(struct backing_dev_info *bdi)
 	}
 
 	async_msg_set_fn_type(request, BDI_DESTROY);
-	fipc_set_reg0(request, cptr_val(bdi_container->my_ref));
+	fipc_set_reg0(request, cptr_val(bdi_container->their_ref));
 
 	ret = thc_ipc_call(pmfs_async_chnl, request, &response);
 	if (ret) {
@@ -504,43 +504,59 @@ struct inode *iget_locked(struct super_block *sb, unsigned long ino)
 	struct super_block_container *sb_container;
 	struct pmfs_inode_vfs_container *inode_container;
 	int ret;
-	/*
-	 * Marshal arguments and do rpc
-	 */
+	struct fipc_message *request, *response;
+
 	sb_container = container_of(sb, struct super_block_container,
 				super_block);
-	lcd_set_r0(IGET_LOCKED);
-	lcd_set_r1(sb_container->their_ref);
-	lcd_set_r2(ino);
-
-	ret = lcd_sync_call(vfs_chnl);
+	/*
+	 * Marshal:
+	 *
+	 *   -- ref to sb obj
+	 *   -- ino
+	 */
+	ret = async_msg_blocking_send_start(pmfs_async_chnl, &request);
 	if (ret) {
-		LIBLCD_ERR("iget locked failed");
+		LIBLCD_ERR("failed to get send slot");
 		goto fail1;
 	}
+
+	async_msg_set_fn_type(request, IGET_LOCKED);
+	fipc_set_reg0(request, cptr_val(sb_container->their_ref));
+	fipc_set_reg1(request, ino);
+
+	ret = thc_ipc_call(pmfs_async_chnl, request, &response);
+	if (ret) {
+		LIBLCD_ERR("error sending msg");
+		goto fail2;
+	}
 	/*
-	 * Get return values.
+	 * Unmarshal:
 	 *
-	 * Bind on inode (look up), and unmarshal:
-	 *
+	 *   -- inode ref
 	 *   -- i_state
 	 *   -- i_nlink
 	 *   -- i_mode
 	 */
-	if (cap_cptr_is_null(__cptr(lcd_r0()))) {
+	if (cap_cptr_is_null(__cptr(fipc_get_reg0(response)))) {
 		LIBLCD_ERR("got null from iget locked");
-		goto fail2;
+		goto fail3;
 	}
 	ret = glue_cap_lookup_pmfs_inode_vfs_type(vfs_cspace,
-						__cptr(lcd_r0()),
+						__cptr(fipc_get_reg0(response)),
 						&inode_container);
 	if (ret) {
 		LIBLCD_ERR("failed to lookup inode");
-		goto fail3;
+		goto fail4;
 	}
-	inode_container->pmfs_inode_vfs.vfs_inode.i_state = lcd_r1();
-	inode_container->pmfs_inode_vfs.vfs_inode.i_nlink = lcd_r2();
-	inode_container->pmfs_inode_vfs.vfs_inode.i_mode = lcd_r3();
+	inode_container->pmfs_inode_vfs.vfs_inode.i_state =
+		fipc_get_reg1(response);
+	inode_container->pmfs_inode_vfs.vfs_inode.i_nlink = 
+		fipc_get_reg2(response);
+	inode_container->pmfs_inode_vfs.vfs_inode.i_mode =
+		fipc_get_reg3(response);
+
+	fipc_recv_msg_end(pmfs_async_chnl, response);
+
 	/*
 	 * We also know that i_mapping -> i_data, at least for pmfs. (So
 	 * although i_mapping is a pointer, the data it points to is embedded
@@ -549,8 +565,9 @@ struct inode *iget_locked(struct super_block *sb, unsigned long ino)
 	inode_container->pmfs_inode_vfs.vfs_inode.i_mapping =
 		&inode_container->pmfs_inode_vfs.vfs_inode.i_data;
 	/*
-	 * We also need to set back pointer to super block (this is done
-	 * by the callee)
+	 * We also need to set back pointer to super block (this is normally
+	 * done by the callee, but we have to "manually" do it here in the 
+	 * glue)
 	 */
 	inode_container->pmfs_inode_vfs.vfs_inode.i_sb = sb;
 	/*
@@ -558,7 +575,11 @@ struct inode *iget_locked(struct super_block *sb, unsigned long ino)
 	 */
 	return &inode_container->pmfs_inode_vfs.vfs_inode;
 
+fail4:
 fail3:
+
+	fipc_recv_msg_end(pmfs_async_chnl, response);
+
 	/* It would be nice if we could call iput or something, but we're
 	 * sort of sunk since we can't look up our private copy ... */
 fail2:

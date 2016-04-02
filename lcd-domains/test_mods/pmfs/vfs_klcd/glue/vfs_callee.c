@@ -1512,7 +1512,7 @@ int bdi_destroy_callee(struct fipc_message *request,
 	struct backing_dev_info_container *bdi_container;
 	int ret;
 	cptr_t ref;
-	struct fipc_message *response,
+	struct fipc_message *response;
 	/*
 	 * Unmarshal ref to our bdi obj copy, and bind.
 	 */
@@ -1556,18 +1556,23 @@ out:
 	return ret;
 }
 
-int iget_locked_callee(void)
+int iget_locked_callee(struct fipc_message *request,
+		struct fipc_ring_channel *channel)
 {
 	int ret;
 	struct super_block_container *sb_container;
 	struct inode *inode;
-	struct pmfs_inode_vfs *inode_container;
-	cptr_t their_ref = CAP_CPTR_NULL;
+	struct pmfs_inode_vfs *inode_container = NULL;
+	struct fipc_message *response;
+	cptr_t sb_ref = __cptr(fipc_get_reg0(request));
+	unsigned long ino = fipc_get_reg1(request);
+
+	fipc_recv_msg_end(channel, request);
 	/*
 	 * Look up our private sb
 	 */
 	ret = glue_cap_lookup_super_block_type(pmfs_cspace,
-					__cptr(lcd_r1()),
+					sb_ref,
 					&sb_container);
 	if (ret) {
 		LIBLCD_ERR("super block lookup failed");
@@ -1582,7 +1587,7 @@ int iget_locked_callee(void)
 	 *
 	 * BUT the inode's mapping *is* callee allocated (sort of).
 	 */
-	inode = iget_locked(&sb_container->super_block, lcd_r2());
+	inode = iget_locked(&sb_container->super_block, ino);
 	if (!inode) {
 		LIBLCD_ERR("iget locked failed");
 		goto fail2;
@@ -1593,28 +1598,34 @@ int iget_locked_callee(void)
 			vfs_inode),
 		struct pmfs_inode_vfs_container,
 		pmfs_inode_vfs);
-	their_ref = inode_container->their_ref;
+
+	ret = 0;
+	goto out;
+
+fail2:
+fail1:
+out:
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
 	/*
-	 * Reply with remote refs for inode, and the following:
+	 * Reply with remote ref for inode, and the following:
 	 *
 	 *     -- i_state
 	 *     -- i_nlink
 	 *     -- i_mode
 	 */
-	lcd_set_r1(inode->i_state);
-	lcd_set_r2(inode->i_nlink);
-	lcd_set_r3(inode->i_mode);
+	if (inode_container) {
+		fipc_set_reg0(response, cptr_val(inode_container->their_ref));
+		fipc_set_reg1(response, inode_container->inode.i_state);
+		fipc_set_reg2(response, inode_container->inode.i_nlink);
+		fipc_set_reg3(response, inode_container->inode.i_mode);
+	} else {
+		fipc_set_reg0(response, cptr_val(CAP_CPTR_NULL));
+	}
 
-	ret = 0;
-	goto out;
-
-out:
-fail2:
-fail1:
-	lcd_set_r0(cptr_val(their_ref));
-
-	if (lcd_sync_reply())
-		LIBLCD_ERR("double fault?");
+	fipc_send_msg_end(channel, response);
 
 	return ret;
 }
