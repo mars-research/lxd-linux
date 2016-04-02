@@ -216,14 +216,15 @@ static int setup_fs_type_trampolines(
 struct inode* 
 noinline
 super_block_alloc_inode(struct super_block *super_block,
-			struct super_block_container *super_block_container,
-			struct glue_cspace *cspace,
-			cptr_t channel)
+			struct trampoline_hidden_args *hidden_args)
 {
 	struct pmfs_inode_vfs_container *inode_container;
+	struct super_block_container *sb_container =
+		hidden_args->struct_container;
 	int ret;
+	struct fipc_message *request, *response;
 	/*
-	 * Create our own private copy and ref
+	 * Create our own private inode copy and ref
 	 */
 	inode_container = kzalloc(sizeof(*inode_container), GFP_NOFS);
 	if (!inode_container) {
@@ -231,7 +232,7 @@ super_block_alloc_inode(struct super_block *super_block,
 		goto fail1;
 	}
 	ret = glue_cap_insert_pmfs_inode_vfs_type(
-		pmfs_cspace,
+		hidden_args->fs_cspace,
 		inode_container,
 		&inode_container->my_ref);
 	if (ret) {
@@ -239,24 +240,38 @@ super_block_alloc_inode(struct super_block *super_block,
 		goto fail2;
 	}
 	/*
-	 * Invoke remote alloc inode
+	 * Marshal:
+	 *
+	 *   -- sb ref
+	 *   -- inode ref (to our copy)
 	 */
-	lcd_set_r0(SUPER_BLOCK_ALLOC_INODE);
-	lcd_set_r1(cptr_val(super_block_container->their_ref));
-	lcd_set_r2(cptr_val(inode_container->my_ref));
-	ret = lcd_sync_call(channel);
+	ret = async_msg_blocking_send_start(hidden_args->fs_async_chnl,
+					&request);
 	if (ret) {
-		LIBLCD_ERR("rpc failed");
+		LIBLCD_ERR("failed to get send slot");
 		goto fail3;
+	}
+
+	async_msg_set_fn_type(request, SUPER_BLOCK_ALLOC_INODE);
+	fipc_set_reg0(request, cptr_val(sb_container->their_ref));
+	fipc_set_reg1(request, cptr_val(inode_container->my_ref));
+
+	ret = thc_ipc_call(hidden_args->fs_async_chnl, request, &response);
+	if (ret) {
+		LIBLCD_ERR("error sending request");
+		goto fail4;
 	}
 	/*
 	 * Get remote ref from callee
 	 */
-	if (cap_cptr_is_null(__cptr(lcd_r0()))) {
+	if (cap_cptr_is_null(__cptr(fipc_get_reg0(response)))) {
 		LIBLCD_ERR("got null from callee");
-		goto fail4;
+		goto fail5;
 	}
-	inode_container->their_ref = __cptr(lcd_r0());
+	inode_container->their_ref = __cptr(fipc_get_reg0(response));
+
+	fipc_recv_msg_end(hidden_args->fs_async_chnl, response);
+
 	/*
 	 * HACK: Invoke inode_init_once on our private copy
 	 */
@@ -266,8 +281,11 @@ super_block_alloc_inode(struct super_block *super_block,
 	 */
 	return &inode_container->pmfs_inode.vfs_inode;
 
+fail5:
+	fipc_recv_msg_end(hidden_args->fs_async_chnl, response);
 fail4:
 fail3:
+	glue_cap_remove(hidden_args->fs_cspace, inode_container->my_ref);
 fail2:
 	kfree(inode_container);
 fail1:
@@ -281,31 +299,27 @@ super_block_alloc_inode_trampoline(struct super_block *super_block)
 {
 	struct inode* (*volatile super_block_alloc_inode_p)(
 		struct super_block *,
-		struct super_block_container *,
-		struct glue_cspace *,
-		cptr_t channel)
-	struct super_block_alloc_inode_hidden_args *hidden_args;
+		struct trampoline_hidden_args *);
+	struct trampoline_hidden_args *hidden_args;
 
 	LCD_TRAMPOLINE_PROLOGUE(hidden_args, 
 				super_block_alloc_inode_trampoline);
 
 	super_block_alloc_inode_p = super_block_alloc_inode;
 
-	return super_block_alloc_inode_p(super_block,
-					hidden_args->super_block_container,
-					hidden_args->cspace,
-					hidden_args->channel);
+	return super_block_alloc_inode_p(super_block, hidden_args);
 }
 
 void
 noinline
 super_block_destroy_inode(struct inode *inode,
-			struct super_block_container *super_block_container,
-			struct glue_cspace *cspace,
-			cptr_t channel)
+			struct trampoline_hidden_args *hidden_args)
 {
 	struct pmfs_inode_vfs_container *inode_container;
+	struct super_block_container *sb_container = 
+		hidden_args->struct_container;
 	int ret;
+	struct fipc_message *request, *response;
 	/*
 	 * Call remote destroy inode
 	 */
@@ -315,24 +329,41 @@ super_block_destroy_inode(struct inode *inode,
 			vfs_inode),
 		struct pmfs_inode_vfs_container,
 		pmfs_inode_vfs);
-	lcd_set_r0(SUPER_BLOCK_DESTROY_INODE);
-	lcd_set_r1(cptr_val(super_block_container->their_ref));
-	lcd_set_r2(cptr_val(inode_container->their_ref));
-	ret = lcd_sync_call(channel);
+	/*
+	 * Marshal:
+	 *
+	 *   -- sb ref
+	 *   -- inode ref
+	 */
+	ret = async_msg_blocking_send_start(hidden_args->fs_async_chnl,
+					&request);
 	if (ret) {
-		LIBLCD_ERR("error calling remote destroy inode");
+		LIBLCD_ERR("failed to get send slot");
 		goto fail1;
 	}
 
-	/* Done */
+	async_msg_set_fn_type(request, SUPER_BLOCK_DESTROY_INODE);
+	fipc_set_reg0(request, cptr_val(sb_container->their_ref));
+	fipc_set_reg1(request, cptr_val(inode_container->their_ref));
+
+	ret = thc_ipc_call(hidden_args->fs_async_chnl, request, &response);
+	if (ret) {
+		LIBLCD_ERR("error sending request");
+		goto fail2;
+	}
+	/*
+	 * Nothing in reply
+	 */
+	fipc_recv_msg_end(response);
+
 	goto out;
 
-out:
 fail1:
+out:
 	/*
 	 * Remove our copy from cspace, and destroy it
 	 */
-	glue_cap_remove(pmfs_cspace, inode_container->my_ref);
+	glue_cap_remove(hidden_args->fs_cspace, inode_container->my_ref);
 	kfree(inode_container);
 
 	return;
@@ -345,30 +376,25 @@ super_block_destroy_inode_trampoline(struct inode *inode)
 {
 	void (*volatile super_block_destroy_inode_p)(
 		struct inode *,
-		struct super_block_container *,
-		struct glue_cspace *,
-		cptr_t);
-	struct super_block_destroy_inode_hidden_args *hidden_args;
+		struct trampoline_hidden_args *)
+	struct trampoline_hidden_args *hidden_args;
 
 	LCD_TRAMPOLINE_PROLOGUE(hidden_args, 
 				super_block_destroy_inode_trampoline);
 
 	super_block_destroy_inode_p = super_block_destroy_inode;
 
-	super_block_destroy_inode_p(super_block,
-				hidden_args->super_block_container,
-				hidden_args->cspace,
-				hidden_args->channel);
+	super_block_destroy_inode_p(super_block, hidden_args);
 }
 
 void
 noinline
-super_block_evict_inode(struct inode *inode,
-			struct super_block_container *super_block_container,
-			struct glue_cspace *cspace,
-			cptr_t channel)
+super_block_evict_inode(struct inode *inode, 
+			struct trampoline_hidden_args *hidden_args)
 {
 	struct pmfs_inode_vfs_container *inode_container;
+	struct super_block_container *sb_container =
+		hidden_args->struct_container;
 	int ret;
 	/*
 	 * Call remote evict inode
@@ -379,21 +405,37 @@ super_block_evict_inode(struct inode *inode,
 			vfs_inode),
 		struct pmfs_inode_vfs_container,
 		pmfs_inode_vfs);
-	lcd_set_r0(SUPER_BLOCK_EVICT_INODE);
-	lcd_set_r1(cptr_val(super_block_container->their_ref));
-	lcd_set_r2(cptr_val(inode_container->their_ref));
-	ret = lcd_sync_call(channel);
+	/*
+	 * Marshal:
+	 *
+	 *   -- sb ref
+	 *   -- inode ref
+	 */
+	ret = async_msg_blocking_send_start(hidden_args->fs_async_chnl,
+					&request);
 	if (ret) {
-		LIBLCD_ERR("error calling remote evict inode");
+		LIBLCD_ERR("failed to get send slot");
 		goto fail1;
 	}
 
-	/* Done */
+	async_msg_set_fn_type(request, SUPER_BLOCK_EVICT_INODE);
+	fipc_set_reg0(request, cptr_val(sb_container->their_ref));
+	fipc_set_reg1(request, cptr_val(inode_container->their_ref));
+
+	ret = thc_ipc_call(hidden_args->fs_async_chnl, request, &response);
+	if (ret) {
+		LIBLCD_ERR("error sending request");
+		goto fail2;
+	}
+	/*
+	 * Nothing in reply
+	 */
+	fipc_recv_msg_end(response);
+
 	goto out;
 
-out:
 fail1:
-
+out:
 	return;
 }
 
@@ -404,48 +446,55 @@ super_block_evict_inode_trampoline(struct inode *inode)
 {
 	void (*volatile super_block_evict_inode_p)(
 		struct inode *,
-		struct super_block_container *,
-		struct glue_cspace *,
-		cptr_t);
-	struct super_block_evict_inode_hidden_args *hidden_args;
+		struct trampoline_hidden_args *)
+	struct trampoline_hidden_args *hidden_args;
 
 	LCD_TRAMPOLINE_PROLOGUE(hidden_args, 
 				super_block_evict_inode_trampoline);
 
 	super_block_evict_inode_p = super_block_evict_inode;
 
-	super_block_evict_inode_p(super_block,
-				hidden_args->super_block_container,
-				hidden_args->cspace,
-				hidden_args->channel);
+	super_block_evict_inode_p(super_block, hidden_args);
 }
 
 void
 noinline
 super_block_put_super(struct super_block *sb,
-		struct super_block_container *super_block_container,
-		struct glue_cspace *cspace,
-		cptr_t channel)
+		struct trampoline_hidden_args *hidden_args)
 {
 	int ret;
+	struct super_block_container *sb_container =
+		hidden_args->struct_container;
 	/*
 	 * Call remote put_super
+	 *
+	 * Marshal:
+	 *
+	 *   -- sb ref
 	 */
-	lcd_set_r0(SUPER_BLOCK_PUT_SUPER);
-	lcd_set_r1(cptr_val(super_block_container->their_ref));
-	ret = lcd_sync_call(channel);
+	ret = async_msg_blocking_send_start(hidden_args->fs_async_chnl,
+					&request);
 	if (ret) {
-		LIBLCD_ERR("error calling remote put_super");
+		LIBLCD_ERR("failed to get send slot");
 		goto fail1;
+	}
+
+	async_msg_set_fn_type(request, SUPER_BLOCK_PUT_SUPER);
+	fipc_set_reg0(request, cptr_val(sb_container->their_ref));
+
+	ret = thc_ipc_call(hidden_args->fs_async_chnl, request, &response);
+	if (ret) {
+		LIBLCD_ERR("error sending request");
+		goto fail2;
 	}
 	/*
 	 * Nothing in reply
 	 */
+	fipc_recv_msg_end(response);
+
 	goto out;
-
-out:
 fail1:
-
+out:
 	return;
 }
 
@@ -456,20 +505,15 @@ super_block_put_super_trampoline(struct super_block *sb)
 {
 	void (*volatile super_block_put_super_p)(
 		struct super_block *,
-		struct super_block_container *,
-		struct glue_cspace *,
-		cptr_t);
-	struct super_block_put_super_hidden_args *hidden_args;
+		struct trampoline_hidden_args *)
+	struct trampoline_hidden_args *hidden_args;
 
 	LCD_TRAMPOLINE_PROLOGUE(hidden_args, 
 				super_block_put_super_trampoline);
 
 	super_block_put_super_p = super_block_put_super;
 
-	super_block_put_super_p(super_block,
-				hidden_args->super_block_container,
-				hidden_args->cspace,
-				hidden_args->channel);
+	super_block_put_super_p(super_block, hidden_args);
 }
 
 int

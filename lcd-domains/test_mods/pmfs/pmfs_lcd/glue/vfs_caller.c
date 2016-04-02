@@ -1048,17 +1048,24 @@ out:
 
 /* CALLEE FUNCTIONS (FUNCTION POINTERS) ------------------------------ */
 
-int super_block_alloc_inode_callee(void)
+int super_block_alloc_inode_callee(struct fipc_message *request,
+				struct fipc_ring_channel *channel)
 {
 	struct super_block_container *sb_container;
-	struct pmfs_inode_vfs_container *inode_container;
+	struct pmfs_inode_vfs_container *inode_container = NULL;
 	struct inode *inode;
-	cptr_t my_ref = CAP_CPTR_NULL;
 	int ret;
+	cptr_t sb_ref = __cptr(fipc_get_reg0(request));
+	cptr_t inode_ref = __cptr(fipc_get_reg1(request));
+	struct fipc_message *response;
+	uint32_t request_cookie = thc_get_request_cookie(request);
+
+	fipc_recv_msg_end(channel, request);
+
 	/*
 	 * Get our private struct sb
 	 */
-	ret = glue_cap_lookup_super_block_type(vfs_cspace, __cptr(lcd_r1()),
+	ret = glue_cap_lookup_super_block_type(vfs_cspace, sb_ref,
 					&sb_container);
 	if (ret) {
 		LIBLCD_ERR("error looking up super block");
@@ -1067,7 +1074,8 @@ int super_block_alloc_inode_callee(void)
 	/*
 	 * Invoke the real function
 	 */
-	inode = sb_container->sb->s_ops->alloc_inode(&sb_container->super_block);
+	inode = sb_container->sb->s_ops->alloc_inode(
+		&sb_container->super_block);
 	if (!inode) {
 		LIBLCD_ERR("error alloc'ing inode");
 		ret = -ENOMEM;
@@ -1077,20 +1085,19 @@ int super_block_alloc_inode_callee(void)
 		container_of(inode, struct pmfs_inode_vfs, vfs_inode),
 		struct pmfs_inode_vfs_container,
 		pmfs_inode_vfs);
-	inode_container->their_ref = lcd_r2();
+	inode_container->their_ref = inode_ref;
 	/*
 	 * Create a remote reference for the new inode
 	 */
 	ret = glue_cap_insert_pmfs_inode_vfs_type(vfs_cspace,
 						inode_container,
-						&my_ref);
+						&inode_container->my_ref);
 	if (ret) {
 		LIBLCD_ERR("error creating ref");
 		goto fail3;
 	}
-	inode_container->my_ref = my_ref;
 	/*
-	 * Respond
+	 * Respond with inode ref
 	 */
 	ret = 0;
 	goto reply;
@@ -1100,22 +1107,38 @@ fail3:
 fail2:
 fail1:
 reply:
-	lcd_set_r0(cptr_val(my_ref));
-	if (lcd_sync_reply())
-		LIBLCD_ERR("double fault?");
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+	/*
+	 * Return ref to our inode
+	 */
+	if (inode_container)
+		fipc_set_reg0(response, cptr_val(inode_container->my_ref));
+	else
+		fipc_set_reg0(response, cptr_val(CAP_CPTR_NULL));
+
+	thc_ipc_reply(channel, request_cookie, response);
+
 	return ret;
 }
 
-int super_block_destroy_inode_callee(void)
+int super_block_destroy_inode_callee(struct fipc_message *request,
+				struct fipc_ring_channel *channel)
 {
 	struct super_block_container *sb_container;
 	struct pmfs_inode_vfs_container *inode_container;
-	cptr_t my_ref;
+	cptr_t sb_ref = __cptr(fipc_get_reg0(request));
+	cptr_t inode_ref = __cptr(fipc_get_reg1(request));
 	int ret;
+	uint32_t request_cookie = thc_get_request_cookie(request);
+
+	fipc_recv_msg_end(channel, request);
 	/*
 	 * Get our private struct sb
 	 */
-	ret = glue_cap_lookup_super_block_type(vfs_cspace, __cptr(lcd_r1()),
+	ret = glue_cap_lookup_super_block_type(vfs_cspace, sb_ref,
 					&sb_container);
 	if (ret) {
 		LIBLCD_ERR("error looking up super block");
@@ -1124,22 +1147,22 @@ int super_block_destroy_inode_callee(void)
 	/*
 	 * Get our private struct inode
 	 */
-	my_ref = __cptr(lcd_r2());
-	ret = glue_cap_lookup_pmfs_inode_vfs_type(vfs_cspace, my_ref,
+	ret = glue_cap_lookup_pmfs_inode_vfs_type(vfs_cspace, inode_ref,
 						&inode_container);
 	if (ret) {
 		LIBLCD_ERR("error looking up inode");
 		goto fail2;
 	}
 	/*
+	 * Remove our private copy from the cspace (before we invoke
+	 * the real function that kills it)
+	 */
+	glue_cap_remove(vfs_cspace, inode_container->my_ref);
+	/*
 	 * Invoke the real function
 	 */
 	sb_container->sb->s_ops->destroy_inode(
 		inode_container->inode.vfs_inode);
-	/*
-	 * Remove our private copy from the cspace
-	 */
-	glue_cap_remove(vfs_cspace, my_ref);
 
 	ret = 0;
 	goto reply;
@@ -1147,29 +1170,43 @@ int super_block_destroy_inode_callee(void)
 fail2:
 fail1:
 reply:
-	if (lcd_sync_reply())
-		LIBLCD_ERR("double fault?");
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+
+	/* empty reply */
+
+	thc_ipc_reply(channel, request_cookie, response);
+
 	return ret;
 }
 
-int super_block_evict_inode_callee(void)
+int super_block_evict_inode_callee(struct fipc_message *request,
+				struct fipc_ring_channel *channel)
 {
 	struct super_block_container *sb_container;
 	struct pmfs_inode_vfs_container *inode_container;
 	int ret;
+	cptr_t sb_ref = __cptr(fipc_get_reg0(request));
+	cptr_t inode_ref = __cptr(fipc_get_reg1(request));
+	uint32_t request_cookie = thc_get_request_cookie(request);
+	
+	fipc_recv_msg_end(channel, request);
+
 	/*
 	 * Look up private copies of super block and inode
 	 */
 	ret = glue_cap_lookup_super_block_type(vfs_cspace,
-					__cptr(lcd_r1()),
+					sb_ref,
 					&sb_container);
 	if (ret) {
 		LIBLCD_ERR("super block not found");
 		goto fail1;
 	}
 	ret = glue_cap_lookup_pmfs_inode_vfs_type(vfs_cspace,
-					__cptr(lcd_r2()),
-					&inode_container);
+						inode_ref,
+						&inode_container);
 	if (ret) {
 		LIBLCD_ERR("inode not found");
 		goto fail2;
@@ -1189,8 +1226,15 @@ int super_block_evict_inode_callee(void)
 out:
 fail2:
 fail1:
-	if (lcd_sync_reply())
-		LIBLCD_ERR("double fault?");
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+
+	/* empty reply */
+
+	thc_ipc_reply(channel, request_cookie, response);
+
 	return ret;
 }
 
@@ -1522,22 +1566,31 @@ static void do_unmap(struct super_block *sb)
 	}
 }
 
-int super_block_put_super_callee(void)
+int super_block_put_super_callee(struct fipc_message *request,
+				struct fipc_ring_channel *channel)
 {
 	struct super_block_container *sb_container;
 	int ret;
+	struct fipc_message *response;
+	cptr_t sb_ref = __cptr(fipc_get_reg0(request));
+	uint32_t request_cookie = thc_get_request_cookie(request);
+
+	fipc_recv_msg_end(channel, request);
+
 	/*
 	 * Bind on super_block
 	 */
 	ret = glue_cap_lookup_super_block_type(vfs_cspace,
-					__cptr(lcd_r1()),
+					sb_ref,
 					&sb_container);
 	if (ret) {
 		LIBLCD_ERR("couldn't find super block");
 		goto fail1;
 	}
 	/*
-	 * Invoke real function
+	 * Invoke real function (this doesn't kill the struct sb yet; not
+	 * until fs type -> kill_sb). This will call iounmap, which does
+	 * nothing (the real unmap follows).
 	 */
 	sb_container->super_block.s_op->put_super(&sb_container->super_block);
 	/*
@@ -1552,8 +1605,14 @@ int super_block_put_super_callee(void)
 
 fail1:
 out:
-	if (lcd_sync_reply())
-		LIBLCD_ERR("double fault?");
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+
+	/* empty reply */
+
+	thc_ipc_reply(channel, request_cookie, response);
 
 	return ret;
 }
