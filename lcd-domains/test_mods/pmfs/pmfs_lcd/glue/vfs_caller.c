@@ -949,6 +949,11 @@ mount_nodev(struct file_system_type *fs_type,
 	ret = lcd_sync_send(vfs_chnl);
 	if (ret) {
 		LIBLCD_ERR("failed to do sync half of mount_nodev");
+		/* The callee will not be sending us a response. This is 
+		 * under the assumption that if we fail to do a sync send, 
+		 * the callee failed to do a sync receive, and will just 
+		 * cancel the "transaction". */
+		thc_kill_request_cookie(request_cookie);
 		goto fail6;
 	}
 	/*
@@ -990,10 +995,6 @@ fail9:
 fail8:
 fail7:
 fail6:
-	/* The callee will not be sending us a response. This is under the
-	 * assumption that if we fail to do a sync send, the callee failed
-	 * to do a sync receive, and will just cancel the "transaction". */
-	thc_kill_request_cookie(request_cookie);
 fail5:
 fail4:
 	glue_cap_remove(vfs_cspace, fill_sup_container->my_ref);
