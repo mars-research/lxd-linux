@@ -25,6 +25,7 @@ static void loop(struct lcd_sync_channel_group *sync_group,
 	struct fipc_message *msg;
 	int ret;
 	int count = 0;
+	int stop = 0;
 	/*
 	 * Listen once for PMFS register call. (In the future, we should
 	 * periodically poll on the vfs channel for register fs calls
@@ -55,10 +56,15 @@ static void loop(struct lcd_sync_channel_group *sync_group,
 	 * call a helper to do the body of the loop). 
 	 */
 	DO_FINISH({
-			for (;;) {
-
-				if (kthread_should_stop())
-					break;
+			/*
+			 * We use a variable to control when to abort the
+			 * loop. Calling "break" inside an async just 
+			 * exits out of the do { } while inside that macro;
+			 * it doesn't break out of this loop. Furthermore,
+			 * we could have blocked while running the async.
+			 */
+			while (!stop && count < 5) {
+				count += 1;
 				/*
 				 * Do one async receive
 				 */
@@ -73,8 +79,6 @@ static void loop(struct lcd_sync_channel_group *sync_group,
 						break;
 					}
 				}
-
-				count += 1;
 				/*
 				 * Got a message. Dispatch.
 				 */
@@ -83,16 +87,18 @@ static void loop(struct lcd_sync_channel_group *sync_group,
 									async_msg);
 						if (ret) {
 							LIBLCD_ERR("async dispatch failed");
-							break;
+							stop = 1;
 						}
 					});
 
-				if (count >= 25) {
-					LIBLCD_ERR("count is >= 25");
+				if (kthread_should_stop()) {
+					LIBLCD_ERR("kthread should stop");
 					break;
 				}
 			}
 		});
+
+	LIBLCD_MSG("EXITED VFS DO_FINISH");
 
 	return;
 }

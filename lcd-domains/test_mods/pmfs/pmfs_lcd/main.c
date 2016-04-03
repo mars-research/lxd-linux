@@ -14,13 +14,131 @@
 
 /* LOOP ---------------------------------------- */
 
-
-/* INIT/EXIT -------------------------------------------------- */
-
 int init_pmfs_fs(void);
 void exit_pmfs_fs(void);
 
-struct lcd_sync_channel_group group;
+static void main_and_loop(struct thc_channel_group *async_group)
+{
+	struct thc_channel_group_item *async_chnl = NULL;
+	int ret;
+	int count = 0;
+	int stop = 0;
+
+	DO_FINISH({
+			ASYNC({
+					/*
+					 * Initialize pmfs
+					 */
+					ret = init_pmfs_fs();
+					if (ret) {
+						LIBLCD_ERR("pmfs init failed");
+						stop = 1;
+					}
+					LIBLCD_MSG("SUCCESSFULLY REGISTERED PMFS!");
+				});
+			/*
+			 * Handle replies that are part of init sequence,
+			 * and then function calls (like mount) ...
+			 */
+			while (!stop && count < 5) {
+
+				count += 1;
+
+				/*
+				 * Do one async receive
+				 */
+				ret = thc_poll_recv_group(async_group,
+							&async_chnl,
+							&async_msg);
+				if (ret) {
+					if (ret == -EWOULDBLOCK)
+						continue;
+					else {
+						LIBLCD_ERR("async recv failed");
+						break;
+					}
+				}
+				/*
+				 * Got a message. Dispatch.
+				 *
+				 * (Note: as mentioned above, this code will
+				 * never fire, but we put it here for
+				 * completeness.)
+				 */
+				ASYNC({
+						ret = async_chnl->dispatch_fn(async_chnl, 
+									async_msg);
+						if (ret) {
+							LIBLCD_ERR("async dispatch failed");
+							stop = 1;
+						}
+					});
+
+				if (kthread_should_stop()) {
+					LIBLCD_ERR("kthread should stop");
+					break;
+				}
+			}
+
+			if (stop)
+				goto do_finish_exit;
+			/*
+			 * Tear down pmfs
+			 */
+			ASYNC({
+					exit_pmfs_fs();
+					LIBLCD_MSG("SUCCESSFULLY UNREGISTERED PMFS!");
+				});
+			/*
+			 * Listen for async replies for pmfs exit
+			 */
+			count = 0;
+			while (!stop && count < 5) {
+
+				count += 1;
+
+				/*
+				 * Do one async receive
+				 */
+				ret = thc_poll_recv_group(async_group,
+							&async_chnl,
+							&async_msg);
+				if (ret) {
+					if (ret == -EWOULDBLOCK)
+						continue;
+					else {
+						LIBLCD_ERR("async recv failed");
+						break;
+					}
+				}
+				/*
+				 * Got a message. Dispatch.
+				 *
+				 * (Note: as mentioned above, this code will
+				 * never fire, but we put it here for
+				 * completeness.)
+				 */
+				ASYNC({
+						ret = async_chnl->dispatch_fn(async_chnl, 
+									async_msg);
+						if (ret) {
+							LIBLCD_ERR("async dispatch failed");
+							stop = 1;
+						}
+					});
+			}
+do_finish_exit:
+		});
+
+	LIBLCD_MSG("EXITED PMFS DO_FINISH");
+
+	return;
+}
+
+/* INIT/EXIT -------------------------------------------------- */
+
+/* no sync channels to listen on */
+struct thc_channel_group async_group;
 
 static int __noreturn pmfs_lcd_init(void) 
 {
@@ -31,9 +149,13 @@ static int __noreturn pmfs_lcd_init(void)
 	if (r)
 		goto fail1;
 	/*
-	 * Initialize dispatch loop context
+	 * Initialize the async dispatch loop stuff
 	 */
-	lcd_sync_channel_group_init(&group);
+	r = thc_channel_group_init(&async_group);
+	if (r) {
+		LIBLCD_ERR("async group init");
+		goto fail2;
+	}
 	/*
 	 * Get the vfs channel cptr from boot info
 	 */
@@ -41,40 +163,23 @@ static int __noreturn pmfs_lcd_init(void)
 	/*
 	 * Initialize vfs glue
 	 */
-	r = glue_vfs_init(vfs_chnl, &group);
+	r = glue_vfs_init(vfs_chnl, &async_group);
 	if (r) {
 		LIBLCD_ERR("vfs init");
-		goto fail2;
+		goto fail3;
 	}
 
-	/* EXECUTE REAL CODE ---------------------------------------- */
+	/* RUN CODE / LOOP ---------------------------------------- */
 
-	/*
-	 * Initialize pmfs
-	 */
-	r = init_pmfs_fs();
-	if (r)
-		goto fail3;
+	main_and_loop(&async_group);
 
-
-	LIBLCD_MSG("SUCCESSFULLY REGISTERED PMFS!");
-
-	/*
-	 * Tear down pmfs
-	 */
-
-	exit_pmfs_fs();
-
-	LIBLCD_MSG("SUCCESSFULLY UNREGISTERED PMFS!");
-
-	/* REAL CODE DONE; CLEAN UP ---------------------------------------- */
+	/* DONE -------------------------------------------------- */
 
 	glue_vfs_exit();
 
 	lcd_exit(0); /* doesn't return */
 
 fail3:
-	glue_vfs_exit();
 fail2:
 fail1:
 	lcd_exit(r);
