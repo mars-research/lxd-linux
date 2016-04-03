@@ -465,6 +465,7 @@ super_block_put_super(struct super_block *sb,
 	int ret;
 	struct super_block_container *sb_container =
 		hidden_args->struct_container;
+	struct fipc_message *request, *response;
 	/*
 	 * Call remote put_super
 	 *
@@ -800,19 +801,19 @@ file_system_type_mount(struct file_system_type *fs_type,
 		int flags,
 		const char *dev_name,
 		void *data,
-		struct file_system_type_container *fs_container,
-		struct glue_cspace *cspace,
-		cptr_t channel)
+		struct trampoline_hidden_args *hidden_args)
 {
 	int ret;
 	cptr_t dentry_ref;
-	struct dentry *dentry = NULL;
+	struct file_system_type_container *fs_container;
 	struct dentry_container *dentry_container;
 	cptr_t data_cptr;
 	unsigned int mem_order;
 	unsigned long data_offset;
 	cptr_t fs_mem_cptr;
 	unsigned int fs_mem_order;
+	struct fipc_message *request, *response;
+	uint32_t request_cookie;
 	/*
 	 * Volunteer fs memory
 	 */
@@ -830,52 +831,99 @@ file_system_type_mount(struct file_system_type *fs_type,
 		goto fail1;
 	}
 	/*
+	 * Do async part:
+	 *
 	 * Marshal:
 	 *
 	 *       -- fs type ref
 	 *       -- flags
-	 *       -- void *data stuff
 	 * XXX:  -- skip dev_name (pmfs doesn't use it)
 	 */
-	lcd_set_r0(FILE_SYSTEM_TYPE_MOUNT);
-	lcd_set_r1(cptr_val(fs_container->their_ref));
-	lcd_set_r2(flags);
-	lcd_set_cr0(data_cptr);
-	lcd_set_r3(mem_order);
-	lcd_set_r4(data_offset);
+	ret = async_msg_blocking_send_start(hidden_args->fs_async_chnl, 
+					&request);
+	if (ret) {
+		LIBLCD_ERR("failed to get send slot");
+		goto fail2;
+	}
+
+	async_msg_set_fn_type(request, FILE_SYSTEM_TYPE_MOUNT);
+	fipc_set_reg0(request, cptr_val(fs_container->their_ref));
+	fipc_set_reg1(request, flags);
+
+	ret = thc_ipc_send(hidden_args->fs_async_chnl, request, 
+			&request_cookie);
+	if (ret) {
+		LIBLCD_ERR("error sending request");
+		goto fail3;
+	}
 	/*
-	 * Do rpc
+	 * Do sync part:
+	 *
+	 * Marshal:
+	 *
+	 *    -- cptr to data memory
+	 *    -- data memory order
+	 *    -- data offset
+	 *    -- cptr to fs memory
+	 *    -- fs memory order
 	 */
-	ret = lcd_sync_call(channel);
+	lcd_set_cr0(data_cptr);
+	lcd_set_r0(mem_order);
+	lcd_set_r1(data_offset);
+	lcd_set_cr1(fs_mem_cptr);
+	lcd_set_r2(fs_mem_order);
+	ret = lcd_sync_send(channel);
 	if (ret) {
 		LIBLCD_ERR("call error");
-		goto fail2;
+		goto fail4;
+	}
+	/*
+	 * Get *async* response
+	 */
+	ret = thc_ipc_recv(hidden_args->fs_async_chnl, request_cookie, 
+			&response);
+	if (ret) {
+		LIBLCD_ERR("async recv failed");
+		goto fail5;
 	}
 	/*
 	 * Unmarshal dentry
 	 */
+	dentry_ref = __cptr(fipc_get_reg0(response));
+
+	fipc_recv_msg_end(channel, response);
+
+	if (cap_cptr_is_null(dentry_ref)) {
+		LIBLCD_ERR("dentry from remote is null");
+		goto fail6;
+	}
 	ret = glue_cap_lookup_dentry_type(pmfs_cspace,
-					__cptr(lcd_r0()),
+					dentry_ref,
 					&dentry_container);
 	if (ret) {
 		LIBLCD_ERR("couldn't find dentry");
-		goto fail3;
+		goto fail7;
 	}
-	dentry = &dentry_container->dentry;
 	/*
 	 * Unvolunteer void *data
 	 */
-	lcd_cap_delete(data_cptr);
+	lcd_cap_revoke(data_cptr);
+	lcd_unvolunteer_pages(data_cptr);
 	/*
 	 * Done
 	 */
-	goto out;
+	return &dentry_container->dentry;
 
+fail7:
+fail6:
+fail5:
+fail4:
+	thc_kill_request_cookie(request_cookie);
 fail3:
 fail2:
-	lcd_cap_delete(data_cptr);
+	lcd_unvolunteer_pages(data_cptr);
 fail1:
-	lcd_cap_delete(fs_mem_cptr);
+	lcd_unvolunteer_dev_mem(fs_mem_cptr);
 fail0:
 out:
 	return dentry;
@@ -894,10 +942,8 @@ file_system_type_mount_trampoline(struct file_system_type *fs_type,
 		int,
 		const char *,
 		void *,
-		struct file_system_type_container *,
-		struct glue_cspace *,
-		cptr_t)
-	struct file_system_type_mount_hidden_args *hidden_args;
+		struct trampoline_hidden_args *);
+	struct trampoline_hidden_args *hidden_args;
 
 	LCD_TRAMPOLINE_PROLOGUE(hidden_args, 
 				file_system_type_mount_trampoline);
@@ -908,18 +954,16 @@ file_system_type_mount_trampoline(struct file_system_type *fs_type,
 					flags,
 					dev_name,
 					data,
-					hidden_args->file_system_type_container,
-					hidden_args->cspace,
-					hidden_args->channel);
+					hidden_args);
 }
 
 void
 noinline
 file_system_type_kill_sb(struct super_block *sb,
-		struct file_system_type_container *fs_container,
-		struct glue_cspace *cspace,
-		cptr_t channel)
+			struct trampoline_hidden_args *hidden_args)
 {
+	struct file_system_type_container *fs_container =
+		hidden_args->struct_container;
 	struct super_block_container *sb_container;
 	struct super_operations *s_ops;
 	cptr_t fs_mem_cptr;
@@ -930,6 +974,7 @@ file_system_type_kill_sb(struct super_block *sb,
 	 * it before, because some of the s_op's will be used in the body/
 	 * call graph of kill_sb.)
 	 */
+	sb_container = container_of(sb, struct super_block, super_block);
 	s_ops = sb->s_op;
 	fs_mem_cptr = sb_container->fs_mem;
 	/*
@@ -937,18 +982,26 @@ file_system_type_kill_sb(struct super_block *sb,
 	 *
 	 * sb_container will get freed in the process ...
 	 */
-	sb_container = container_of(sb,
-				struct super_block_container,
-				super_block);
-	lcd_set_r0(FILE_SYSTEM_TYPE_KILL_SB);
-	lcd_set_r1(cptr_val(fs_container->their_ref));
-	lcd_set_r2(cptr_val(sb_container->their_ref));
-
-	ret = lcd_sync_call(channel);
+	ret = async_msg_blocking_send_start(hidden_args->fs_async_chnl,
+					&request);
 	if (ret) {
-		LIBLCD_ERR("call failed");
+		LIBLCD_ERR("failed to get send slot");
 		goto fail1;
 	}
+
+	async_msg_set_fn_type(request, FILE_SYSTEM_TYPE_KILL_SB);
+	fipc_set_reg0(request, cptr_val(fs_container->their_ref));
+	fipc_set_reg1(request, cptr_val(sb_container->their_ref));
+
+	ret = thc_ipc_call(hidden_args->fs_async_chnl, request, &response);
+	if (ret) {
+		LIBLCD_ERR("error sending request");
+		goto fail2;
+	}
+	/*
+	 * Nothing in response
+	 */
+	fipc_recv_msg_end(hidden_args->fs_async_chnl, response);
 	/*
 	 * sb_container is now invalid (was freed)
 	 */
@@ -960,6 +1013,7 @@ file_system_type_kill_sb(struct super_block *sb,
 	/*
 	 * Unvolunteer fs memory
 	 */
+	lcd_cap_revoke(fs_mem_cptr);
 	lcd_unvolunteer_dev_mem(fs_mem_cptr);
 	/*
 	 * Done
@@ -971,36 +1025,22 @@ out:
 	return;
 }
 
-LCD_TRAMPOLINE_DATA(file_system_type_mount_trampoline);
-struct dentry *
-LCD_TRAMPOLINE_LINKAGE(file_system_type_mount_trampoline)
-file_system_type_mount_trampoline(struct file_system_type *fs_type,
-				int flags,
-				const char *dev_name,
-				void *data)
+LCD_TRAMPOLINE_DATA(file_system_type_kill_sb_trampoline);
+void
+LCD_TRAMPOLINE_LINKAGE(file_system_type_kill_sb_trampoline)
+file_system_type_kill_sb_trampoline(struct super_block *sb)
 {
-	struct dentry* (*volatile file_system_type_mount_p)(
-		struct file_system_type *,
-		int,
-		const char *,
-		void *,
-		struct file_system_type_container *,
-		struct glue_cspace *,
-		cptr_t)
-	struct file_system_type_mount_hidden_args *hidden_args;
+	void (*volatile file_system_type_kill_sb_p)(
+		struct super_block *,
+		struct trampoline_hidden_args *);
+	struct trampoline_hidden_args *hidden_args;
 
 	LCD_TRAMPOLINE_PROLOGUE(hidden_args, 
-				file_system_type_mount_trampoline);
+				file_system_type_kill_sb_trampoline);
 
-	file_system_type_mount_p = file_system_type_mount;
+	file_system_type_kill_sb_p = file_system_type_kill_sb;
 
-	return file_system_type_mount_p(fs_type,
-					flags,
-					dev_name,
-					data,
-					hidden_args->file_system_type_container,
-					hidden_args->cspace,
-					hidden_args->channel);
+	return file_system_type_kill_sb_p(sb, hidden_args);
 }
 
 /* TRAMPOLINE SETUP / TEARDOWN ---------------------------------------- */

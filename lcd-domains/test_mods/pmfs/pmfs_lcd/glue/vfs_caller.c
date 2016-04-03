@@ -1223,9 +1223,9 @@ int super_block_evict_inode_callee(struct fipc_message *request,
 	ret = 0;
 	goto out;
 
-out:
 fail2:
 fail1:
+out:
 	if (async_msg_blocking_send_start(channel, &response)) {
 		LIBLCD_ERR("error getting response msg");
 		return -EIO;
@@ -1371,60 +1371,126 @@ static void *update_cmdline(char *old_cmdline, gpa_t new_fs_mem_gpa)
 	return (void *)new_cmdline;
 }
 
-int file_system_type_mount_callee(void)
+static int sync_file_system_type_mount_callee(cptr_t sync_channel,
+					cptr_t *data_cptr,
+					unsigned int *mem_order,
+					unsigned long *data_offset,
+					cptr_t *fs_mem_cptr,
+					unsigned int *fs_mem_order)
+{
+	int ret;
+	/*
+	 * Alloc cptr's for objects
+	 */
+	ret = lcd_alloc_cptr(data_cptr);
+	if (ret) {
+		LIBLCD_ERR("data cptr alloc");
+		goto fail1;
+	}
+	ret = lcd_alloc_cptr(fs_mem_cptr);
+	if (ret) {
+		LIBLCD_ERR("fs mem cptr alloc");
+		goto fail2;
+	}
+	/*
+	 * Set up and do sync receive
+	 */
+	lcd_set_cr0(*data_cptr);
+	lcd_set_cr1(*fs_mem_cptr);
+	ret = lcd_sync_recv(sync_channel);
+	if (ret) {
+		LIBLCD_ERR("sync recv failed");
+		goto fail3;
+	}
+	/*
+	 * Read out values
+	 */
+	*mem_order = lcd_r0();
+	*data_offset = lcd_r1();
+	*fs_mem_order = lcd_r2();
+	/*
+	 * Flush cptr regs
+	 */
+	lcd_set_cr0(CAP_CPTR_NULL);
+	lcd_set_cr1(CAP_CPTR_NULL);
+	
+	return 0;
+
+fail3:
+	lcd_set_cr0(CAP_CPTR_NULL);
+	lcd_set_cr1(CAP_CPTR_NULL);
+
+	lcd_cptr_free(*fs_mem_cptr);
+fail2:
+	lcd_cptr_free(*data_cptr);
+fail1:
+	return ret;
+}
+
+int file_system_type_mount_callee(struct fipc_message *request,
+				struct fipc_ring_channel *channel)
 {
 	struct file_system_type_container *fs_container;
 	struct dentry_container *dentry_container;
 	struct dentry *dentry;
+	struct fipc_message *response;
+	cptr_t fs_ref = __cptr(fipc_get_reg0(request));
+	int flags = fipc_get_reg1(request);
+	uint32_t request_cookie = thc_get_request_cookie(request);
 	cptr_t data_cptr;
 	unsigned int mem_order;
 	unsigned long data_offset;
 	gva_t data_gva;
 	void *new_cmdline;
-	int flags;
-	cptr_t dentry_ref = CAP_CPTR_NULL;
 	cptr_t fs_mem_cptr;
 	unsigned int fs_mem_order;
 	gpa_t fs_mem_gpa;
+
+	fipc_recv_msg_end(channel, request);
+
 	/*
-	 * Unmarshal args. We expect:
+	 * Do sync part of mount to get:
 	 *
-	 *       -- fs type ref
-	 * XXX:  -- nothing for dev_name (pmfs doesn't use it)
-	 *       -- flags
-	 *       -- void *data stuff
-	 *       -- cap to memory for fs
+	 *   -- void *data stuff
+	 *   -- fs memory stuff
+	 */
+	ret = sync_file_system_type_mount_callee(pmfs_sync_endpoint,
+						&data_cptr,
+						&mem_order,
+						&data_offset,
+						&data_gva,
+						&fs_mem_cptr,
+						&fs_mem_order,
+						&fs_mem_gpa);
+	if (ret) {
+		LIBLCD_ERR("failed to do sync part of mount");
+		return ret; /* do not do async reply */
+	}
+	/*
+	 * Bind on fs type
 	 */
 	ret = glue_cap_lookup_file_system_type_type(vfs_cspace,
-						__cptr(lcd_r1()),
+						fs_ref,
 						&fs_container);
 	if (ret) {
 		LIBLCD_ERR("couldn't find fs type");
-		goto fail1;
+		goto fail2;
 	}
-	flags = lcd_r2();
 	/*
 	 * Map void *data
 	 */
-	data_cptr = lcd_cr0();
-	mem_order = lcd_r3();
-	data_offset = lcd_r4();
-	
 	ret = lcd_map_virt(data_cptr, mem_order, &data_gva);
 	if (ret) {
 		LIBLCD_ERR("couldn't map void *data arg");
-		goto fail2;
+		goto fail3;
 	}
 	/*
 	 * Map fs memory
 	 */
-	fs_mem_cptr = lcd_cr1();
-	fs_mem_order = lcd_r5();
-
 	ret = lcd_map_phys(fs_mem_cptr, fs_mem_order, &fs_mem_gpa);
 	if (ret) {
 		LIBLCD_ERR("error mapping fs memory");
-		goto fail3;
+		goto fail4;
 	}
 	/*
 	 * Update cmd line args with new gpa
@@ -1433,7 +1499,7 @@ int file_system_type_mount_callee(void)
 				fs_mem_gpa);
 	if (!new_cmdline) {
 		LIBLCD_ERR("failed to update cmdline");
-		goto fail4;
+		goto fail5;
 	}
 	/*
 	 * Call real function
@@ -1446,16 +1512,16 @@ int file_system_type_mount_callee(void)
 	if (!dentry) {
 		LIBLCD_ERR("got null from mount");
 		ret = -EINVAL;
-		goto fail5;
+		goto fail6;
 	}
 	dentry_container = container_of(dentry,
 					struct dentry_container,
 					dentry);
-	dentry_ref = dentry_container->their_ref;
 	/*
 	 * Kill void *data stuff
 	 */
 	lcd_unmap_virt(data_gva, mem_order);
+	lcd_cap_delete(data_cptr);
 	/*
 	 * Free new_cmdline
 	 */
@@ -1466,41 +1532,58 @@ int file_system_type_mount_callee(void)
 	ret = 0;
 	goto out;
 
-fail5:
+fail6:
 	kfree(new_cmdline);
-fail4:
+fail5:
 	lcd_unmap_virt(fs_mem_gva, fs_mem_order);
-fail3:
+fail4:
 	lcd_unmap_virt(data_gva, mem_order);
+fail3:
 fail2:
-fail1:
-out:
 	lcd_cap_delete(data_cptr);
+	lcd_cap_delete(fs_mem_cptr);
+out:
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+	/*
+	 * Respond with ref to remote's dentry
+	 */
+	if (dentry_container)
+		fipc_set_reg0(response, cptr_val(dentry_container->their_ref));
+	else
+		fipc_set_reg0(response, cptr_val(CAP_CPTR_NULL));
 
-	lcd_set_r0(cptr_val(dentry_ref));
+	thc_ipc_reply(channel, request_cookie, response);
 
-	if (lcd_sync_reply())
-		LIBLCD_ERR("double fault?");
 	return ret;
 }
 
-int file_system_type_kill_sb_callee(void)
+int file_system_type_kill_sb_callee(struct fipc_message *request,
+				struct fipc_ring_channel *channel)
 {
 	struct file_system_type_container *fs_container;
 	struct super_block_container *sb_container;
 	int ret;
+	struct fipc_message *response;
+	cptr_t fs_ref = __cptr(fipc_get_reg0(request));
+	cptr_t sb_ref = __cptr(fipc_get_reg1(request));
+	uint32_t request_cookie = thc_get_request_cookie(request);
+
+	fipc_recv_msg_end(channel, request);
 	/*
 	 * Bind on fs type and super_block
 	 */
 	ret = glue_cap_lookup_file_system_type_type(vfs_cspace,
-						__cptr(lcd_r1()),
+						fs_ref,
 						&fs_container);
 	if (ret) {
 		LIBLCD_ERR("couldn't find fs type");
 		goto fail1;
 	}
 	ret = glue_cap_lookup_super_block_type(vfs_cspace,
-					__cptr(lcd_r2()),
+					sb_ref,
 					&sb_container);
 	if (ret) {
 		LIBLCD_ERR("couldn't find super_block");
@@ -1523,8 +1606,15 @@ int file_system_type_kill_sb_callee(void)
 fail2:
 fail1:
 out:
-	if (lcd_sync_reply())
-		LIBLCD_ERR("double fault?");
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+
+	/* empty reply */
+
+	thc_ipc_reply(channel, request_cookie, response);
+
 	return ret;
 }
 
