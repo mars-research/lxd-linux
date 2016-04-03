@@ -1380,13 +1380,36 @@ int register_filesystem_callee(void)
 		ret = -ENOMEM;
 		goto fail3;
 	}
+	/*
+	 * Some special module inits required:
+	 *
+	 *   -- module refptr (alloc_percpu)
+	 *   -- module state = MODULE_STATE_LIVE
+	 *   -- module name = "pmfs"
+	 *
+	 * These are normally done by the module loader. But since we
+	 * are creating our own struct module instance, we need to do
+	 * the initialization ourselves.
+	 *
+	 * Rather than have pmfs pass module.state and module.name over,
+	 * we just initialize them on this side. Trying to pass refptr
+	 * over is difficult and maybe silly.
+	 */
+	module_container->module.refptr = alloc_percpu(struct module_ref);
+	if (!module_container->module.refptr) {
+		LIBLCD_ERR("alloc percpu refptr failed");
+		ret = -ENOMEM;
+		goto fail4;
+	}
+	module_container->module.state = MODULE_STATE_LIVE;
+	module_container->module.name = "pmfs";
 	ret = glue_cap_insert_module_type(
 		pmfs_cspace,
 		module_container,
 		&module_container->my_ref);
 	if (ret) {
 		LIBLCD_ERR("insert");
-		goto fail4;
+		goto fail5;
 	}
 	/*
 	 * Unmarshal data:
@@ -1416,7 +1439,7 @@ int register_filesystem_callee(void)
 	ret = setup_async_fs_ring_channel(tx, rx, &chnl, &chnl_group_item);
 	if (ret) {
 		LIBLCD_ERR("error setting up ring channel");
-		goto fail5;
+		goto fail6;
 	}
 	/*
 	 * Store refs to fs-specific data so we can tear stuff down
@@ -1432,7 +1455,7 @@ int register_filesystem_callee(void)
 					chnl);
 	if (ret) {
 		LIBLCD_ERR("error setting up trampolines");
-		goto fail6;
+		goto fail7;
 	}
 	/*
 	 * Call real function
@@ -1440,7 +1463,7 @@ int register_filesystem_callee(void)
 	ret = register_filesystem(&fs_container->file_system_type);
 	if (ret) {
 		LIBLCD_ERR("register fs failed");
-		goto fail7;
+		goto fail8;
 	}
 	/*
 	 * Reply with:
@@ -1454,12 +1477,14 @@ int register_filesystem_callee(void)
 	
 	goto out;
 
-fail7:
+fail8:
 	destroy_fs_type_trampolines(fs_container);
-fail6:
+fail7:
 	destroy_async_fs_ring_channel(chnl, chnl_group_item);
-fail5:
+fail6:
 	glue_cap_remove(pmfs_cspace, module_container->my_ref);
+fail5:
+	free_percpu(module_container->module.refptr);
 fail4:
 	kfree(module_container);
 fail3:

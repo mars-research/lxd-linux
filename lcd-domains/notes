@@ -119,7 +119,7 @@ Also todo: make sure containers are set up properly
      -- modify super_block alloc/free
      -- modify dentry alloc/free
 
-TODO: Need to marshal module crap over in register fs
+TODO: Need to marshal module crap over in register fs DONE
 
 Not going to have user level do mount call, because too complicated
 to interface user thread with the dispatch loop on non-isolated side.
