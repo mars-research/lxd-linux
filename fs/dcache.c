@@ -86,6 +86,12 @@ __cacheline_aligned_in_smp DEFINE_SEQLOCK(rename_lock);
 
 EXPORT_SYMBOL(rename_lock);
 
+/* For PMFS LCD example */
+struct dentry_container {
+	struct dentry dentry;
+	u64 f1, f2;
+};
+
 static struct kmem_cache *dentry_cache __read_mostly;
 
 /*
@@ -221,7 +227,8 @@ static void __d_free(struct rcu_head *head)
 	WARN_ON(!hlist_unhashed(&dentry->d_alias));
 	if (dname_external(dentry))
 		kfree(dentry->d_name.name);
-	kmem_cache_free(dentry_cache, dentry); 
+	kmem_cache_free(dentry_cache, 
+			container_of(dentry, struct dentry_container, dentry)); 
 }
 
 /*
@@ -1236,12 +1243,14 @@ EXPORT_SYMBOL(shrink_dcache_parent);
  
 struct dentry *__d_alloc(struct super_block *sb, const struct qstr *name)
 {
+	struct dentry_container *d_container;
 	struct dentry *dentry;
 	char *dname;
 
-	dentry = kmem_cache_alloc(dentry_cache, GFP_KERNEL);
-	if (!dentry)
+	d_container = kmem_cache_alloc(dentry_cache, GFP_KERNEL);
+	if (!d_container)
 		return NULL;
+	dentry = &d_container->dentry;
 
 	/*
 	 * We guarantee that the inline name is always NUL-terminated.
@@ -1253,7 +1262,10 @@ struct dentry *__d_alloc(struct super_block *sb, const struct qstr *name)
 	if (name->len > DNAME_INLINE_LEN-1) {
 		dname = kmalloc(name->len + 1, GFP_KERNEL);
 		if (!dname) {
-			kmem_cache_free(dentry_cache, dentry); 
+			kmem_cache_free(dentry_cache, 
+					container_of(dentry, 
+						struct dentry_container,
+						dentry));
 			return NULL;
 		}
 	} else  {
@@ -3041,7 +3053,7 @@ static void __init dcache_init(void)
 	 * but it is probably not worth it because of the cache nature
 	 * of the dcache. 
 	 */
-	dentry_cache = KMEM_CACHE(dentry,
+	dentry_cache = KMEM_CACHE(dentry_container,
 		SLAB_RECLAIM_ACCOUNT|SLAB_PANIC|SLAB_MEM_SPREAD);
 
 	/* Hash may have been set up in dcache_init_early */

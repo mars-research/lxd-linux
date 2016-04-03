@@ -138,6 +138,12 @@ static void destroy_sb_writers(struct super_block *s)
 		percpu_counter_destroy(&s->s_writers.counter[i]);
 }
 
+/* For the PMFS LCD example. */
+struct super_block_container {
+	struct super_block super_block;
+	u64 f1, f2, f3;
+};
+
 /**
  *	alloc_super	-	create new superblock
  *	@type:	filesystem type superblock should belong to
@@ -148,16 +154,19 @@ static void destroy_sb_writers(struct super_block *s)
  */
 static struct super_block *alloc_super(struct file_system_type *type, int flags)
 {
-	struct super_block *s = kzalloc(sizeof(struct super_block),  GFP_USER);
+	struct super_block_container *s_container = 
+		kzalloc(sizeof(struct super_block_container), GFP_USER);
+	struct super_block *s = NULL;
 	static const struct super_operations default_op;
 
-	if (s) {
+	if (s_container) {
+		s = &s_container->super_block;
 		if (security_sb_alloc(s)) {
 			/*
 			 * We cannot call security_sb_free() without
 			 * security_sb_alloc() succeeding. So bail out manually
 			 */
-			kfree(s);
+			kfree(s_container);
 			s = NULL;
 			goto out;
 		}
@@ -228,7 +237,7 @@ err_out:
 		free_percpu(s->s_files);
 #endif
 	destroy_sb_writers(s);
-	kfree(s);
+	kfree(s_container);
 	s = NULL;
 	goto out;
 }
@@ -249,7 +258,7 @@ static inline void destroy_super(struct super_block *s)
 	WARN_ON(!list_empty(&s->s_mounts));
 	kfree(s->s_subtype);
 	kfree(s->s_options);
-	kfree(s);
+	kfree(container_of(s, struct super_block_container, super_block));
 }
 
 /* Superblock refcounting  */

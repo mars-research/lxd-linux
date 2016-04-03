@@ -68,6 +68,7 @@ struct module_container {
 	cptr_t their_ref;
 };
 
+/* If you modify this, make sure you modify the def in fs/super.c */
 struct super_block_container {
 	struct super_block super_block;
 	cptr_t my_ref;
@@ -81,6 +82,7 @@ struct pmfs_inode_vfs_container {
 	cptr_t their_ref;
 };
 
+/* If you modify this, make sure you modify the def in fs/dcache.c */
 struct dentry_container {
 	struct dentry dentry;
 	cptr_t my_ref;
