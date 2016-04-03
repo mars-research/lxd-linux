@@ -522,16 +522,20 @@ noinline
 mount_nodev_fill_super(struct super_block *sb,
 		void *data,
 		int silent,
-		struct mount_nodev_fill_super_container *fill_sup_container,
-		struct glue_cspace *cspace,
-		cptr_t channel)
+		struct trampoline_hidden_args *hidden_args)
 {
 	struct super_block_container *sb_container;
 	struct dentry_container *dentry_container;
+	struct mount_nodev_fill_super_container *fill_sup_container =
+		hidden_args->struct_container;
 	int ret;
 	cptr_t data_cptr;
 	unsigned long mem_sz;
 	unsigned long data_offset;
+	uint32_t request_cookie;
+	cptr_t dentry_ref;
+	cptr_t sb_ref;
+	int s_flags;
 
 	sb_container = container_of(
 		sb,
@@ -549,7 +553,7 @@ mount_nodev_fill_super(struct super_block *sb,
 	/*
 	 * Insert super block into cspace
 	 */
-	ret = glue_cap_insert_super_block_type(pmfs_cspace,
+	ret = glue_cap_insert_super_block_type(hidden_args->fs_cspace,
 					sb_container,
 					&sb_container->my_ref);
 	if (ret) {
@@ -568,57 +572,100 @@ mount_nodev_fill_super(struct super_block *sb,
 		goto fail2;
 	}
 	/*
-	 * Marshal arguments
+	 * Do async part first:
+	 *
+	 * Marshal arguments:
+	 *
+	 *   -- fill sup ref
+	 *   -- sb ref (to ours)
+	 *   -- s_flags
+	 *   -- silent
 	 */
-	lcd_set_r0(MOUNT_NODEV_FILL_SUPER);
-	lcd_set_r1(cptr_val(fill_sup_container->their_ref));
-	lcd_set_r2(cptr_val(sb_container->my_ref));
-	lcd_set_r3(sb_container->super_block.s_flags);
+	ret = async_msg_blocking_send_start(hidden_args->fs_async_chnl,
+					&request);
+	if (ret) {
+		LIBLCD_ERR("failed to get send slot");
+		goto fail3;
+	}
+
+	async_msg_set_fn_type(request, MOUNT_NODEV_FILL_SUPER);
+	fipc_set_reg0(request, cptr_val(fill_sup_container->their_ref));
+	fipc_set_reg1(request, cptr_val(sb_container->my_ref));
+	fipc_set_reg2(request, sb_container->super_block.s_flags);
+	fipc_set_reg3(request, silent);
+
+	ret = thc_ipc_send(hidden_args->fs_async_chnl, request, &reqest_cookie);
+	if (ret) {
+		LIBLCD_ERR("error sending request");
+		goto fail4;
+	}
+	/*
+	 * Do sync part:
+	 *
+	 *   -- cptr to data memory
+	 *   -- data memory order
+	 *   -- data offset
+	 */
 	lcd_set_cr0(data_cptr);
 	/* Assumes mem_sz is 2^x pages */
-	lcd_set_r4(ilog2(mem_sz >> PAGE_SHIFT));
-	lcd_set_r5(data_offset);
-	lcd_set_r6(silent);
-	/*
-	 * Do rpc
-	 */
-	ret = lcd_sync_call(channel);
+	lcd_set_r0(ilog2(mem_sz >> PAGE_SHIFT));
+	lcd_set_r1(data_offset);
+	ret = lcd_sync_send(hidden_args->fs_sync_endpoint);
+	lcd_set_cr0(CAP_CPTR_NULL); /* flush cr0 after send */
 	if (ret) {
-		LIBLCD_ERR("sync call failed");
-		goto fail3;
+		LIBLCD_ERR("sync send failed");
+		goto fail5;
+	}
+	/*
+	 * Receive *async* response
+	 */
+	ret = thc_ipc_recv(hidden_args->fs_async_chnl, request_cookie, 
+			&response);
+	if (ret) {
+		LIBLCD_ERR("async recv failed");
+		goto fail6;
 	}
 	/*
 	 * Unmarshal response. We expect a remote ref to a dentry.
 	 */
-	if (lcd_r0()) {
+	ret = fipc_get_reg0(response);
+	sb_ref = __cptr(fipc_get_reg1(response));
+	s_flags = fipc_get_reg2(response);
+	dentry_ref = __cptr(fipc_get_reg3(response));
+
+	fipc_recv_msg_end(hidden_args->fs_async_chnl, response);
+
+	if (ret) {
 		LIBLCD_ERR("remote fill_super failed");
-		goto fail4;
+		goto fail7;
 	}
 	ret = glue_cap_lookup_dentry_type(pmfs_cspace,
-					__cptr(lcd_r3()),
+					dentry_ref,
 					&dentry_container);
 	if (ret) {
 		LIBLCD_ERR("couldn't find dentry");
-		goto fail5;
+		goto fail8;
 	}
-	sb_container->their_ref = __cptr(lcd_r1());
-	sb_container->super_block.flags = lcd_r2();
+	sb_container->their_ref = sb_ref;
+	sb_container->super_block.flags = s_flags;
 	sb_container->super_block.s_root = &dentry_container->dentry;
 	/*
 	 * Done
 	 */
-	ret = lcd_r0();
-	goto out;
+	return 0;
 
+fail8:
+fail7:
+fail6:
 fail5:
-	/* nothing we can really undo ... */
+	thc_kill_request_cookie(request_cookie);
 fail4:
 fail3:
 fail2:
+	glue_cap_remove(hidden_args->fs_cspace, sb_container->my_ref);
 fail1:
 	destroy_sb_trampolines(sb_container->super_block.s_op);
 fail0:
-out:
 	return ret;
 }
 
@@ -633,10 +680,8 @@ mount_nodev_fill_super_trampoline(struct super_block *super_block,
 		struct super_block *,
 		void *,
 		int,
-		struct mount_nodev_fill_super_container *,
-		struct glue_cspace *,
-		cptr_t channel)
-	struct mount_nodev_fill_super_hidden_args *hidden_args;
+		struct trampoline_hidden_args *);
+	struct trampoline_hidden_args *hidden_args;
 
 	LCD_TRAMPOLINE_PROLOGUE(hidden_args, 
 				mount_nodev_fill_super_trampoline);
@@ -646,9 +691,7 @@ mount_nodev_fill_super_trampoline(struct super_block *super_block,
 	return mount_nodev_fill_super_p(super_block,
 					data,
 					silent,
-					hidden_args->mount_nodev_fill_super_container,
-					hidden_args->cspace,
-					hidden_args->channel);
+					hidden_args);
 }
 
 static int get_phys_addr(char *cmdline, unsigned long *phys_addr)

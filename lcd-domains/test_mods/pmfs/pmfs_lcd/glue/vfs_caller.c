@@ -1238,20 +1238,81 @@ out:
 	return ret;
 }
 
-int mount_nodev_fill_super_callee(void)
+static int sync_mount_nodev_fill_super_callee(cptr_t sync_channel,
+					cptr_t *data_cptr,
+					unsigned int *mem_order,
+					unsigned long *data_offset)
+{
+	int ret;
+	/*
+	 * Alloc cptr for data mem
+	 */
+	lcd_cptr_alloc(data_cptr);
+	if (ret) {
+		LIBLCD_ERR("alloc cptr");
+		goto fail1;
+	}
+	/*
+	 * Set up and do sync receive
+	 */
+	lcd_set_cr0(*data_cptr);
+	ret = lcd_sync_recv(sync_channel);
+	if (ret) {
+		LIBLCD_ERR("sync recv failed");
+		goto fail2;
+	}
+	/*
+	 * Unmarshal other values
+	 */
+	*mem_order = lcd_r0();
+	*data_offset = lcd_r1();
+	/*
+	 * Flush cr0
+	 */
+	lcd_set_cr0(CAP_CPTR_NULL);
+
+	return 0;
+
+fail2:		
+	lcd_set_cr0(CAP_CPTR_NULL);
+	lcd_cptr_free(*data_cptr);
+fail1:
+	return ret;
+}
+
+int mount_nodev_fill_super_callee(struct fipc_message *request,
+				struct fipc_ring_channel *channel)
 {
 	struct mount_nodev_fill_super_container *fill_sup_container;
 	struct super_block_container *sb_container;
-	struct dentry_container *dentry_container;
+	struct dentry_container *dentry_container = NULL;
+	cptr_t fill_sup_ref = __cptr(fipc_get_reg0(request));
+	cptr_t sb_ref = __cptr(fipc_get_reg1(request));
+	int flags = fipc_get_reg2(request);
+	int silent = fipc_get_reg3(request);
+	uint32_t request_cookie = thc_get_request_cookie(request);
 	cptr_t data_cptr;
 	gva_t data_gva;
 	unsigned int mem_order;
 	int ret;
+
+	fipc_recv_msg_end(channel, request);
+	/*
+	 * Do sync part
+	 */
+	ret = sync_mount_nodev_fill_super_callee(pmfs_sync_endpoint,
+						&data_cptr,
+						&mem_order,
+						&data_offset);
+	if (ret) {
+		LIBLCD_ERR("sync mount fill sup failed");
+		return ret; /* do not do async reply */
+	}
 	/*
 	 * Bind on fill_super function pointer
 	 */
 	ret = glue_cap_lookup_mount_nodev_fill_super_type(vfs_cspace,
-							__cptr(lcd_r1()),
+							fill_sup_ref,
 							&fill_sup_container);
 	if (ret) {
 		LIBLCD_ERR("fill super lookup failed");
@@ -1273,69 +1334,65 @@ int mount_nodev_fill_super_callee(void)
 		LIBLCD_ERR("super block ref");
 		goto fail3;
 	}
-	sb_container->their_ref = __cptr(lcd_r2());
-	sb_container->super_block.flags = lcd_r3();
+	sb_container->their_ref = sb_ref;
+	sb_container->super_block.flags = flags;
 	/*
-	 * void *data arg is passed as a string. We expect:
-	 *
-	 *    -- data mem ctpr in cr0
-	 *    -- mem order in r4
-	 *    -- data offset in r5
+	 * Map void *data arg
 	 */
-	data_cptr = lcd_cr0();
-	mem_order = lcd_r4();
 	ret = lcd_map_virt(data_cptr, mem_order, &data_gva);
 	if (ret) {
 		LIBLCD_ERR("error mapping void *data");
 		goto fail4;
 	}
 	/*
-	 * Invoke real function. ("int silent" arg is in r6.)
+	 * Invoke real function
 	 */
 	ret = fill_sup_container->fill_super(&sb_container->super_block,
-					(void *)(gva_val(data_gva) + lcd_r5()),
-					lcd_r6());
+					(void *)(gva_val(data_gva) + data_offset),
+					silent);
 	if (ret) {
 		LIBLCD_ERR("fill super failed");
 		goto fail5;
 	}
 	/*
-	 * Reply with our super_block ref, new s_flags, and
-	 * ref to s_root dentry (so caller can set s_root to their
-	 * private dentry copy).
-	 */
-	dentry_container = container_of(
-		&sb_container->super_block.s_root,
-		struct dentry_container,
-		dentry);
-	lcd_set_r1(cptr_val(sb_container->my_ref));
-	lcd_set_r2(sb_container->super_block.flags);
-	lcd_set_r3(cptr_val(dentry_container->their_ref));
-	/*
 	 * Unmap void *data, and delete from our cspace.
 	 */
 	lcd_unmap_virt(data_gva, mem_order);
-
-	ret = 0;
+	lcd_cap_delete(data_cptr);
+	/*
+	 * Reply
+	 */
 	goto out;
-
 
 fail5:
 	lcd_unmap_virt(data_gva, mem_order);
 fail4:
-	glue_cap_remove(vfs_cspace,
-			sb_container->my_ref);
+	glue_cap_remove(vfs_cspace, sb_container->my_ref);
 fail3:
 	kfree(sb_container);
 fail2:
 fail1:
-out:
 	lcd_cap_delete(data_cptr);
+out:
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
 
-	lcd_set_r0(ret);
+	fipc_set_reg0(response, ret);
+	/*
+	 * Reply with our super_block ref, new s_flags, and
+	 * ref to s_root dentry (so caller can set s_root to their
+	 * private dentry copy - in the regular world, this is done by the 
+	 * callee on the shared memory data).
+	 */
+	if (dentry_container) {
+		fipc_set_reg1(response, cptr_val(sb_container->my_ref));
+		fipc_set_reg2(response, sb_container->super_block.flags);
+		fipc_set_reg3(response, cptr_val(dentry_container->their_ref));
+	}
 
-	if (lcd_sync_reply())
-		LIBLCD_ERR("double fault?");
+	thc_ipc_reply(channel, request_cookie, response);
 
 	return ret;
 }
