@@ -116,8 +116,8 @@ glue for pmfs_fill_super DONE
      -- this is where we'll populate super ops DONE
 
 Also todo: make sure containers are set up properly
-     -- modify super_block alloc/free
-     -- modify dentry alloc/free
+     -- modify super_block alloc/free DONE
+     -- modify dentry alloc/free DONE
 
 TODO: Need to marshal module crap over in register fs DONE
 

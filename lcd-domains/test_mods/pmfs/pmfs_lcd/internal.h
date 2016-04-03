@@ -6,11 +6,6 @@
 
 #include "../pmfs_example_defs.h"
 
-/* MACROS/FLAGS -------------------------------------------------- */
-
-/* Channel flags */
-#define PMFS_CHANNEL_TYPE 1
-
 /* FUNCTIONS -------------------------------------------------- */
 
 int dispatch_fs_channel(struct lcd_sync_channel_group_item *chnl);

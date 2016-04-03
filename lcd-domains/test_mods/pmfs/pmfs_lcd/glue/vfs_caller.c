@@ -154,10 +154,17 @@ static int setup_async_channel(cptr_t *buf1_cptr_out, cptr_t *buf2_cptr_out,
 		LIBLCD_ERR("alloc failed");
 		goto fail8;
 	}
+	ret = thc_channel_group_item_init(chnl_group_item_init,
+					chnl,
+					dispatch_fs_channel);
+	if (ret) {
+		LIBLCD_ERR("error init'ing async channel group item");
+		goto fail9;
+	}
 	ret = thc_channel_group_item_add(group,	chnl_group_item);
 	if (ret) {
 		LIBLCD_ERR("group item add failed");
-		goto fail9;
+		goto fail10;
 	}
 
 	*buf1_cptr_out = buf1_cptr;
@@ -167,6 +174,7 @@ static int setup_async_channel(cptr_t *buf1_cptr_out, cptr_t *buf2_cptr_out,
 
 	return 0;
 
+fail10:
 fail9:
 	kfree(chnl_group_item);
 fail8:

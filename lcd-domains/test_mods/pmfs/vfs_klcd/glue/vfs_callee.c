@@ -174,17 +174,25 @@ static int setup_async_fs_ring_channel(cptr_t tx, cptr_t rx,
 		LIBLCD_ERR("malloc failed");
 		goto fail5;
 	}
+	ret = thc_channel_group_item_init(chnl_group_item,
+					chnl,
+					dispatch_vfs_channel);
+	if (ret) {
+		LIBLCD_ERR("async group item init failed");
+		goto fail6;
+	}
 	ret = thc_channel_group_item_add(async_channel_group,
 					chnl_group_item);
 	if (ret) {
 		LIBLCD_ERR("group item add failed");
-		goto fail6;
+		goto fail7;
 	}
 
 	*chnl_out = chnl;
 	*chnl_group_item_out = chnl_group_item;
 	return 0;
 
+fail7:
 fail6:
 	kfree(chnl_group_item);
 fail5:
