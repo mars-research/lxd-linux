@@ -5,6 +5,7 @@
 #include <linux/spinlock_types.h>
 #include <linux/ftrace_event.h>
 #include <linux/perf_event.h>
+#include <linux/rcupdate.h>
 #include <liblcd/liblcd.h>
 
 #include <lcd_config/post_hook.h>
@@ -209,7 +210,7 @@ struct resource * __request_region(struct resource *parent,
 /* RCU ------------------------------------------------------------ */
 
 void call_rcu_sched(struct rcu_head *head,
-		rcu_callback_t func)
+		void (*func)(struct rcu_head *rcu))
 {
 	/* Just call it */
 	func(head);

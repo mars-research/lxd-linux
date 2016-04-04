@@ -203,7 +203,7 @@ int glue_cap_insert_super_block_type(
 
 int glue_cap_insert_pmfs_inode_vfs_type(
 	struct glue_cspace *cspace, 
-	struct pmfs_vfs_inode_container *pmfs_inode_vfs_container,
+	struct pmfs_inode_vfs_container *pmfs_inode_vfs_container,
 	cptr_t *c_out)
 {
 	return glue_cspace_insert(cspace, pmfs_inode_vfs_container,  

@@ -22,7 +22,7 @@ static void loop(struct lcd_sync_channel_group *sync_group,
 {
 	struct lcd_sync_channel_group_item *sync_chnl = NULL;
 	struct thc_channel_group_item *async_chnl = NULL;
-	struct fipc_message *msg;
+	struct fipc_message *async_msg;
 	int ret;
 	int count = 0;
 	int stop = 0;
@@ -55,48 +55,48 @@ static void loop(struct lcd_sync_channel_group *sync_group,
 	 * syntactically nested under the DO_FINISH macro (i.e., we can't
 	 * call a helper to do the body of the loop). 
 	 */
-	DO_FINISH({
+	DO_FINISH(
+		/*
+		 * We use a variable to control when to abort the
+		 * loop. Calling "break" inside an async just 
+		 * exits out of the do { } while inside that macro;
+		 * it doesn't break out of this loop. Furthermore,
+		 * we could have blocked while running the async.
+		 */
+		while (!stop && count < 5) {
+			count += 1;
 			/*
-			 * We use a variable to control when to abort the
-			 * loop. Calling "break" inside an async just 
-			 * exits out of the do { } while inside that macro;
-			 * it doesn't break out of this loop. Furthermore,
-			 * we could have blocked while running the async.
+			 * Do one async receive
 			 */
-			while (!stop && count < 5) {
-				count += 1;
-				/*
-				 * Do one async receive
-				 */
-				ret = thc_poll_recv_group(async_group,
-							&async_chnl,
-							&async_msg);
-				if (ret) {
-					if (ret == -EWOULDBLOCK)
-						continue;
-					else {
-						LIBLCD_ERR("async recv failed");
-						break;
-					}
-				}
-				/*
-				 * Got a message. Dispatch.
-				 */
-				ASYNC({
-						ret = async_chnl->dispatch_fn(async_chnl, 
-									async_msg);
-						if (ret) {
-							LIBLCD_ERR("async dispatch failed");
-							stop = 1;
-						}
-					});
-
-				if (kthread_should_stop()) {
-					LIBLCD_ERR("kthread should stop");
+			ret = thc_poll_recv_group(async_group,
+						&async_chnl,
+						&async_msg);
+			if (ret) {
+				if (ret == -EWOULDBLOCK)
+					continue;
+				else {
+					LIBLCD_ERR("async recv failed");
 					break;
 				}
 			}
-		});
+			/*
+			 * Got a message. Dispatch.
+			 */
+			ASYNC({
+					ret = async_chnl->dispatch_fn(async_chnl->channel, 
+								async_msg);
+					if (ret) {
+						LIBLCD_ERR("async dispatch failed");
+						stop = 1;
+					}
+				});
+
+			if (kthread_should_stop()) {
+				LIBLCD_ERR("kthread should stop");
+				break;
+			}
+		}
+		);
 
 	LIBLCD_MSG("EXITED VFS DO_FINISH");
 
@@ -152,7 +152,7 @@ static int vfs_klcd_init(void)
 	/*
 	 * Tear down vfs glue
 	 */
-	glue_vfs_exit(&sync_group);
+	glue_vfs_exit(&sync_group, &async_group);
 
 	lcd_exit(0);
 	

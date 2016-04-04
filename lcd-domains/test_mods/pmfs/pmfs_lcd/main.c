@@ -20,11 +20,12 @@ void exit_pmfs_fs(void);
 static void main_and_loop(struct thc_channel_group *async_group)
 {
 	struct thc_channel_group_item *async_chnl = NULL;
+	struct fipc_message *async_msg;
 	int ret;
 	int count = 0;
 	int stop = 0;
 
-	DO_FINISH({
+	DO_FINISH(
 			ASYNC({
 					/*
 					 * Initialize pmfs
@@ -66,22 +67,21 @@ static void main_and_loop(struct thc_channel_group *async_group)
 				 * completeness.)
 				 */
 				ASYNC({
-						ret = async_chnl->dispatch_fn(async_chnl, 
+						ret = async_chnl->dispatch_fn(async_chnl->channel, 
 									async_msg);
 						if (ret) {
 							LIBLCD_ERR("async dispatch failed");
 							stop = 1;
 						}
 					});
-
-				if (kthread_should_stop()) {
-					LIBLCD_ERR("kthread should stop");
-					break;
-				}
 			}
 
-			if (stop)
-				goto do_finish_exit;
+		);
+
+	if (stop)
+		goto out;
+
+	DO_FINISH(
 			/*
 			 * Tear down pmfs
 			 */
@@ -119,7 +119,7 @@ static void main_and_loop(struct thc_channel_group *async_group)
 				 * completeness.)
 				 */
 				ASYNC({
-						ret = async_chnl->dispatch_fn(async_chnl, 
+						ret = async_chnl->dispatch_fn(async_chnl->channel, 
 									async_msg);
 						if (ret) {
 							LIBLCD_ERR("async dispatch failed");
@@ -127,9 +127,9 @@ static void main_and_loop(struct thc_channel_group *async_group)
 						}
 					});
 			}
-do_finish_exit:
-		});
+		);
 
+out:
 	LIBLCD_MSG("EXITED PMFS DO_FINISH");
 
 	return;

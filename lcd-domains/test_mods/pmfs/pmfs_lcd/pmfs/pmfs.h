@@ -604,12 +604,7 @@ extern const struct inode_operations pmfs_symlink_inode_operations;
 
 #ifdef LCD_ISOLATE
 
-struct backing_dev_info_container {
-	struct backing_dev_info backing_dev_info;
-	u64 ref1;
-	u64 ref2;
-};
-
+struct backing_dev_info_container;
 extern struct backing_dev_info_container pmfs_backing_dev_info_container;
 
 #else /* !LCD_ISOLATE */

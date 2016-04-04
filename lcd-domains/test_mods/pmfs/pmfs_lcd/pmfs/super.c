@@ -1198,6 +1198,11 @@ static struct file_system_type_container pmfs_fs_type_container = {
 	}
 };
 
+struct backing_dev_info_container {
+	struct backing_dev_info backing_dev_info;
+	u64 f1, f2;
+};
+
 #else /* ! LCD_ISOLATE */
 
 static struct file_system_type pmfs_fs_type = {

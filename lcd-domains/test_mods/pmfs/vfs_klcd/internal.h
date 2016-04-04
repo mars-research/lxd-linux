@@ -16,32 +16,45 @@ void glue_vfs_exit(struct lcd_sync_channel_group *,
 
 int dispatch_sync_vfs_channel(struct lcd_sync_channel_group_item *chnl);
 
-int dispatch_async_fs_channel(struct fipc_ring_channel *chnl,
+int dispatch_async_vfs_channel(struct fipc_ring_channel *chnl,
 			struct fipc_message *msg);
 
 /* CALLEE FUNCTIONS -------------------------------------------------- */
 
 int register_filesystem_callee(void);
 
-int unregister_filesystem_callee(void);
+int unregister_filesystem_callee(struct fipc_message *,
+				struct fipc_ring_channel *);
 
-int bdi_init_callee(void);
+int bdi_init_callee(struct fipc_message *,
+		struct fipc_ring_channel *);
 
-int bdi_destroy_callee(void);
+int bdi_destroy_callee(struct fipc_message *,
+		struct fipc_ring_channel *);
 
-int iget_locked_callee(void);
+int iget_locked_callee(struct fipc_message *,
+		struct fipc_ring_channel *);
 
-int truncate_inode_pages_callee(void);
+int truncate_inode_pages_callee(struct fipc_message *,
+				struct fipc_ring_channel *);
 
-int clear_inode_callee(void);
+int clear_inode_callee(struct fipc_message *,
+		struct fipc_ring_channel *);
 
-int iget_failed_callee(void);
+int unlock_new_inode_callee(struct fipc_message *,
+			struct fipc_ring_channel *);
 
-int d_make_root_callee(void);
+int iget_failed_callee(struct fipc_message *,
+		struct fipc_ring_channel *);
 
-int mount_nodev_callee(void);
+int d_make_root_callee(struct fipc_message *,
+		struct fipc_ring_channel *);
 
-int kill_anon_super_callee(void);
+int mount_nodev_callee(struct fipc_message *,
+		struct fipc_ring_channel *);
+
+int kill_anon_super_callee(struct fipc_message *,
+			struct fipc_ring_channel *);
 
 /* TRAMPOLINE STUFF -------------------------------------------------- */
 

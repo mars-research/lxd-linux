@@ -7,9 +7,13 @@
 
 #include <liblcd/sync_ipc_poll.h>
 #include <liblcd/liblcd.h>
+#include <liblcd/trampoline.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
+#include <linux/parser.h>
+#include <linux/ctype.h>
+#include <linux/log2.h>
 #include "../internal.h"
 
 #include <lcd_config/post_hook.h>
@@ -27,7 +31,7 @@ static struct thc_channel_group *async_channel_group;
  * used in callee functions. For function pointers, we use the cspace
  * stored in the hidden args (so that we are sort of close to not using
  * globals, but not quite). */
-static struct cspace *pmfs_cspace;
+static struct glue_cspace *pmfs_cspace;
 /* A similar issue arises with the synchronous channel. Again, we could
  * attach it to / associate it with the async channel, but it's not
  * clear whether this is the right choice. For now, we just make it a
@@ -50,7 +54,7 @@ int glue_vfs_init(cptr_t vfs_chnl,
 	 *   -- rx ring buffer memory capability
 	 */
 	lcd_sync_channel_group_item_init(&vfs_channel_group_item, vfs_chnl, 3,
-					dispatch_vfs_channel);
+					dispatch_sync_vfs_channel);
 	/*
 	 * Store ref to async channel group so we can add async channels
 	 * in register_filesystem_callee
@@ -92,6 +96,8 @@ static void destroy_async_fs_ring_channel(struct fipc_ring_channel *chnl,
 	cptr_t tx, rx;
 	gva_t tx_gva, rx_gva;
 	unsigned long unused1, unused2;
+	int ret;
+	unsigned int pg_order = PMFS_ASYNC_RPC_BUFFER_ORDER - PAGE_SHIFT;
 	/*
 	 * Translate ring buffers to cptrs
 	 */
@@ -123,6 +129,12 @@ static void destroy_async_fs_ring_channel(struct fipc_ring_channel *chnl,
 	 */
 	thc_channel_group_item_remove(async_channel_group, chnl_group_item);
 	kfree(chnl_group_item);
+
+	return;
+
+fail2:
+fail1:
+	return;
 }
 
 static int setup_async_fs_ring_channel(cptr_t tx, cptr_t rx, 
@@ -176,7 +188,7 @@ static int setup_async_fs_ring_channel(cptr_t tx, cptr_t rx,
 	}
 	ret = thc_channel_group_item_init(chnl_group_item,
 					chnl,
-					dispatch_vfs_channel);
+					dispatch_async_vfs_channel);
 	if (ret) {
 		LIBLCD_ERR("async group item init failed");
 		goto fail6;
@@ -203,7 +215,7 @@ fail3:
 fail2:
 	lcd_unmap_virt(tx_gva, pg_order);
 fail1:
-	return 0;
+	return ret;
 }
 
 static void destroy_sb_trampolines(struct super_operations *s_ops);
@@ -272,7 +284,7 @@ super_block_alloc_inode(struct super_block *super_block,
 	/*
 	 * Get remote ref from callee
 	 */
-	if (cap_cptr_is_null(__cptr(fipc_get_reg0(response)))) {
+	if (cptr_is_null(__cptr(fipc_get_reg0(response)))) {
 		LIBLCD_ERR("got null from callee");
 		goto fail5;
 	}
@@ -283,11 +295,11 @@ super_block_alloc_inode(struct super_block *super_block,
 	/*
 	 * HACK: Invoke inode_init_once on our private copy
 	 */
-	inode_init_once(inode_container->pmfs_inode_vfs.vfs_inode);
+	inode_init_once(&inode_container->pmfs_inode_vfs.vfs_inode);
 	/*
 	 * Return inode
 	 */
-	return &inode_container->pmfs_inode.vfs_inode;
+	return &inode_container->pmfs_inode_vfs.vfs_inode;
 
 fail5:
 	fipc_recv_msg_end(hidden_args->fs_async_chnl, response);
@@ -362,10 +374,11 @@ super_block_destroy_inode(struct inode *inode,
 	/*
 	 * Nothing in reply
 	 */
-	fipc_recv_msg_end(response);
+	fipc_recv_msg_end(hidden_args->fs_async_chnl, response);
 
 	goto out;
 
+fail2:
 fail1:
 out:
 	/*
@@ -384,7 +397,7 @@ super_block_destroy_inode_trampoline(struct inode *inode)
 {
 	void (*volatile super_block_destroy_inode_p)(
 		struct inode *,
-		struct trampoline_hidden_args *)
+		struct trampoline_hidden_args *);
 	struct trampoline_hidden_args *hidden_args;
 
 	LCD_TRAMPOLINE_PROLOGUE(hidden_args, 
@@ -392,7 +405,7 @@ super_block_destroy_inode_trampoline(struct inode *inode)
 
 	super_block_destroy_inode_p = super_block_destroy_inode;
 
-	super_block_destroy_inode_p(super_block, hidden_args);
+	super_block_destroy_inode_p(inode, hidden_args);
 }
 
 void
@@ -404,6 +417,7 @@ super_block_evict_inode(struct inode *inode,
 	struct super_block_container *sb_container =
 		hidden_args->struct_container;
 	int ret;
+	struct fipc_message *request, *response;
 	/*
 	 * Call remote evict inode
 	 */
@@ -438,10 +452,11 @@ super_block_evict_inode(struct inode *inode,
 	/*
 	 * Nothing in reply
 	 */
-	fipc_recv_msg_end(response);
+	fipc_recv_msg_end(hidden_args->fs_async_chnl, response);
 
 	goto out;
 
+fail2:
 fail1:
 out:
 	return;
@@ -454,7 +469,7 @@ super_block_evict_inode_trampoline(struct inode *inode)
 {
 	void (*volatile super_block_evict_inode_p)(
 		struct inode *,
-		struct trampoline_hidden_args *)
+		struct trampoline_hidden_args *);
 	struct trampoline_hidden_args *hidden_args;
 
 	LCD_TRAMPOLINE_PROLOGUE(hidden_args, 
@@ -462,7 +477,7 @@ super_block_evict_inode_trampoline(struct inode *inode)
 
 	super_block_evict_inode_p = super_block_evict_inode;
 
-	super_block_evict_inode_p(super_block, hidden_args);
+	super_block_evict_inode_p(inode, hidden_args);
 }
 
 void
@@ -499,9 +514,11 @@ super_block_put_super(struct super_block *sb,
 	/*
 	 * Nothing in reply
 	 */
-	fipc_recv_msg_end(response);
+	fipc_recv_msg_end(hidden_args->fs_async_chnl, response);
 
 	goto out;
+
+fail2:
 fail1:
 out:
 	return;
@@ -514,7 +531,7 @@ super_block_put_super_trampoline(struct super_block *sb)
 {
 	void (*volatile super_block_put_super_p)(
 		struct super_block *,
-		struct trampoline_hidden_args *)
+		struct trampoline_hidden_args *);
 	struct trampoline_hidden_args *hidden_args;
 
 	LCD_TRAMPOLINE_PROLOGUE(hidden_args, 
@@ -522,7 +539,7 @@ super_block_put_super_trampoline(struct super_block *sb)
 
 	super_block_put_super_p = super_block_put_super;
 
-	super_block_put_super_p(super_block, hidden_args);
+	super_block_put_super_p(sb, hidden_args);
 }
 
 int
@@ -544,6 +561,7 @@ mount_nodev_fill_super(struct super_block *sb,
 	cptr_t dentry_ref;
 	cptr_t sb_ref;
 	int s_flags;
+	struct fipc_message *request, *response;
 
 	sb_container = container_of(
 		sb,
@@ -553,7 +571,10 @@ mount_nodev_fill_super(struct super_block *sb,
 	/*
 	 * Set up super block trampolines
 	 */
-	ret = setup_sb_trampolines(sb_container);
+	ret = setup_sb_trampolines(sb_container,
+				hidden_args->fs_cspace,
+				hidden_args->fs_sync_endpoint,
+				hidden_args->fs_async_chnl);
 	if (ret) {
 		LIBLCD_ERR("error setting up sb trampolines");
 		goto fail0;
@@ -602,7 +623,8 @@ mount_nodev_fill_super(struct super_block *sb,
 	fipc_set_reg2(request, sb_container->super_block.s_flags);
 	fipc_set_reg3(request, silent);
 
-	ret = thc_ipc_send(hidden_args->fs_async_chnl, request, &reqest_cookie);
+	ret = thc_ipc_send(hidden_args->fs_async_chnl, request, 
+			&request_cookie);
 	if (ret) {
 		LIBLCD_ERR("error sending request");
 		goto fail4;
@@ -647,7 +669,7 @@ mount_nodev_fill_super(struct super_block *sb,
 		LIBLCD_ERR("remote fill_super failed");
 		goto fail7;
 	}
-	ret = glue_cap_lookup_dentry_type(pmfs_cspace,
+	ret = glue_cap_lookup_dentry_type(hidden_args->fs_cspace,
 					dentry_ref,
 					&dentry_container);
 	if (ret) {
@@ -655,7 +677,7 @@ mount_nodev_fill_super(struct super_block *sb,
 		goto fail8;
 	}
 	sb_container->their_ref = sb_ref;
-	sb_container->super_block.flags = s_flags;
+	sb_container->super_block.s_flags = s_flags;
 	sb_container->super_block.s_root = &dentry_container->dentry;
 	/*
 	 * Done
@@ -672,7 +694,9 @@ fail3:
 fail2:
 	glue_cap_remove(hidden_args->fs_cspace, sb_container->my_ref);
 fail1:
-	destroy_sb_trampolines(sb_container->super_block.s_op);
+	/* Removing const is safe here */
+	destroy_sb_trampolines((struct super_operations *)
+			sb_container->super_block.s_op);
 fail0:
 	return ret;
 }
@@ -708,7 +732,7 @@ static int get_phys_addr(char *cmdline, unsigned long *phys_addr)
 	 * Taken from pmfs/super.c. Looks like they assume
 	 * physaddr is first mount option.
 	 */
-	if (!cmdline || strncmp(options, "physaddr=", 9) != 0)
+	if (!cmdline || strncmp(cmdline, "physaddr=", 9) != 0)
 		return -EINVAL;
 	cmdline += 9;
 	*phys_addr = (unsigned long)simple_strtoull(cmdline, &cmdline, 0);
@@ -824,7 +848,7 @@ static int setup_data(void *data, cptr_t *data_cptr,
 		goto fail1;
 	}
 	data_len = strlen(data);
-	mem_len = roundup_power_of_two(ALIGN(data + data_len - page_address(p),
+	mem_len = roundup_pow_of_two(ALIGN(data + data_len - page_address(p),
 								PAGE_SIZE));
 	*mem_order = ilog2(mem_len >> PAGE_SHIFT);
 	/*
@@ -865,6 +889,10 @@ file_system_type_mount(struct file_system_type *fs_type,
 	unsigned int fs_mem_order;
 	struct fipc_message *request, *response;
 	uint32_t request_cookie;
+
+	fs_container = container_of(fs_type,
+				struct file_system_type_container,
+				file_system_type);
 	/*
 	 * Volunteer fs memory
 	 */
@@ -923,7 +951,7 @@ file_system_type_mount(struct file_system_type *fs_type,
 	lcd_set_r1(data_offset);
 	lcd_set_cr1(fs_mem_cptr);
 	lcd_set_r2(fs_mem_order);
-	ret = lcd_sync_send(channel);
+	ret = lcd_sync_send(hidden_args->fs_sync_endpoint);
 	if (ret) {
 		LIBLCD_ERR("call error");
 		goto fail4;
@@ -942,9 +970,9 @@ file_system_type_mount(struct file_system_type *fs_type,
 	 */
 	dentry_ref = __cptr(fipc_get_reg0(response));
 
-	fipc_recv_msg_end(channel, response);
+	fipc_recv_msg_end(hidden_args->fs_async_chnl, response);
 
-	if (cap_cptr_is_null(dentry_ref)) {
+	if (cptr_is_null(dentry_ref)) {
 		LIBLCD_ERR("dentry from remote is null");
 		goto fail6;
 	}
@@ -976,8 +1004,7 @@ fail2:
 fail1:
 	lcd_unvolunteer_dev_mem(fs_mem_cptr);
 fail0:
-out:
-	return dentry;
+	return NULL;
 }
 
 LCD_TRAMPOLINE_DATA(file_system_type_mount_trampoline);
@@ -1019,15 +1046,18 @@ file_system_type_kill_sb(struct super_block *sb,
 	struct super_operations *s_ops;
 	cptr_t fs_mem_cptr;
 	int ret;
+	struct fipc_message *request, *response;
 	/*
 	 * Get ref to s_op and fs mem before we kill the super_block, so we can
 	 * tear down the trampolines *after* we call kill_sb. (We can't do
 	 * it before, because some of the s_op's will be used in the body/
 	 * call graph of kill_sb.)
 	 */
-	sb_container = container_of(sb, struct super_block, super_block);
-	s_ops = sb->s_op;
-	fs_mem_cptr = sb_container->fs_mem;
+	sb_container = container_of(sb, struct super_block_container, 
+				super_block);
+	/* It's safe to discard const here */
+	s_ops = (struct super_operations *)sb->s_op;
+	fs_mem_cptr = sb_container->fs_memory;
 	/*
 	 * Marshal refs to fs type and super block, and do rpc.
 	 *
@@ -1059,8 +1089,10 @@ file_system_type_kill_sb(struct super_block *sb,
 	sb_container = NULL;
 	/*
 	 * Destroy trampolines
+	 *
+	 * (removing const is safe here)
 	 */
-	destroy_sb_trampolines(s_ops);
+	destroy_sb_trampolines((struct super_operations *)s_ops);
 	/*
 	 * Unvolunteer fs memory
 	 */
@@ -1070,7 +1102,7 @@ file_system_type_kill_sb(struct super_block *sb,
 	 * Done
 	 */
 	goto out;
-
+fail2:
 fail1:
 out:
 	return;
@@ -1103,8 +1135,8 @@ static void setup_rest_of_args(struct trampoline_hidden_args *args,
 			struct fipc_ring_channel *fs_async_chnl)
 {
 	args->t_handle->hidden_args = args;
-	args->struct_container = fs_container;
-	args->fs_cspace = cspace;
+	args->struct_container = struct_container;
+	args->fs_cspace = fs_cspace;
 	args->fs_sync_endpoint = fs_sync_endpoint;
 	args->fs_async_chnl = fs_async_chnl;
 }
@@ -1262,7 +1294,10 @@ fail4:
 fail3:
 fail2:
 fail1:
-	destroy_sb_trampolines(sb_container->super_block.s_op);
+fail0:
+	/* Removing const is safe here */
+	destroy_sb_trampolines((struct super_operations *)
+			sb_container->super_block.s_op);
 	return ret;
 }
 
@@ -1292,6 +1327,7 @@ static int setup_fs_type_trampolines(
 	struct fipc_ring_channel *fs_async_chnl)
 {
 	struct trampoline_hidden_args *mount_args, *kill_sb_args;
+	int ret;
 	/*
 	 * mount trampoline
 	 */
@@ -1410,7 +1446,7 @@ int register_filesystem_callee(void)
 		goto fail4;
 	}
 	module_container->module.state = MODULE_STATE_LIVE;
-	module_container->module.name = "pmfs";
+	strcpy(module_container->module.name, "pmfs");
 	ret = glue_cap_insert_module_type(
 		pmfs_cspace,
 		module_container,
@@ -1453,7 +1489,7 @@ int register_filesystem_callee(void)
 	 * Store refs to fs-specific data so we can tear stuff down
 	 * in unregister_filesystem.
 	 */
-	fs_container->fs_async_chnl = chnl_group_item
+	fs_container->fs_async_chnl = chnl_group_item;
 	/*
 	 * Set up fn pointer trampolines
 	 */
@@ -1535,8 +1571,8 @@ int unregister_filesystem_callee(struct fipc_message *request,
 	 *   -- fs ref
 	 *   -- module ref
 	 */
-	fs_ref = __cptr(fipc_get_reg0(msg));
-	m_ref = __cptr(fipc_get_reg1(msg));
+	fs_ref = __cptr(fipc_get_reg0(request));
+	m_ref = __cptr(fipc_get_reg1(request));
 	ret = fipc_recv_msg_end(channel, request);
 	if (ret) {
 		LIBLCD_ERR("failed to mark msg as recvd");
@@ -1576,9 +1612,10 @@ int unregister_filesystem_callee(struct fipc_message *request,
 	lcd_cap_delete(pmfs_sync_endpoint);
 	destroy_async_fs_ring_channel(fs_container->fs_async_chnl->channel,
 				fs_container->fs_async_chnl);
-	glue_cap_remove(fs_container->pmfs_cspace, fs_container->my_ref);
-	glue_cap_remove(fs_container->pmfs_cspace, module_container->my_ref);
+	glue_cap_remove(pmfs_cspace, fs_container->my_ref);
+	glue_cap_remove(pmfs_cspace, module_container->my_ref);
 	glue_cap_destroy(pmfs_cspace);
+	pmfs_cspace = NULL;
 	kfree(fs_container);
 	kfree(module_container);
 	/*
@@ -1685,7 +1722,7 @@ int bdi_destroy_callee(struct fipc_message *request,
 	 */
 	ref = __cptr(fipc_get_reg0(request));
 
-	fipc_recv_msg_end(request, channel);
+	fipc_recv_msg_end(channel, request);
 
 	ret = glue_cap_lookup_backing_dev_info_type(
 		pmfs_cspace,
@@ -1693,7 +1730,7 @@ int bdi_destroy_callee(struct fipc_message *request,
 		&bdi_container);
 	if (ret) {
 		LIBLCD_ERR("lookup");
-		goto fail2;
+		goto fail1;
 	}
 	/*
 	 * Invoke real function
@@ -1708,7 +1745,6 @@ int bdi_destroy_callee(struct fipc_message *request,
 	ret = 0;
 	goto out;
 
-fail2:
 fail1:
 out:
 	if (async_msg_blocking_send_start(channel, &response)) {
@@ -1729,7 +1765,7 @@ int iget_locked_callee(struct fipc_message *request,
 	int ret;
 	struct super_block_container *sb_container;
 	struct inode *inode;
-	struct pmfs_inode_vfs *inode_container = NULL;
+	struct pmfs_inode_vfs_container *inode_container = NULL;
 	struct fipc_message *response;
 	cptr_t sb_ref = __cptr(fipc_get_reg0(request));
 	unsigned long ino = fipc_get_reg1(request);
@@ -1786,9 +1822,12 @@ out:
 	 */
 	if (inode_container) {
 		fipc_set_reg0(response, cptr_val(inode_container->their_ref));
-		fipc_set_reg1(response, inode_container->inode.i_state);
-		fipc_set_reg2(response, inode_container->inode.i_nlink);
-		fipc_set_reg3(response, inode_container->inode.i_mode);
+		fipc_set_reg1(response, 
+			inode_container->pmfs_inode_vfs.vfs_inode.i_state);
+		fipc_set_reg2(response, 
+			inode_container->pmfs_inode_vfs.vfs_inode.i_nlink);
+		fipc_set_reg3(response, 
+			inode_container->pmfs_inode_vfs.vfs_inode.i_mode);
 	} else {
 		fipc_set_reg0(response, cptr_val(CAP_CPTR_NULL));
 	}
@@ -1815,9 +1854,9 @@ int truncate_inode_pages_callee(struct fipc_message *request,
 	 *
 	 * Look up our private inode object
 	 */
-	ret = glue_cap_lookup_inode_type(pmfs_cspace,
-					inode_ref,
-					&inode_container);
+	ret = glue_cap_lookup_pmfs_inode_vfs_type(pmfs_cspace,
+						inode_ref,
+						&inode_container);
 	if (ret) {
 		LIBLCD_ERR("address space not found");
 		goto fail1;
@@ -1943,7 +1982,7 @@ int unlock_new_inode_callee(struct fipc_message *request,
 	int ret;
 	cptr_t inode_ref = __cptr(fipc_get_reg0(request));
 	struct fipc_message *response;
-	uint32_t request_cookie;
+	uint32_t request_cookie = thc_get_request_cookie(request);
 
 	fipc_recv_msg_end(channel, request);
 
@@ -1996,7 +2035,7 @@ int d_make_root_callee(struct fipc_message *request,
 	unsigned int nlink = fipc_get_reg1(request);
 	cptr_t dentry_ref = __cptr(fipc_get_reg2(request));
 	struct fipc_message *response;
-	uint32_t request_cookie;
+	uint32_t request_cookie = thc_get_request_cookie(request);
 	
 	fipc_recv_msg_end(channel, request);
 
@@ -2013,7 +2052,8 @@ int d_make_root_callee(struct fipc_message *request,
 	/*
 	 * Update nlink
 	 */
-	inode_container->pmfs_inode_vfs.vfs_inode.i_nlink = nlink;
+	set_nlink(&inode_container->pmfs_inode_vfs.vfs_inode,
+		nlink);
 	/*
 	 * Call real function
 	 */
@@ -2075,7 +2115,7 @@ static int sync_mount_nodev_callee(cptr_t fs_sync_endpoint,
 	/*
 	 * Alloc cptr for void *data memory, and do sync receive
 	 */
-	ret = lcd_alloc_cptr(data_cptr);
+	ret = lcd_cptr_alloc(data_cptr);
 	if (ret) {
 		LIBLCD_ERR("failed to get cptr");
 		goto fail1;
@@ -2117,7 +2157,7 @@ int mount_nodev_callee(struct fipc_message *request,
 	struct trampoline_hidden_args *fill_sup_args;
 	int ret;
 	cptr_t fs_type_ref = __cptr(fipc_get_reg0(request));
-	int flags = fipc_get_r1(request);
+	int flags = fipc_get_reg1(request);
 	cptr_t fill_sup_ref = __cptr(fipc_get_reg2(request));
 	cptr_t data_cptr;
 	gva_t data_gva;
@@ -2125,8 +2165,9 @@ int mount_nodev_callee(struct fipc_message *request,
 	unsigned long data_offset;
 	int (*fill_super_p)(struct super_block *, void *, int);
 	struct dentry *dentry;
-	struct dentry_container *dentry_container;
+	struct dentry_container *dentry_container = NULL;
 	uint32_t request_cookie = thc_get_request_cookie(request);
+	struct fipc_message *response;
 
 	fipc_recv_msg_end(channel, request);
 	/*
@@ -2245,7 +2286,7 @@ out:
 	else
 		fipc_set_reg0(response, cptr_val(CAP_CPTR_NULL));
 
-	fipc_send_msg_end(channel, response);
+	thc_ipc_reply(channel, request_cookie, response);
 
 	return ret;
 }
@@ -2257,6 +2298,7 @@ int kill_anon_super_callee(struct fipc_message *request,
 	int ret;
 	struct fipc_message *response;
 	cptr_t sb_ref = __cptr(fipc_get_reg0(request));
+	uint32_t request_cookie = thc_get_request_cookie(request);
 
 	fipc_recv_msg_end(channel, request);
 	/*

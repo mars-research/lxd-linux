@@ -27,6 +27,11 @@
 
 #ifdef LCD_ISOLATE
 
+struct backing_dev_info_container {
+	struct backing_dev_info backing_dev_info;
+	u64 f1, f2;
+};
+
 struct backing_dev_info_container 
 pmfs_backing_dev_info_container __read_mostly = {
 	.backing_dev_info = {

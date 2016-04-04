@@ -14,16 +14,20 @@
 #include <linux/module.h>
 
 #include <libcap.h>
+#include <libfipc.h>
+#include <thc_ipc.h>
 #include <liblcd/glue_cspace.h>
 #include <liblcd/liblcd.h>
 #include <liblcd/sync_ipc_poll.h>
+
+#include "pmfs_lcd/pmfs/pmfs.h"
 
 /* MACROS/FLAGS -------------------------------------------------- */
 
 /* Function flags */
 enum {
-	REGISTER_FS,
-	UNREGISTER_FS,
+	REGISTER_FILESYSTEM,
+	UNREGISTER_FILESYSTEM,
 	BDI_INIT,
 	BDI_DESTROY,
 	SUPER_BLOCK_ALLOC_INODE,
@@ -127,7 +131,7 @@ int glue_cap_insert_super_block_type(
 
 int glue_cap_insert_pmfs_inode_vfs_type(
 	struct glue_cspace *cspace, 
-	struct pmfs_vfs_inode_container *pmfs_inode_vfs_container,
+	struct pmfs_inode_vfs_container *pmfs_inode_vfs_container,
 	cptr_t *c_out);
 
 int glue_cap_insert_dentry_type(
@@ -190,7 +194,7 @@ async_msg_get_fn_type(struct fipc_message *msg)
 
 static inline
 void
-async_msg_set_fn_type(struct fipc_message *msg, enum fn_type type)
+async_msg_set_fn_type(struct fipc_message *msg, int type)
 {
 	uint32_t flags = fipc_get_flags(msg);
 	/* ensure type is in range */

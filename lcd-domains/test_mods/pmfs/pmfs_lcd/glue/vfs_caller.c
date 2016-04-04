@@ -122,7 +122,7 @@ static int setup_async_channel(cptr_t *buf1_cptr_out, cptr_t *buf2_cptr_out,
 	/*
 	 * Prep buffers for rpc
 	 */
-	ret = fipc_prep_buffers(ASYNC_RPC_EXAMPLE_BUFFER_ORDER,
+	ret = fipc_prep_buffers(PMFS_ASYNC_RPC_BUFFER_ORDER,
 				(void *)gva_val(buf1_addr),
 				(void *)gva_val(buf2_addr));
 	if (ret) {
@@ -138,7 +138,7 @@ static int setup_async_channel(cptr_t *buf1_cptr_out, cptr_t *buf2_cptr_out,
 		LIBLCD_ERR("chnl alloc");
 		goto fail6;
 	}
-	ret = fipc_ring_channel_init(chnl, ASYNC_RPC_EXAMPLE_BUFFER_ORDER,
+	ret = fipc_ring_channel_init(chnl, PMFS_ASYNC_RPC_BUFFER_ORDER,
 				(void *)gva_val(buf1_addr),
 				(void *)gva_val(buf2_addr));
 	if (ret) {
@@ -154,7 +154,7 @@ static int setup_async_channel(cptr_t *buf1_cptr_out, cptr_t *buf2_cptr_out,
 		LIBLCD_ERR("alloc failed");
 		goto fail8;
 	}
-	ret = thc_channel_group_item_init(chnl_group_item_init,
+	ret = thc_channel_group_item_init(chnl_group_item,
 					chnl,
 					dispatch_fs_channel);
 	if (ret) {
@@ -298,7 +298,7 @@ int register_filesystem(struct file_system_type *fs)
 	 *    -- cr1: cap to buffer for callee to use for tx (this is our rx)
 	 *    -- cr2: cap to buffer for callee to use for rx (this is our tx)
 	 */
-	lcd_set_r0(REGISTER_FS);
+	lcd_set_r0(REGISTER_FILESYSTEM);
 	lcd_set_r1(cptr_val(fs_container->my_ref));
 	lcd_set_r2(cptr_val(module_container->my_ref));
 	lcd_set_cr0(pmfs_sync_endpoint);
@@ -370,7 +370,7 @@ int unregister_filesystem(struct file_system_type *fs)
 		LIBLCD_ERR("failed to get send slot");
 		goto fail1;
 	}
-	async_msg_set_fn_type(request, UNREGISTER_FS);
+	async_msg_set_fn_type(request, UNREGISTER_FILESYSTEM);
 	fipc_set_reg0(request, cptr_val(fs_container->their_ref));
 	fipc_set_reg1(request, cptr_val(module_container->their_ref));
 
@@ -390,7 +390,9 @@ int unregister_filesystem(struct file_system_type *fs)
 	 * Destroy sync endpoint and async channel
 	 */
 	lcd_cap_delete(pmfs_sync_endpoint);
-	destroy_async_channel(pmfs_async_chnl);
+	destroy_async_channel(pmfs_async_chnl, pmfs_async_chnl_group_item);
+	pmfs_async_chnl = NULL;
+	pmfs_async_chnl_group_item = NULL;
 	/*
 	 * Remove fs type and module from data store
 	 */
@@ -399,6 +401,9 @@ int unregister_filesystem(struct file_system_type *fs)
 	/*
 	 * Pass back return value
 	 */
+	return ret;
+fail2:
+fail1:
 	return ret;
 }
 
@@ -505,6 +510,10 @@ void bdi_destroy(struct backing_dev_info *bdi)
 	/*
 	 * (no return value)
 	 */
+	return;
+fail2:
+fail1:
+	return;
 }
 
 struct inode *iget_locked(struct super_block *sb, unsigned long ino)
@@ -545,7 +554,7 @@ struct inode *iget_locked(struct super_block *sb, unsigned long ino)
 	 *   -- i_nlink
 	 *   -- i_mode
 	 */
-	if (cap_cptr_is_null(__cptr(fipc_get_reg0(response)))) {
+	if (cptr_is_null(__cptr(fipc_get_reg0(response)))) {
 		LIBLCD_ERR("got null from iget locked");
 		goto fail3;
 	}
@@ -558,8 +567,8 @@ struct inode *iget_locked(struct super_block *sb, unsigned long ino)
 	}
 	inode_container->pmfs_inode_vfs.vfs_inode.i_state =
 		fipc_get_reg1(response);
-	inode_container->pmfs_inode_vfs.vfs_inode.i_nlink = 
-		fipc_get_reg2(response);
+	set_nlink(&inode_container->pmfs_inode_vfs.vfs_inode,
+		fipc_get_reg2(response));
 	inode_container->pmfs_inode_vfs.vfs_inode.i_mode =
 		fipc_get_reg3(response);
 
@@ -606,7 +615,7 @@ void truncate_inode_pages(struct address_space *mapping, loff_t lstart)
 	 */
 	inode_container = container_of(
 		container_of(
-			container_of(mapping, struct inode, i_data)
+			container_of(mapping, struct inode, i_data),
 			struct pmfs_inode_vfs,
 			vfs_inode),
 		struct pmfs_inode_vfs_container,
@@ -636,10 +645,10 @@ void truncate_inode_pages(struct address_space *mapping, loff_t lstart)
 	 * Nothing in response
 	 */
 
-	fipc_recv_msg_end(channel, response);
+	fipc_recv_msg_end(pmfs_async_chnl, response);
 
 	goto out;
-
+fail2:
 fail1:
 out:
 	return;
@@ -682,10 +691,10 @@ void clear_inode(struct inode *inode)
 	 * Nothing in response
 	 */
 
-	fipc_recv_msg_end(channel, response);
+	fipc_recv_msg_end(pmfs_async_chnl, response);
 
 	goto out;
-
+fail2:
 fail1:
 out:
 	return;
@@ -693,7 +702,7 @@ out:
 
 void iget_failed(struct inode *inode)
 {
-	struct inode_container *inode_container;
+	struct pmfs_inode_vfs_container *inode_container;
 	int ret;
 	struct fipc_message *request, *response;
 	/*
@@ -728,10 +737,10 @@ void iget_failed(struct inode *inode)
 	 * Nothing in response
 	 */
 
-	fipc_recv_msg_end(channel, response);
+	fipc_recv_msg_end(pmfs_async_chnl, response);
 
 	goto out;
-
+fail2:
 fail1:
 out:
 	return;
@@ -741,6 +750,7 @@ void unlock_new_inode(struct inode *inode)
 {
 	struct pmfs_inode_vfs_container *inode_container;
 	struct fipc_message *request, *response;
+	int ret;
 	/*
 	 * Get remote ref, and do rpc.
 	 */
@@ -775,10 +785,10 @@ void unlock_new_inode(struct inode *inode)
 	inode_container->pmfs_inode_vfs.vfs_inode.i_state = 
 		fipc_get_reg0(response);
 
-	fipc_recv_msg_end(response);
+	fipc_recv_msg_end(pmfs_async_chnl, response);
 
 	goto out;
-
+fail2:
 fail1:
 out:
 	return;
@@ -837,7 +847,7 @@ d_make_root(struct inode *inode)
 	async_msg_set_fn_type(request, D_MAKE_ROOT);
 	fipc_set_reg0(request, cptr_val(inode_container->their_ref));
 	fipc_set_reg1(request, 
-		inode_container->pmfs_inode_vfs.vfs_inode.i_nlinks);
+		inode_container->pmfs_inode_vfs.vfs_inode.i_nlink);
 	fipc_set_reg2(request, cptr_val(dentry_container->my_ref));
 
 	ret = thc_ipc_call(pmfs_async_chnl, request, &response);
@@ -848,20 +858,20 @@ d_make_root(struct inode *inode)
 	/*
 	 * Get remote ref to dentry in response
 	 */
-	if (cap_cptr_is_null(__cptr(fipc_get_reg0(response)))) {
+	if (cptr_is_null(__cptr(fipc_get_reg0(response)))) {
 		LIBLCD_ERR("got null from d_make_root");
 		goto fail5;
 	}
 	dentry_container->their_ref = __cptr(fipc_get_reg0(response));
 
-	fipc_recv_msg_end(channel, response);
+	fipc_recv_msg_end(pmfs_async_chnl, response);
 	
 	return &dentry_container->dentry;
 
 fail5:
 fail4:
 fail3:
-	glue_cap_remove(dentry_container->my_ref);
+	glue_cap_remove(vfs_cspace, dentry_container->my_ref);
 fail2:
 	kfree(dentry_container);
 fail1:
@@ -881,6 +891,7 @@ mount_nodev(struct file_system_type *fs_type,
 	unsigned long data_offset;
 	unsigned long mem_sz;
 	uint32_t request_cookie;
+	struct fipc_message *request, *response;
 	
 	fs_container = container_of(
 		fs_type,
@@ -975,7 +986,7 @@ mount_nodev(struct file_system_type *fs_type,
 	/*
 	 * Unmarshal returned dentry
 	 */
-	if (cap_cptr_is_null(__cptr(fipc_get_reg0(response)))) {
+	if (cptr_is_null(__cptr(fipc_get_reg0(response)))) {
 		LIBLCD_ERR("got null from remote mount_nodev");
 		goto fail8;
 	}
@@ -1019,9 +1030,9 @@ void kill_anon_super(struct super_block *sb)
 	int ret;
 	struct fipc_message *request, *response;
 
-	container_of(sb,
-		struct super_block_container,
-		super_block);
+	sb_container = container_of(sb,
+				struct super_block_container,
+				super_block);
 	/*
 	 * Marshal:
 	 *
@@ -1049,6 +1060,7 @@ void kill_anon_super(struct super_block *sb)
 
 	goto out;
 
+fail2:
 fail1:
 out:
 	return;
@@ -1082,7 +1094,7 @@ int super_block_alloc_inode_callee(struct fipc_message *request,
 	/*
 	 * Invoke the real function
 	 */
-	inode = sb_container->sb->s_ops->alloc_inode(
+	inode = sb_container->super_block.s_op->alloc_inode(
 		&sb_container->super_block);
 	if (!inode) {
 		LIBLCD_ERR("error alloc'ing inode");
@@ -1111,7 +1123,7 @@ int super_block_alloc_inode_callee(struct fipc_message *request,
 	goto reply;
 
 fail3:
-	sb_container->sb->s_ops->destroy_inode(inode);
+	sb_container->super_block.s_op->destroy_inode(inode);
 fail2:
 fail1:
 reply:
@@ -1141,6 +1153,7 @@ int super_block_destroy_inode_callee(struct fipc_message *request,
 	cptr_t inode_ref = __cptr(fipc_get_reg1(request));
 	int ret;
 	uint32_t request_cookie = thc_get_request_cookie(request);
+	struct fipc_message *response;
 
 	fipc_recv_msg_end(channel, request);
 	/*
@@ -1169,8 +1182,8 @@ int super_block_destroy_inode_callee(struct fipc_message *request,
 	/*
 	 * Invoke the real function
 	 */
-	sb_container->sb->s_ops->destroy_inode(
-		inode_container->inode.vfs_inode);
+	sb_container->super_block.s_op->destroy_inode(
+		&inode_container->pmfs_inode_vfs.vfs_inode);
 
 	ret = 0;
 	goto reply;
@@ -1199,7 +1212,8 @@ int super_block_evict_inode_callee(struct fipc_message *request,
 	cptr_t sb_ref = __cptr(fipc_get_reg0(request));
 	cptr_t inode_ref = __cptr(fipc_get_reg1(request));
 	uint32_t request_cookie = thc_get_request_cookie(request);
-	
+	struct fipc_message *response;
+
 	fipc_recv_msg_end(channel, request);
 
 	/*
@@ -1222,7 +1236,7 @@ int super_block_evict_inode_callee(struct fipc_message *request,
 	/*
 	 * Invoke real evict inode
 	 */
-	sb_container->super_block->s_op->evict_inode(
+	sb_container->super_block.s_op->evict_inode(
 		&inode_container->pmfs_inode_vfs.vfs_inode
 		);
 	/*
@@ -1255,7 +1269,7 @@ static int sync_mount_nodev_fill_super_callee(cptr_t sync_channel,
 	/*
 	 * Alloc cptr for data mem
 	 */
-	lcd_cptr_alloc(data_cptr);
+	ret = lcd_cptr_alloc(data_cptr);
 	if (ret) {
 		LIBLCD_ERR("alloc cptr");
 		goto fail1;
@@ -1301,8 +1315,10 @@ int mount_nodev_fill_super_callee(struct fipc_message *request,
 	uint32_t request_cookie = thc_get_request_cookie(request);
 	cptr_t data_cptr;
 	gva_t data_gva;
+	unsigned long data_offset;
 	unsigned int mem_order;
 	int ret;
+	struct fipc_message *response;
 
 	fipc_recv_msg_end(channel, request);
 	/*
@@ -1343,7 +1359,7 @@ int mount_nodev_fill_super_callee(struct fipc_message *request,
 		goto fail3;
 	}
 	sb_container->their_ref = sb_ref;
-	sb_container->super_block.flags = flags;
+	sb_container->super_block.s_flags = flags;
 	/*
 	 * Map void *data arg
 	 */
@@ -1396,7 +1412,7 @@ out:
 	 */
 	if (dentry_container) {
 		fipc_set_reg1(response, cptr_val(sb_container->my_ref));
-		fipc_set_reg2(response, sb_container->super_block.flags);
+		fipc_set_reg2(response, sb_container->super_block.s_flags);
 		fipc_set_reg3(response, cptr_val(dentry_container->their_ref));
 	}
 
@@ -1407,7 +1423,6 @@ out:
 
 static void *update_cmdline(char *old_cmdline, gpa_t new_fs_mem_gpa)
 {
-	int ret;
 	char *new_cmdline;
 	/* 
 	 * Stolen from pmfs/super.c:get_phys_addr. Looks like they
@@ -1447,12 +1462,12 @@ static int sync_file_system_type_mount_callee(cptr_t sync_channel,
 	/*
 	 * Alloc cptr's for objects
 	 */
-	ret = lcd_alloc_cptr(data_cptr);
+	ret = lcd_cptr_alloc(data_cptr);
 	if (ret) {
 		LIBLCD_ERR("data cptr alloc");
 		goto fail1;
 	}
-	ret = lcd_alloc_cptr(fs_mem_cptr);
+	ret = lcd_cptr_alloc(fs_mem_cptr);
 	if (ret) {
 		LIBLCD_ERR("fs mem cptr alloc");
 		goto fail2;
@@ -1496,7 +1511,7 @@ int file_system_type_mount_callee(struct fipc_message *request,
 				struct fipc_ring_channel *channel)
 {
 	struct file_system_type_container *fs_container;
-	struct dentry_container *dentry_container;
+	struct dentry_container *dentry_container = NULL;
 	struct dentry *dentry;
 	struct fipc_message *response;
 	cptr_t fs_ref = __cptr(fipc_get_reg0(request));
@@ -1510,6 +1525,7 @@ int file_system_type_mount_callee(struct fipc_message *request,
 	cptr_t fs_mem_cptr;
 	unsigned int fs_mem_order;
 	gpa_t fs_mem_gpa;
+	int ret;
 
 	fipc_recv_msg_end(channel, request);
 
@@ -1523,10 +1539,8 @@ int file_system_type_mount_callee(struct fipc_message *request,
 						&data_cptr,
 						&mem_order,
 						&data_offset,
-						&data_gva,
 						&fs_mem_cptr,
-						&fs_mem_order,
-						&fs_mem_gpa);
+						&fs_mem_order);
 	if (ret) {
 		LIBLCD_ERR("failed to do sync part of mount");
 		return ret; /* do not do async reply */
@@ -1600,7 +1614,7 @@ int file_system_type_mount_callee(struct fipc_message *request,
 fail6:
 	kfree(new_cmdline);
 fail5:
-	lcd_unmap_virt(fs_mem_gva, fs_mem_order);
+	lcd_unmap_phys(fs_mem_gpa, fs_mem_order);
 fail4:
 	lcd_unmap_virt(data_gva, mem_order);
 fail3:
@@ -1716,7 +1730,7 @@ static void do_unmap(struct super_block *sb)
 		/*
 		 * Delete our capability
 		 */
-		if (!cap_cptr_is_null(fs_mem_cptr))
+		if (!cptr_is_null(fs_mem_cptr))
 			lcd_cap_delete(fs_mem_cptr);
 	}
 }

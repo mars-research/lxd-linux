@@ -28,6 +28,6 @@ lcd_test_mod_pmfs_lcd-y              += $(addprefix glue/, \
 							   dispatch.o \
                                                            )
 
-lcd_test_mod_pmfs_vfs-y              += $(addprefix ../, cap.o )
+lcd_test_mod_pmfs_lcd-y              += $(addprefix ../, cap.o )
 
 ccflags-y += $(ISOLATED_CFLAGS)
