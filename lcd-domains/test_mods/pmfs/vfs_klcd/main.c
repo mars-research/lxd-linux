@@ -63,8 +63,7 @@ static void loop(struct lcd_sync_channel_group *sync_group,
 		 * it doesn't break out of this loop. Furthermore,
 		 * we could have blocked while running the async.
 		 */
-		while (!stop && count < 5) {
-			count += 1;
+		while (!stop && !list_empty(&async_group->head)) {
 			/*
 			 * Do one async receive
 			 */

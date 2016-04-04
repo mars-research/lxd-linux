@@ -1509,6 +1509,7 @@ int register_filesystem_callee(void)
 		LIBLCD_ERR("register fs failed");
 		goto fail8;
 	}
+	LIBLCD_MSG("vfs called register fs");
 	/*
 	 * Reply with:
 	 *
@@ -1563,8 +1564,6 @@ int unregister_filesystem_callee(struct fipc_message *request,
 	struct module_container *module_container;
 	int ret;
 	cptr_t fs_ref, m_ref;
-	struct fipc_message *response;
-	uint32_t request_cookie = thc_get_request_cookie(request);
 	/*
 	 * Unmarshal refs:
 	 *
@@ -1619,7 +1618,7 @@ int unregister_filesystem_callee(struct fipc_message *request,
 	kfree(fs_container);
 	kfree(module_container);
 	/*
-	 * Reply 
+	 * Do *not* reply; the channel was destroyed
 	 */
 	goto out;
 
@@ -1628,14 +1627,6 @@ fail3:
 fail2:
 fail1:
 out:
-	if (async_msg_blocking_send_start(channel, &response)) {
-		LIBLCD_ERR("error getting response msg");
-		return -EIO;
-	}
-
-	fipc_set_reg0(response, ret);
-	
-	thc_ipc_reply(channel, request_cookie, response);
 
 	return ret;
 }
