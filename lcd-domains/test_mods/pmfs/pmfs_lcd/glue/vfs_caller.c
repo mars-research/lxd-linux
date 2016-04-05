@@ -16,6 +16,9 @@
 
 /* GLOBALS -------------------------------------------------- */
 
+/* Hacky communication with dispatch loop */
+int registered = 0;
+
 /* vfs_chnl is only used in register_filesystem for the first rpc
  * to vfs. Thereafter, we use the async channel (setup as part of
  * register_filesystem rpc). */
@@ -331,6 +334,8 @@ int register_filesystem(struct file_system_type *fs)
 	fs_container->their_ref = __cptr(lcd_r1());
 	module_container->their_ref = __cptr(lcd_r2());
 
+	registered = 1;
+
 	return ret;
 
 fail6:
@@ -359,6 +364,7 @@ int unregister_filesystem(struct file_system_type *fs)
 	module_container = container_of(fs->owner,
 					struct module_container,
 					module);
+	LIBLCD_MSG("pmfs in unreg fs");
 	/*
 	 * Marshal and do rpc.
 	 *
@@ -401,6 +407,8 @@ int unregister_filesystem(struct file_system_type *fs)
 	/*
 	 * Pass back return value
 	 */
+	registered = 0;
+
 	return ret;
 fail2:
 fail1:

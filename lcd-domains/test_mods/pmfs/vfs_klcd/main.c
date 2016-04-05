@@ -92,7 +92,7 @@ static void loop(struct lcd_sync_channel_group *sync_group,
 
 			if (kthread_should_stop()) {
 				LIBLCD_ERR("kthread should stop");
-				break;
+				stop = 1;
 			}
 		}
 		);

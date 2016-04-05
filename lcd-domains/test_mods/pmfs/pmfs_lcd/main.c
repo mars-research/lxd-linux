@@ -12,6 +12,8 @@
 
 #include <lcd_config/post_hook.h>
 
+extern int registered;
+
 /* LOOP ---------------------------------------- */
 
 int init_pmfs_fs(void);
@@ -41,7 +43,7 @@ static void main_and_loop(struct thc_channel_group *async_group)
 			 * Handle replies that are part of init sequence,
 			 * and then function calls (like mount) ...
 			 */
-			while (!stop && count < 5) {
+			while (!stop && !registered) {
 
 				count += 1;
 
@@ -80,6 +82,7 @@ static void main_and_loop(struct thc_channel_group *async_group)
 
 	if (stop)
 		goto out;
+	stop = 0;
 
 	DO_FINISH(
 			/*
@@ -93,7 +96,7 @@ static void main_and_loop(struct thc_channel_group *async_group)
 			 * Listen for async replies for pmfs exit
 			 */
 			count = 0;
-			while (!stop && count < 5) {
+			while (!stop && registered) {
 
 				count += 1;
 

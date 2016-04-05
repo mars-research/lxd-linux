@@ -1604,6 +1604,7 @@ int unregister_filesystem_callee(struct fipc_message *request,
 		LIBLCD_ERR("unregister fs");
 		goto fail4;
 	}
+	LIBLCD_MSG("vfs called unregister fs");
 	/*
 	 * Tear down everything
 	 */
