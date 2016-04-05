@@ -18,52 +18,11 @@
 
 #include <lcd_config/post_hook.h>
 
-/* GLOBALS -------------------------------------------------- */
-
-static struct lcd_sync_channel_group_item vfs_channel_group_item;
-static struct thc_channel_group *async_channel_group;
-
-/* Right now, we don't have a mechanism for identifying which cspace
- * should be used when we receive a message. Sure, we could attach
- * cspaces to async ipc channels. Or we could use seL4-style badges.
- * Not clear. For now, we just assume only pmfs is interacting with
- * the vfs, and so there is only one cspace. This global is only
- * used in callee functions. For function pointers, we use the cspace
- * stored in the hidden args (so that we are sort of close to not using
- * globals, but not quite). */
-static struct glue_cspace *pmfs_cspace;
-/* A similar issue arises with the synchronous channel. Again, we could
- * attach it to / associate it with the async channel, but it's not
- * clear whether this is the right choice. For now, we just make it a
- * global. */
-static cptr_t pmfs_sync_endpoint;
-
 /* GLUE SUPPORT -------------------------------------------------- */
 
-int glue_vfs_init(cptr_t vfs_chnl, 
-		struct lcd_sync_channel_group *sync_channel_group,
-		struct thc_channel_group *_async_channel_group)
+int glue_vfs_init(void)
 {
 	int ret;
-	/*
-	 * Set up sync ipc endpoint for register_filesystem
-	 *
-	 * We expect to be granted 3 cptrs:
-	 *   -- sync endpoint capability
-	 *   -- tx ring buffer memory capability
-	 *   -- rx ring buffer memory capability
-	 */
-	lcd_sync_channel_group_item_init(&vfs_channel_group_item, vfs_chnl, 3,
-					dispatch_sync_vfs_channel);
-	/*
-	 * Store ref to async channel group so we can add async channels
-	 * in register_filesystem_callee
-	 */
-	async_channel_group = _async_channel_group;
-	/*
-	 * Add it to sync channel group
-	 */
-	lcd_sync_channel_group_add(sync_channel_group, &vfs_channel_group_item);
 	/*
 	 * Initialize cap code
 	 */
@@ -79,19 +38,12 @@ fail1:
 	return ret;
 }
 
-void glue_vfs_exit(struct lcd_sync_channel_group *sync_channel_group,
-		struct thc_channel_group *_async_channel_group)
+void glue_vfs_exit(void)
 {
-	/*
-	 * Remove vfs channel from loop, and tear down cap code.
-	 */
-	lcd_sync_channel_group_remove(sync_channel_group, 
-				&vfs_channel_group_item);
 	glue_cap_exit();
 }
 
-static void destroy_async_fs_ring_channel(struct fipc_ring_channel *chnl,
-					struct thc_channel_group_item *chnl_group_item)
+static void destroy_async_fs_ring_channel(struct thc_channel *chnl)
 {
 	cptr_t tx, rx;
 	gva_t tx_gva, rx_gva;
@@ -101,8 +53,8 @@ static void destroy_async_fs_ring_channel(struct fipc_ring_channel *chnl,
 	/*
 	 * Translate ring buffers to cptrs
 	 */
-	tx_gva = __gva((unsigned long)chnl->tx.buffer);
-	rx_gva = __gva((unsigned long)chnl->rx.buffer);
+	tx_gva = __gva((unsigned long)thc_channel_to_fipc(chnl)->tx.buffer);
+	rx_gva = __gva((unsigned long)thc_channel_to_fipc(chnl)->rx.buffer);
 	ret = lcd_virt_to_cptr(tx_gva, &tx, &unused1, &unused2);
 	if (ret) {
 		LIBLCD_ERR("failed to translate tx to cptr");
@@ -123,12 +75,12 @@ static void destroy_async_fs_ring_channel(struct fipc_ring_channel *chnl,
 	/*
 	 * Free chnl header
 	 */
-	kfree(chnl);
+	kfree(thc_channel_to_fipc(chnl));
 	/*
-	 * Remove and free async channel group item
+	 * Mark thc channel as dead so that dispatch loop will remove
+	 * it
 	 */
-	thc_channel_group_item_remove(async_channel_group, chnl_group_item);
-	kfree(chnl_group_item);
+	thc_channel_mark_as_dead(chnl);
 
 	return;
 
@@ -138,13 +90,12 @@ fail1:
 }
 
 static int setup_async_fs_ring_channel(cptr_t tx, cptr_t rx, 
-				struct fipc_ring_channel **chnl_out,
-				struct thc_channel_group_item **chnl_group_item_out)
+				struct thc_channel **chnl_out)
 {
 	gva_t tx_gva, rx_gva;
 	int ret;
-	struct fipc_ring_channel *chnl;
-	struct thc_channel_group_item *chnl_group_item;
+	struct fipc_ring_channel *fchnl;
+	struct thc_channel *chnl;
 	unsigned int pg_order = PMFS_ASYNC_RPC_BUFFER_ORDER - PAGE_SHIFT;
 	/*
 	 * Map tx and rx buffers (caller has already prep'd buffers)
@@ -162,13 +113,13 @@ static int setup_async_fs_ring_channel(cptr_t tx, cptr_t rx,
 	/*
 	 * Alloc and init channel header
 	 */
-	chnl = kmalloc(sizeof(*chnl), GFP_KERNEL);
-	if (!chnl) {
+	fchnl = kmalloc(sizeof(*fchnl), GFP_KERNEL);
+	if (!fchnl) {
 		ret = -ENOMEM;
 		LIBLCD_ERR("malloc failed");
 		goto fail3;
 	}
-	ret = fipc_ring_channel_init(chnl,
+	ret = fipc_ring_channel_init(fchnl,
 				PMFS_ASYNC_RPC_BUFFER_ORDER,
 				/* (note: gva == hva for non-isolated) */
 				(void *)gva_val(tx_gva),
@@ -180,36 +131,27 @@ static int setup_async_fs_ring_channel(cptr_t tx, cptr_t rx,
 	/*
 	 * Add to async channel group
 	 */
-	chnl_group_item = kzalloc(sizeof(*chnl_group_item), GFP_KERNEL);
-	if (!chnl_group_item) {
+	chnl = kzalloc(sizeof(*chnl), GFP_KERNEL);
+	if (!chnl) {
 		ret = -ENOMEM;
 		LIBLCD_ERR("malloc failed");
 		goto fail5;
 	}
-	ret = thc_channel_group_item_init(chnl_group_item,
-					chnl,
-					dispatch_async_vfs_channel);
+	ret = thc_channel_init(chnl, fchnl);
 	if (ret) {
 		LIBLCD_ERR("async group item init failed");
 		goto fail6;
 	}
-	ret = thc_channel_group_item_add(async_channel_group,
-					chnl_group_item);
-	if (ret) {
-		LIBLCD_ERR("group item add failed");
-		goto fail7;
-	}
 
 	*chnl_out = chnl;
-	*chnl_group_item_out = chnl_group_item;
 	return 0;
 
 fail7:
 fail6:
-	kfree(chnl_group_item);
+	kfree(chnl);
 fail5:
 fail4:
-	kfree(chnl);
+	kfree(fchnl);
 fail3:
 	lcd_unmap_virt(rx_gva, pg_order);
 fail2:
@@ -222,14 +164,14 @@ static void destroy_sb_trampolines(struct super_operations *s_ops);
 static int setup_sb_trampolines(struct super_block_container *sb_container,
 				struct glue_cspace *fs_cspace,
 				cptr_t fs_sync_endpoint,
-				struct fipc_ring_channel *fs_async_chnl);
+				struct thc_channel *fs_async_chnl);
 static void destroy_fs_type_trampolines(
 	struct file_system_type_container *fs_container);
 static int setup_fs_type_trampolines(
 	struct file_system_type_container *fs_container,
 	struct glue_cspace *fs_cspace,
 	cptr_t fs_sync_endpoint,
-	struct fipc_ring_channel *fs_async_chnl);
+	struct thc_channel *fs_async_chnl);
 
 /* TRAMPOLINES / FUNCTION POINTERS ---------------------------------------- */
 
@@ -976,7 +918,7 @@ file_system_type_mount(struct file_system_type *fs_type,
 		LIBLCD_ERR("dentry from remote is null");
 		goto fail6;
 	}
-	ret = glue_cap_lookup_dentry_type(pmfs_cspace,
+	ret = glue_cap_lookup_dentry_type(cspace,
 					dentry_ref,
 					&dentry_container);
 	if (ret) {
@@ -1391,12 +1333,14 @@ int register_filesystem_callee(void)
 	struct module_container *module_container;
 	int ret;
 	cptr_t tx, rx;
-	struct fipc_ring_channel *chnl;
-	struct thc_channel_group_item *chnl_group_item;
+	struct thc_channel *chnl;
+	struct glue_cspace *cspace;
+	cptr_t sync_endpoint;
+	struct fs_info *fs_info;
 	/*
 	 * Set up a cspace for fs remote refs
 	 */
-	ret = glue_cap_create(&pmfs_cspace);
+	ret = glue_cap_create(&cspace);
 	if (ret) {
 		LIBLCD_ERR("failed to create glue cspace");
 		goto fail0;
@@ -1411,7 +1355,7 @@ int register_filesystem_callee(void)
 		goto fail1;
 	}
 	ret = glue_cap_insert_file_system_type_type(
-		pmfs_cspace,
+		cspace,
 		fs_container,
 		&fs_container->my_ref);
 	if (ret) {
@@ -1448,7 +1392,7 @@ int register_filesystem_callee(void)
 	module_container->module.state = MODULE_STATE_LIVE;
 	strcpy(module_container->module.name, "pmfs");
 	ret = glue_cap_insert_module_type(
-		pmfs_cspace,
+		cspace,
 		module_container,
 		&module_container->my_ref);
 	if (ret) {
@@ -1470,7 +1414,7 @@ int register_filesystem_callee(void)
 	fs_container->their_ref = __cptr(lcd_r1());
 	fs_container->file_system_type.name = "pmfs";
 	module_container->their_ref = __cptr(lcd_r2());
-	pmfs_sync_endpoint = lcd_cr0();
+	sync_endpoint = lcd_cr0();
 	tx = lcd_cr1();
 	rx = lcd_cr2();
 	/*
@@ -1480,26 +1424,29 @@ int register_filesystem_callee(void)
 	/*
 	 * Set up async ring channel
 	 */
-	ret = setup_async_fs_ring_channel(tx, rx, &chnl, &chnl_group_item);
+	ret = setup_async_fs_ring_channel(tx, rx, &chnl);
 	if (ret) {
 		LIBLCD_ERR("error setting up ring channel");
 		goto fail6;
 	}
 	/*
-	 * Store refs to fs-specific data so we can tear stuff down
-	 * in unregister_filesystem.
+	 * Add to dispatch loop
 	 */
-	fs_container->fs_async_chnl = chnl_group_item;
+	fs_info = add_fs(chnl, cspace, sync_endpoint);
+	if (!fs_info) {
+		LIBLCD_ERR("error adding to dispatch loop");
+		goto fail7;
+	}
 	/*
 	 * Set up fn pointer trampolines
 	 */
 	ret = setup_fs_type_trampolines(fs_container,
-					pmfs_cspace,
-					pmfs_sync_endpoint,
+					cspace,
+					sync_endpoint,
 					chnl);
 	if (ret) {
 		LIBLCD_ERR("error setting up trampolines");
-		goto fail7;
+		goto fail8;
 	}
 	/*
 	 * Call real function
@@ -1507,7 +1454,7 @@ int register_filesystem_callee(void)
 	ret = register_filesystem(&fs_container->file_system_type);
 	if (ret) {
 		LIBLCD_ERR("register fs failed");
-		goto fail8;
+		goto fail9;
 	}
 	LIBLCD_MSG("vfs called register fs");
 	/*
@@ -1522,22 +1469,25 @@ int register_filesystem_callee(void)
 	
 	goto out;
 
-fail8:
+fail9:
 	destroy_fs_type_trampolines(fs_container);
+fail8:
+	remove_fs(fs_info);
 fail7:
-	destroy_async_fs_ring_channel(chnl, chnl_group_item);
+	destroy_async_fs_ring_channel(chnl);
+	kfree(chnl);
 fail6:
-	glue_cap_remove(pmfs_cspace, module_container->my_ref);
+	glue_cap_remove(cspace, module_container->my_ref);
 fail5:
 	free_percpu(module_container->module.refptr);
 fail4:
 	kfree(module_container);
 fail3:
-	glue_cap_remove(pmfs_cspace, fs_container->my_ref);
+	glue_cap_remove(cspace, fs_container->my_ref);
 fail2:
 	kfree(fs_container);
 fail1:
-	glue_cap_destroy(pmfs_cspace);
+	glue_cap_destroy(cspace);
 fail0:
 	lcd_cap_delete(lcd_cr0());
 	lcd_cap_delete(lcd_cr1());
@@ -1558,7 +1508,9 @@ out:
 }
 
 int unregister_filesystem_callee(struct fipc_message *request,
-				struct fipc_ring_channel *channel)
+				struct thc_channel *channel,
+				struct glue_cspace *cspace,
+				cptr_t sync_endpoint)
 {
 	struct file_system_type_container *fs_container;
 	struct module_container *module_container;
@@ -1572,7 +1524,7 @@ int unregister_filesystem_callee(struct fipc_message *request,
 	 */
 	fs_ref = __cptr(fipc_get_reg0(request));
 	m_ref = __cptr(fipc_get_reg1(request));
-	ret = fipc_recv_msg_end(channel, request);
+	ret = fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 	if (ret) {
 		LIBLCD_ERR("failed to mark msg as recvd");
 		goto fail1;
@@ -1581,7 +1533,7 @@ int unregister_filesystem_callee(struct fipc_message *request,
 	 * Bind
 	 */
 	ret = glue_cap_lookup_file_system_type_type(
-		pmfs_cspace,
+		cspace,
 		fs_ref,
 		&fs_container);
 	if (ret) {
@@ -1589,7 +1541,7 @@ int unregister_filesystem_callee(struct fipc_message *request,
 		goto fail2;
 	}
 	ret = glue_cap_lookup_module_type(
-		pmfs_cspace,
+		cspace,
 		m_ref,
 		&module_container);
 	if (ret) {
@@ -1609,17 +1561,17 @@ int unregister_filesystem_callee(struct fipc_message *request,
 	 * Tear down everything
 	 */
 	destroy_fs_type_trampolines(fs_container);
-	lcd_cap_delete(pmfs_sync_endpoint);
+	lcd_cap_delete(sync_endpoint);
+	/* Marks thc_channel as dead; dispatch loop will free it */
 	destroy_async_fs_ring_channel(fs_container->fs_async_chnl->channel,
 				fs_container->fs_async_chnl);
-	glue_cap_remove(pmfs_cspace, fs_container->my_ref);
-	glue_cap_remove(pmfs_cspace, module_container->my_ref);
-	glue_cap_destroy(pmfs_cspace);
-	pmfs_cspace = NULL;
+	glue_cap_remove(cspace, fs_container->my_ref);
+	glue_cap_remove(cspace, module_container->my_ref);
+	glue_cap_destroy(cspace);
 	kfree(fs_container);
 	kfree(module_container);
 	/*
-	 * Do *not* reply; the channel was destroyed
+	 * Do *not* reply; the async channel was destroyed
 	 */
 	goto out;
 
@@ -1633,7 +1585,9 @@ out:
 }
 
 int bdi_init_callee(struct fipc_message *request,
-		struct fipc_ring_channel *channel)
+		struct thc_channel *channel,
+		struct glue_cspace *cspace,
+		cptr_t sync_endpoint)
 {
 	struct backing_dev_info_container *bdi_container;
 	int ret;
@@ -1650,7 +1604,7 @@ int bdi_init_callee(struct fipc_message *request,
 		goto fail1;
 	}
 	ret = glue_cap_insert_backing_dev_info_type(
-		pmfs_cspace,
+		cspace,
 		bdi_container,
 		&bdi_container->my_ref);
 	if (ret) {
@@ -1667,7 +1621,7 @@ int bdi_init_callee(struct fipc_message *request,
 	bdi_container->their_ref = __cptr(fipc_get_reg0(request));
 	bdi_container->backing_dev_info.ra_pages = fipc_get_reg1(request);
 	bdi_container->backing_dev_info.capabilities = fipc_get_reg2(request);
-	fipc_recv_msg_end(channel, request);
+	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 	/*
 	 * Invoke real function
 	 */
@@ -1683,7 +1637,7 @@ int bdi_init_callee(struct fipc_message *request,
 	goto out;
 
 fail3:
-	glue_cap_remove(pmfs_cspace, bdi_container->my_ref);
+	glue_cap_remove(cspace, bdi_container->my_ref);
 fail2:
 	kfree(bdi_container);
 fail1:
@@ -1702,7 +1656,9 @@ out:
 }
 
 int bdi_destroy_callee(struct fipc_message *request,
-		struct fipc_ring_channel *channel)
+		struct thc_channel *channel,
+		struct glue_cspace *cspace,
+		cptr_t sync_endpoint)
 {
 	struct backing_dev_info_container *bdi_container;
 	int ret;
@@ -1714,10 +1670,10 @@ int bdi_destroy_callee(struct fipc_message *request,
 	 */
 	ref = __cptr(fipc_get_reg0(request));
 
-	fipc_recv_msg_end(channel, request);
+	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 
 	ret = glue_cap_lookup_backing_dev_info_type(
-		pmfs_cspace,
+		cspace,
 		ref,
 		&bdi_container);
 	if (ret) {
@@ -1731,7 +1687,7 @@ int bdi_destroy_callee(struct fipc_message *request,
 	/*
 	 * Tear down container
 	 */
-	glue_cap_remove(pmfs_cspace, bdi_container->my_ref);
+	glue_cap_remove(cspace, bdi_container->my_ref);
 	kfree(bdi_container);
 
 	ret = 0;
@@ -1752,7 +1708,9 @@ out:
 }
 
 int iget_locked_callee(struct fipc_message *request,
-		struct fipc_ring_channel *channel)
+		struct thc_channel *channel,
+		struct glue_cspace *cspace,
+		cptr_t sync_endpoint)
 {
 	int ret;
 	struct super_block_container *sb_container;
@@ -1763,11 +1721,11 @@ int iget_locked_callee(struct fipc_message *request,
 	unsigned long ino = fipc_get_reg1(request);
 	uint32_t request_cookie = thc_get_request_cookie(request);
 
-	fipc_recv_msg_end(channel, request);
+	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 	/*
 	 * Look up our private sb
 	 */
-	ret = glue_cap_lookup_super_block_type(pmfs_cspace,
+	ret = glue_cap_lookup_super_block_type(cspace,
 					sb_ref,
 					&sb_container);
 	if (ret) {
@@ -1830,7 +1788,9 @@ out:
 }
 
 int truncate_inode_pages_callee(struct fipc_message *request,
-				struct fipc_ring_channel *channel)
+				struct thc_channel *channel,
+				struct glue_cspace *cspace,
+				cptr_t sync_endpoint)
 {
 	struct pmfs_inode_vfs_container *inode_container;
 	int ret;
@@ -1839,14 +1799,14 @@ int truncate_inode_pages_callee(struct fipc_message *request,
 	loff_t lstart = fipc_get_reg1(request);
 	uint32_t request_cookie = thc_get_request_cookie(request);
 	
-	fipc_recv_msg_end(channel, request);
+	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 
 	/*
 	 * (See notes for caller side)
 	 *
 	 * Look up our private inode object
 	 */
-	ret = glue_cap_lookup_pmfs_inode_vfs_type(pmfs_cspace,
+	ret = glue_cap_lookup_pmfs_inode_vfs_type(cspace,
 						inode_ref,
 						&inode_container);
 	if (ret) {
@@ -1879,7 +1839,9 @@ out:
 }
 
 int clear_inode_callee(struct fipc_message *request,
-		struct fipc_ring_channel *channel)
+		struct thc_channel *channel,
+		struct glue_cspace *cspace,
+		cptr_t sync_endpoint)
 {
 	struct pmfs_inode_vfs_container *inode_container;
 	int ret;
@@ -1887,11 +1849,11 @@ int clear_inode_callee(struct fipc_message *request,
 	struct fipc_message *response;
 	uint32_t request_cookie = thc_get_request_cookie(request);
 
-	fipc_recv_msg_end(channel, request);
+	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 	/*
 	 * Look up our private copy of the inode object
 	 */
-	ret = glue_cap_lookup_pmfs_inode_vfs_type(pmfs_cspace,
+	ret = glue_cap_lookup_pmfs_inode_vfs_type(cspace,
 						inode_ref,
 						&inode_container);
 	if (ret) {
@@ -1923,7 +1885,9 @@ out:
 }
 
 int iget_failed_callee(struct fipc_message *request,
-		struct fipc_ring_channel *channel)
+		struct thc_channel *channel,
+		struct glue_cspace *cspace,
+		cptr_t sync_endpoint)
 {
 	struct pmfs_inode_vfs_container *inode_container;
 	int ret;
@@ -1931,12 +1895,12 @@ int iget_failed_callee(struct fipc_message *request,
 	cptr_t inode_ref = __cptr(fipc_get_reg0(request));
 	uint32_t request_cookie = thc_get_request_cookie(request);
 
-	fipc_recv_msg_end(channel, request);
+	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 
 	/*
 	 * Look up our inode obj
 	 */
-	ret = glue_cap_lookup_pmfs_inode_vfs_type(pmfs_cspace,
+	ret = glue_cap_lookup_pmfs_inode_vfs_type(cspace,
 						inode_ref,
 						&inode_container);
 	if (ret) {
@@ -1968,7 +1932,9 @@ out:
 }
 
 int unlock_new_inode_callee(struct fipc_message *request,
-			struct fipc_ring_channel *channel)
+			struct thc_channel *channel,
+			struct glue_cspace *cspace,
+			cptr_t sync_endpoint)
 {
 	struct pmfs_inode_vfs_container *inode_container = NULL;
 	int ret;
@@ -1976,12 +1942,12 @@ int unlock_new_inode_callee(struct fipc_message *request,
 	struct fipc_message *response;
 	uint32_t request_cookie = thc_get_request_cookie(request);
 
-	fipc_recv_msg_end(channel, request);
+	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 
 	/*
 	 * Look up our inode obj
 	 */
-	ret = glue_cap_lookup_pmfs_inode_vfs_type(pmfs_cspace,
+	ret = glue_cap_lookup_pmfs_inode_vfs_type(cspace,
 						inode_ref,
 						&inode_container);
 	if (ret) {
@@ -2017,7 +1983,9 @@ out:
 }
 
 int d_make_root_callee(struct fipc_message *request,
-		struct fipc_ring_channel *channel)
+		struct thc_channel *channel,
+		struct glue_cspace *cspace,
+		cptr_t sync_endpoint)
 {
 	struct pmfs_inode_vfs_container *inode_container;
 	struct dentry_container *dentry_container = NULL;
@@ -2029,12 +1997,12 @@ int d_make_root_callee(struct fipc_message *request,
 	struct fipc_message *response;
 	uint32_t request_cookie = thc_get_request_cookie(request);
 	
-	fipc_recv_msg_end(channel, request);
+	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 
 	/*
 	 * Get our inode obj
 	 */
-	ret = glue_cap_lookup_pmfs_inode_vfs_type(pmfs_cspace,
+	ret = glue_cap_lookup_pmfs_inode_vfs_type(cspace,
 						inode_ref,
 						&inode_container);
 	if (ret) {
@@ -2060,7 +2028,7 @@ int d_make_root_callee(struct fipc_message *request,
 	/*
 	 * Install in cspace, set up refs
 	 */
-	ret = glue_cap_insert_dentry_type(pmfs_cspace,
+	ret = glue_cap_insert_dentry_type(cspace,
 					dentry_container,
 					&dentry_container->my_ref);
 	if (ret) {
@@ -2142,7 +2110,9 @@ fail1:
 }
 
 int mount_nodev_callee(struct fipc_message *request,
-		struct fipc_ring_channel *channel)
+		struct thc_channel *channel,
+		struct glue_cspace *cspace,
+		cptr_t sync_endpoint)
 {
 	struct file_system_type_container *fs_container;
 	struct mount_nodev_fill_super_container *fill_sup_container;
@@ -2161,12 +2131,12 @@ int mount_nodev_callee(struct fipc_message *request,
 	uint32_t request_cookie = thc_get_request_cookie(request);
 	struct fipc_message *response;
 
-	fipc_recv_msg_end(channel, request);
+	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 	/*
 	 * We also need to do a sync receive in order to get the void *data
 	 * argument
 	 */
-	ret = sync_mount_nodev_callee(pmfs_sync_endpoint,
+	ret = sync_mount_nodev_callee(sync_endpoint,
 				&data_cptr,
 				&data_gva,
 				&mem_order,
@@ -2178,7 +2148,7 @@ int mount_nodev_callee(struct fipc_message *request,
 	/*
 	 * Look up fs type
 	 */
-	ret = glue_cap_lookup_file_system_type_type(pmfs_cspace,
+	ret = glue_cap_lookup_file_system_type_type(cspace,
 						fs_type_ref,
 						&fs_container);
 	if (ret) {
@@ -2215,8 +2185,8 @@ int mount_nodev_callee(struct fipc_message *request,
 	}
 	fill_sup_args->t_handle->hidden_args = fill_sup_args;
 	fill_sup_args->struct_container = fill_sup_container;
-	fill_sup_args->fs_cspace = pmfs_cspace;
-	fill_sup_args->fs_sync_endpoint = pmfs_sync_endpoint;
+	fill_sup_args->fs_cspace = cspace;
+	fill_sup_args->fs_sync_endpoint = sync_endpoint;
 	fill_sup_args->fs_async_chnl = channel;
 	/*
 	 * Invoke real function
@@ -2284,7 +2254,9 @@ out:
 }
 
 int kill_anon_super_callee(struct fipc_message *request,
-			struct fipc_ring_channel *channel)
+			struct thc_channel *channel,
+			struct glue_cspace *cspace,
+			cptr_t sync_endpoint)
 {
 	struct super_block_container *sb_container;
 	int ret;
@@ -2292,11 +2264,11 @@ int kill_anon_super_callee(struct fipc_message *request,
 	cptr_t sb_ref = __cptr(fipc_get_reg0(request));
 	uint32_t request_cookie = thc_get_request_cookie(request);
 
-	fipc_recv_msg_end(channel, request);
+	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 	/*
 	 * Bind on our private super_block
 	 */
-	ret = glue_cap_lookup_super_block_type(pmfs_cspace,
+	ret = glue_cap_lookup_super_block_type(cspace,
 					sb_ref,
 					&sb_container);
 	if (ret) {
@@ -2307,7 +2279,7 @@ int kill_anon_super_callee(struct fipc_message *request,
 	 * super block is going to get freed during call to kill_anon_super;
 	 * remove from cspace before
 	 */
-	glue_cap_remove(pmfs_cspace, sb_container->my_ref);
+	glue_cap_remove(cspace, sb_container->my_ref);
 	/*
 	 * Call real function
 	 */

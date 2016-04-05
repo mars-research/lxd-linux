@@ -15,86 +15,189 @@
 
 #include <lcd_config/post_hook.h>
 
-/* LOOP -------------------------------------------------- */
+#define VFS_REGISTER_FREQ (0.2)
 
-static void loop(struct lcd_sync_channel_group *sync_group,
-		struct thc_channel_group *async_group)
+struct fs_info {
+	struct thc_channel *chnl;
+	struct glue_cspace *cspace;
+	cptr_t sync_endpoint;
+	struct list_head list;
+};
+static LIST_HEAD(fs_asyncs);
+
+struct fs_info * 
+add_fs(struct thc_channel *chnl, struct glue_cspace *cspace,
+	cptr_t sync_endpoint)
 {
-	struct lcd_sync_channel_group_item *sync_chnl = NULL;
-	struct thc_channel_group_item *async_chnl = NULL;
-	struct fipc_message *async_msg;
+	struct fs_info *fs_info;
 	int ret;
-	int count = 0;
-	int stop = 0;
-	/*
-	 * Listen once for PMFS register call. (In the future, we should
-	 * periodically poll on the vfs channel for register fs calls
-	 * from other isolated file systems. We have the infrastructure
-	 * for it - use lcd_sync_channel_group_poll instead - but we don't
-	 * use it for now.)
-	 */
-	count += 1;
-	ret = lcd_sync_channel_group_recv(sync_group, sync_chnl, &sync_chnl);
-	if (ret) {
-		LIBLCD_ERR("lcd sync recv failed");
-		return;
-	}
-	/*
-	 * Handle register fs message. This should add an async channel
-	 * to the async group.
-	 */
-	ret = sync_chnl->dispatch_fn(sync_chnl);
-	if (ret) {
-		LIBLCD_ERR("sync channel dispatch failed");
-		return;
-	}
-	/*
-	 * Listen on async group
-	 *
-	 * We may be able to fix this - but the ASYNC macros need to be
-	 * syntactically nested under the DO_FINISH macro (i.e., we can't
-	 * call a helper to do the body of the loop). 
-	 */
-	DO_FINISH(
-		/*
-		 * We use a variable to control when to abort the
-		 * loop. Calling "break" inside an async just 
-		 * exits out of the do { } while inside that macro;
-		 * it doesn't break out of this loop. Furthermore,
-		 * we could have blocked while running the async.
-		 */
-		while (!stop && !list_empty(&async_group->head)) {
+	
+	fs_info = kmalloc(sizeof(*fs_info), GFP_KERNEL);
+	if (!fs_info)
+		goto fail1;
+	fs_info->chnl = chnl;
+	fs_info->cspace = cspace;
+	fs_info->sync_endpoint = sync_endpoint;
+	INIT_LIST_HEAD(&fs_info->list);
+	list_add(&fs_info->list, &fs_infos);
+
+	return fs_info;
+
+fail1:
+	return NULL;
+}
+
+void remove_fs(struct fs_info *fs)
+{
+	list_del_init(&fs_info->list);
+	kfree(fs);
+}
+
+/* LOOP ------------------------------------------------------------ */
+
+static int async_loop(struct fs_info *fs_out, struct fipc_message **msg_out)
+{
+	struct fs_info *cursor, *next;
+	int ret;
+
+	list_for_each_safe(cursor, next, struct fs_info, list) {
+
+		ret = thc_ipc_poll_recv(cursor->chnl, msg_out);
+		if (ret == -EPIPE) {
 			/*
-			 * Do one async receive
+			 * fs channel is dead; free the channel,
+			 * and remove from list
 			 */
-			ret = thc_poll_recv_group(async_group,
-						&async_chnl,
-						&async_msg);
-			if (ret) {
-				if (ret == -EWOULDBLOCK)
-					continue;
-				else {
-					LIBLCD_ERR("async recv failed");
+			kfree(cursor->chnl);
+			remove_fs(cursor);
+		} else if (ret == -EWOULDBLOCK) {
+			/*
+			 * Skip over empty channels
+			 */
+			continue;
+		} else if (ret) {
+			/*
+			 * Unexpected error
+			 */
+			LIBLCD_ERR("error ret = %d on async channel");
+			return ret;
+		} else {
+			/*
+			 * Got a msg
+			 */
+			*fs_out = cursor;
+			return 0;
+		}
+
+	}
+	/*
+	 * Nothing for us to recv right now
+	 */
+	return -EWOULDBLOCK;
+}
+
+static int do_one_register(cptr_t register_chnl)
+{
+	int ret;
+	cptr_t sync_endpoint, tx, rx;
+	/*
+	 * Set up cptrs
+	 */
+	ret = lcd_cptr_alloc(&sync_endpoint);
+	if (ret) {
+		LIBLCD_ERR("cptr alloc failed");
+		goto fail1;
+	}
+	ret = lcd_cptr_alloc(&tx);
+	if (ret) {
+		LIBLCD_ERR("cptr alloc failed");
+		goto fail2;
+	}
+	ret = lcd_cptr_alloc(&rx);
+	if (ret) {
+		LIBLCD_ERR("cptr alloc failed");
+		goto fail3;
+	}
+	/*
+	 * Set up regs and poll
+	 */
+	lcd_set_cr0(sync_endpoint);
+	lcd_set_cr1(tx);
+	lcd_set_cr2(rx);
+	ret = lcd_sync_poll_recv(register_chnl);
+	if (ret) {
+		if (ret == -EWOULDBLOCK)
+			ret = 0;
+		goto free_cptrs;
+	}
+	/*
+	 * Dispatch to register handler
+	 */
+	ret = dispatch_sync_vfs_channel();
+	if (ret)
+		return ret; /* dispatch fn is responsible for cptr cleanup */
+
+	return 0;
+
+free_cptrs:
+
+	lcd_cptr_free(sync_endpoint);
+	lcd_cptr_free(tx);
+	lcd_cptr_free(rx);
+	lcd_set_cr0(CAP_CPTR_NULL);
+	lcd_set_cr1(CAP_CPTR_NULL);
+	lcd_set_cr2(CAP_CPTR_NULL);
+
+	return ret;
+}
+
+static void loop(cptr_t register_chnl)
+{
+	unsigned long tics = jiffies + VFS_REGISTER_FREQ * HZ;
+	int stop = 0;
+	int ret;
+
+	DO_FINISH(
+
+		while (!stop) {
+
+			if (jiffies >= tics) {
+				/*
+				 * Listen for a register call
+				 */
+				ret = do_one_register(register_chnl);
+				if (ret) {
+					LIBLCD_ERR("register error");
 					break;
 				}
+				tics = jiffies + VFS_REGISTER_FREQ * HZ;
+				continue;
 			}
-			/*
-			 * Got a message. Dispatch.
-			 */
-			ASYNC({
-					ret = async_chnl->dispatch_fn(async_chnl->channel, 
-								async_msg);
+
+			ret = async_loop(&fs, &msg);
+			if (!ret) {
+				ASYNC(
+					ret = fs->dispatch(fs->chnl, 
+							fs->cspace,
+							fs->sync_endpoint,
+							msg);
 					if (ret) {
-						LIBLCD_ERR("async dispatch failed");
+						LIBLCD_ERR("fs dispatch err");
+						/* (break won't work here) */
 						stop = 1;
 					}
-				});
+					);
+			} else if (ret != -EWOULDBLOCK) {
+				LIBLCD_ERR("async loop failed");
+				break;
+			}
 
 			if (kthread_should_stop()) {
-				LIBLCD_ERR("kthread should stop");
+				LIBLCD_MSG("kthread should stop");
 				stop = 1;
 			}
 		}
+
 		);
 
 	LIBLCD_MSG("EXITED VFS DO_FINISH");
@@ -103,9 +206,6 @@ static void loop(struct lcd_sync_channel_group *sync_group,
 }
 
 /* INIT / EXIT ---------------------------------------- */
-
-static struct lcd_sync_channel_group sync_group;
-static struct thc_channel_group async_group;
 
 static int vfs_klcd_init(void) 
 {
@@ -128,36 +228,26 @@ static int vfs_klcd_init(void)
 		goto fail2;
 	}
 	/*
-	 * Init sync and async channel groups
-	 */
-	ret = thc_channel_group_init(&async_group);
-	if (ret) {
-		LIBLCD_ERR("async channel group init failed");
-		goto fail3;
-	}
-	lcd_sync_channel_group_init(&sync_group);
-	/*
 	 * Init vfs glue
 	 */
-	ret = glue_vfs_init(vfs_chnl, &sync_group, &async_group);
+	ret = glue_vfs_init();
 	if (ret) {
 		LIBLCD_ERR("vfs init");
-		goto fail4;
+		goto fail3;
 	}
 	/*
 	 * Enter sync/async dispatch loop
 	 */
-	loop(&sync_group, &async_group);
+	loop(vfs_chnl);
 	/*
 	 * Tear down vfs glue
 	 */
-	glue_vfs_exit(&sync_group, &async_group);
+	glue_vfs_exit();
 
 	lcd_exit(0);
 	
 	return 0;
 
-fail4:
 fail3:
 fail2:
 	lcd_exit(ret);

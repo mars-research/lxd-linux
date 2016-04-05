@@ -56,8 +56,6 @@ struct file_system_type_container {
 	struct file_system_type file_system_type;
 	cptr_t my_ref;
 	cptr_t their_ref;
-	/* Used on vfs side: */
-	struct thc_channel_group_item *fs_async_chnl;
 };
 
 struct backing_dev_info_container {
@@ -208,13 +206,13 @@ async_msg_set_fn_type(struct fipc_message *msg, int type)
 
 static inline
 int
-async_msg_blocking_send_start(struct fipc_ring_channel *chnl, 
+async_msg_blocking_send_start(struct thc_channel *chnl, 
 			struct fipc_message **out)
 {
 	int ret;
 	for (;;) {
 		/* Poll until we get a free slot or error */
-		ret = fipc_send_msg_start(chnl, out);
+		ret = fipc_send_msg_start(thc_channel_to_fipc(chnl), out);
 		if (!ret || ret != -EWOULDBLOCK)
 			return ret;
 		cpu_relax();
