@@ -23,14 +23,13 @@ struct fs_info {
 	cptr_t sync_endpoint;
 	struct list_head list;
 };
-static LIST_HEAD(fs_asyncs);
+static LIST_HEAD(fs_infos);
 
 struct fs_info * 
 add_fs(struct thc_channel *chnl, struct glue_cspace *cspace,
 	cptr_t sync_endpoint)
 {
 	struct fs_info *fs_info;
-	int ret;
 	
 	fs_info = kmalloc(sizeof(*fs_info), GFP_KERNEL);
 	if (!fs_info)
@@ -49,18 +48,18 @@ fail1:
 
 void remove_fs(struct fs_info *fs)
 {
-	list_del_init(&fs_info->list);
+	list_del_init(&fs->list);
 	kfree(fs);
 }
 
 /* LOOP ------------------------------------------------------------ */
 
-static int async_loop(struct fs_info *fs_out, struct fipc_message **msg_out)
+static int async_loop(struct fs_info **fs_out, struct fipc_message **msg_out)
 {
 	struct fs_info *cursor, *next;
 	int ret;
 
-	list_for_each_safe(cursor, next, struct fs_info, list) {
+	list_for_each_entry_safe(cursor, next, &fs_infos, list) {
 
 		ret = thc_ipc_poll_recv(cursor->chnl, msg_out);
 		if (ret == -EPIPE) {
@@ -140,20 +139,23 @@ static int do_one_register(cptr_t register_chnl)
 	return 0;
 
 free_cptrs:
-
-	lcd_cptr_free(sync_endpoint);
-	lcd_cptr_free(tx);
-	lcd_cptr_free(rx);
 	lcd_set_cr0(CAP_CPTR_NULL);
 	lcd_set_cr1(CAP_CPTR_NULL);
 	lcd_set_cr2(CAP_CPTR_NULL);
-
+	lcd_cptr_free(sync_endpoint);
+fail3:
+	lcd_cptr_free(tx);
+fail2:
+	lcd_cptr_free(rx);
+fail1:
 	return ret;
 }
 
 static void loop(cptr_t register_chnl)
 {
 	unsigned long tics = jiffies + VFS_REGISTER_FREQ * HZ;
+	struct fipc_message *msg;
+	struct fs_info *fs;
 	int stop = 0;
 	int ret;
 
@@ -177,10 +179,11 @@ static void loop(cptr_t register_chnl)
 			ret = async_loop(&fs, &msg);
 			if (!ret) {
 				ASYNC(
-					ret = fs->dispatch(fs->chnl, 
-							fs->cspace,
-							fs->sync_endpoint,
-							msg);
+					ret = dispatch_async_vfs_channel(
+						fs->chnl, 
+						msg,
+						fs->cspace,
+						fs->sync_endpoint);
 					if (ret) {
 						LIBLCD_ERR("fs dispatch err");
 						/* (break won't work here) */

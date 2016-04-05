@@ -29,9 +29,9 @@ int dispatch_sync_vfs_channel(void)
 }
 
 int dispatch_async_vfs_channel(struct thc_channel *channel, 
+			struct fipc_message *message,
 			struct glue_cspace *cspace,
-			cptr_t sync_endpoint,
-			struct fipc_message *message)
+			cptr_t sync_endpoint)
 {
 	int fn_type = async_msg_get_fn_type(message);
 	switch (fn_type) {

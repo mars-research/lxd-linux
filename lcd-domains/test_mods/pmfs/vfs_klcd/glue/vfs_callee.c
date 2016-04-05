@@ -80,7 +80,7 @@ static void destroy_async_fs_ring_channel(struct thc_channel *chnl)
 	 * Mark thc channel as dead so that dispatch loop will remove
 	 * it
 	 */
-	thc_channel_mark_as_dead(chnl);
+	thc_channel_mark_dead(chnl);
 
 	return;
 
@@ -146,7 +146,6 @@ static int setup_async_fs_ring_channel(cptr_t tx, cptr_t rx,
 	*chnl_out = chnl;
 	return 0;
 
-fail7:
 fail6:
 	kfree(chnl);
 fail5:
@@ -232,7 +231,8 @@ super_block_alloc_inode(struct super_block *super_block,
 	}
 	inode_container->their_ref = __cptr(fipc_get_reg0(response));
 
-	fipc_recv_msg_end(hidden_args->fs_async_chnl, response);
+	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->fs_async_chnl), 
+			response);
 
 	/*
 	 * HACK: Invoke inode_init_once on our private copy
@@ -244,7 +244,8 @@ super_block_alloc_inode(struct super_block *super_block,
 	return &inode_container->pmfs_inode_vfs.vfs_inode;
 
 fail5:
-	fipc_recv_msg_end(hidden_args->fs_async_chnl, response);
+	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->fs_async_chnl), 
+			response);
 fail4:
 fail3:
 	glue_cap_remove(hidden_args->fs_cspace, inode_container->my_ref);
@@ -316,7 +317,8 @@ super_block_destroy_inode(struct inode *inode,
 	/*
 	 * Nothing in reply
 	 */
-	fipc_recv_msg_end(hidden_args->fs_async_chnl, response);
+	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->fs_async_chnl), 
+			response);
 
 	goto out;
 
@@ -394,7 +396,8 @@ super_block_evict_inode(struct inode *inode,
 	/*
 	 * Nothing in reply
 	 */
-	fipc_recv_msg_end(hidden_args->fs_async_chnl, response);
+	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->fs_async_chnl), 
+			response);
 
 	goto out;
 
@@ -456,7 +459,8 @@ super_block_put_super(struct super_block *sb,
 	/*
 	 * Nothing in reply
 	 */
-	fipc_recv_msg_end(hidden_args->fs_async_chnl, response);
+	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->fs_async_chnl), 
+			response);
 
 	goto out;
 
@@ -605,7 +609,8 @@ mount_nodev_fill_super(struct super_block *sb,
 	s_flags = fipc_get_reg2(response);
 	dentry_ref = __cptr(fipc_get_reg3(response));
 
-	fipc_recv_msg_end(hidden_args->fs_async_chnl, response);
+	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->fs_async_chnl), 
+			response);
 
 	if (ret) {
 		LIBLCD_ERR("remote fill_super failed");
@@ -912,13 +917,14 @@ file_system_type_mount(struct file_system_type *fs_type,
 	 */
 	dentry_ref = __cptr(fipc_get_reg0(response));
 
-	fipc_recv_msg_end(hidden_args->fs_async_chnl, response);
+	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->fs_async_chnl), 
+			response);
 
 	if (cptr_is_null(dentry_ref)) {
 		LIBLCD_ERR("dentry from remote is null");
 		goto fail6;
 	}
-	ret = glue_cap_lookup_dentry_type(cspace,
+	ret = glue_cap_lookup_dentry_type(hidden_args->fs_cspace,
 					dentry_ref,
 					&dentry_container);
 	if (ret) {
@@ -1024,7 +1030,8 @@ file_system_type_kill_sb(struct super_block *sb,
 	/*
 	 * Nothing in response
 	 */
-	fipc_recv_msg_end(hidden_args->fs_async_chnl, response);
+	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->fs_async_chnl), 
+			response);
 	/*
 	 * sb_container is now invalid (was freed)
 	 */
@@ -1074,7 +1081,7 @@ static void setup_rest_of_args(struct trampoline_hidden_args *args,
 			void *struct_container,
 			struct glue_cspace *fs_cspace,
 			cptr_t fs_sync_endpoint,
-			struct fipc_ring_channel *fs_async_chnl)
+			struct thc_channel *fs_async_chnl)
 {
 	args->t_handle->hidden_args = args;
 	args->struct_container = struct_container;
@@ -1122,7 +1129,7 @@ static void destroy_sb_trampolines(struct super_operations *s_ops)
 static int setup_sb_trampolines(struct super_block_container *sb_container,
 				struct glue_cspace *fs_cspace,
 				cptr_t fs_sync_endpoint,
-				struct fipc_ring_channel *fs_async_chnl)
+				struct thc_channel *fs_async_chnl)
 {
 	struct super_operations *s_ops;
 	struct trampoline_hidden_args *alloc_args, *destroy_args,
@@ -1266,7 +1273,7 @@ static int setup_fs_type_trampolines(
 	struct file_system_type_container *fs_container,
 	struct glue_cspace *fs_cspace,
 	cptr_t fs_sync_endpoint,
-	struct fipc_ring_channel *fs_async_chnl)
+	struct thc_channel *fs_async_chnl)
 {
 	struct trampoline_hidden_args *mount_args, *kill_sb_args;
 	int ret;
@@ -1563,8 +1570,7 @@ int unregister_filesystem_callee(struct fipc_message *request,
 	destroy_fs_type_trampolines(fs_container);
 	lcd_cap_delete(sync_endpoint);
 	/* Marks thc_channel as dead; dispatch loop will free it */
-	destroy_async_fs_ring_channel(fs_container->fs_async_chnl->channel,
-				fs_container->fs_async_chnl);
+	destroy_async_fs_ring_channel(channel);
 	glue_cap_remove(cspace, fs_container->my_ref);
 	glue_cap_remove(cspace, module_container->my_ref);
 	glue_cap_destroy(cspace);

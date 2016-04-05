@@ -148,7 +148,6 @@ static int setup_async_channel(cptr_t *buf1_cptr_out, cptr_t *buf2_cptr_out,
 	*buf1_cptr_out = buf1_cptr;
 	*buf2_cptr_out = buf2_cptr;
 	*chnl_out = chnl;
-	*chnl_group_item_out = chnl_group_item;
 
 	return 0;
 
@@ -206,7 +205,7 @@ static void destroy_async_channel(struct thc_channel *chnl)
 	/*
 	 * Remove and free async channel group item
 	 */
-	thc_channel_mark_as_dead(chnl);
+	thc_channel_mark_dead(chnl);
 
 	return;
 
@@ -307,7 +306,7 @@ int register_filesystem(struct file_system_type *fs)
 	/*
 	 * Kick off async recv
 	 */
-	vfs_async_channel = chnl;
+	vfs_async_chnl = chnl;
 
 	return ret;
 
@@ -319,7 +318,7 @@ fail4:
 fail3:
 	destroy_async_channel(chnl);
 fail2:
-	lcd_cap_delete(sync_endpoint);
+	lcd_cap_delete(vfs_sync_endpoint);
 fail1:
 	return ret;
 }

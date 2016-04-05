@@ -19,8 +19,8 @@ int dispatch_async_vfs_channel(struct thc_channel *chnl,
 			struct glue_cspace *cspace,
 			cptr_t sync_endpoint);
 
-int add_fs(struct thc_channel *chnl, struct glue_cspace *cspace,
-	cptr_t sync_endpoint);
+struct fs_info* add_fs(struct thc_channel *chnl, struct glue_cspace *cspace,
+		cptr_t sync_endpoint);
 
 struct fs_info;
 void remove_fs(struct fs_info *fs);

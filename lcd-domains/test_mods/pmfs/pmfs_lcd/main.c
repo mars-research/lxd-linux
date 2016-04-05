@@ -13,8 +13,8 @@
 #include <lcd_config/post_hook.h>
 
 cptr_t vfs_register_channel;
-struct thc_channel *vfs_async_channel;
-struct glue_cspace *vfs_space;
+struct thc_channel *vfs_async_chnl;
+struct glue_cspace *vfs_cspace;
 cptr_t vfs_sync_endpoint;
 
 /* LOOP ---------------------------------------- */
@@ -26,7 +26,7 @@ static int do_one_async(void)
 	/*
 	 * Do one async receive
 	 */
-	ret = thc_ipc_poll_recv(vfs_async_channel, &msg);
+	ret = thc_ipc_poll_recv(vfs_async_chnl, &msg);
 	if (ret) {
 		if (ret == -EWOULDBLOCK)
 			return 0;
@@ -34,7 +34,7 @@ static int do_one_async(void)
 			/*
 			 * Channel is dead
 			 */
-			kfree(vfs_async_channel);
+			kfree(vfs_async_chnl);
 			return 1; /* stop */
 		} else {
 			LIBLCD_ERR("async recv failed");
@@ -44,8 +44,8 @@ static int do_one_async(void)
 	/*
 	 * Got a message. Dispatch.
 	 */
-	ret = dispatch_fs_channel(vfs_async_channel, msg,
-				vfs_space, vfs_sync_endpoint);
+	ret = dispatch_fs_channel(vfs_async_chnl, msg,
+				vfs_cspace, vfs_sync_endpoint);
 	if (ret)
 		LIBLCD_ERR("async dispatch failed");
 
@@ -54,7 +54,6 @@ static int do_one_async(void)
 
 static void main_and_loop(void)
 {
-	struct fipc_message *async_msg;
 	int ret;
 	int stop = 0;
 
@@ -76,7 +75,7 @@ static void main_and_loop(void)
 
 		ASYNC(
 			/* Wait until async channel is ready */
-			while (!pmfs_async_channel)
+			while (!vfs_async_chnl)
 				THCYield();
 			while (!stop)
 				stop = do_one_async();
@@ -109,7 +108,7 @@ static int __noreturn pmfs_lcd_init(void)
 	r = glue_vfs_init();
 	if (r) {
 		LIBLCD_ERR("vfs init");
-		goto fail3;
+		goto fail2;
 	}
 
 	/* RUN CODE / LOOP ---------------------------------------- */
@@ -122,7 +121,6 @@ static int __noreturn pmfs_lcd_init(void)
 
 	lcd_exit(0); /* doesn't return */
 
-fail3:
 fail2:
 fail1:
 	lcd_exit(r);
