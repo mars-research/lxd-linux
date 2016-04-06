@@ -77,10 +77,15 @@ static void destroy_async_fs_ring_channel(struct thc_channel *chnl)
 	 */
 	kfree(thc_channel_to_fipc(chnl));
 	/*
-	 * Mark thc channel as dead so that dispatch loop will remove
-	 * it
+	 * Free the thc channel
+	 *
+	 * XXX: We are assuming this is called *from the dispatch loop*
+	 * (i.e., as part of handling a callee function), so no one
+	 * else (no other awe) is going to try to use the channel
+	 * after we kill it. (For the PMFS LCD, this is not possible,
+	 * because the unregister happens from a *caller context*.)
 	 */
-	thc_channel_mark_dead(chnl);
+	kfree(chnl);
 
 	return;
 
@@ -1444,6 +1449,7 @@ int register_filesystem_callee(void)
 		LIBLCD_ERR("error adding to dispatch loop");
 		goto fail7;
 	}
+	fs_container->fs_info = fs_info;
 	/*
 	 * Set up fn pointer trampolines
 	 */
@@ -1463,7 +1469,6 @@ int register_filesystem_callee(void)
 		LIBLCD_ERR("register fs failed");
 		goto fail9;
 	}
-	LIBLCD_MSG("vfs called register fs");
 	/*
 	 * Reply with:
 	 *
@@ -1523,6 +1528,8 @@ int unregister_filesystem_callee(struct fipc_message *request,
 	struct module_container *module_container;
 	int ret;
 	cptr_t fs_ref, m_ref;
+	uint32_t request_cookie = thc_get_request_cookie(request);
+	struct fipc_message *response;
 	/*
 	 * Unmarshal refs:
 	 *
@@ -1563,21 +1570,8 @@ int unregister_filesystem_callee(struct fipc_message *request,
 		LIBLCD_ERR("unregister fs");
 		goto fail4;
 	}
-	LIBLCD_MSG("vfs called unregister fs");
 	/*
-	 * Tear down everything
-	 */
-	destroy_fs_type_trampolines(fs_container);
-	lcd_cap_delete(sync_endpoint);
-	/* Marks thc_channel as dead; dispatch loop will free it */
-	destroy_async_fs_ring_channel(channel);
-	glue_cap_remove(cspace, fs_container->my_ref);
-	glue_cap_remove(cspace, module_container->my_ref);
-	glue_cap_destroy(cspace);
-	kfree(fs_container);
-	kfree(module_container);
-	/*
-	 * Do *not* reply; the async channel was destroyed
+	 * Reply with unregister fs return value
 	 */
 	goto out;
 
@@ -1586,6 +1580,33 @@ fail3:
 fail2:
 fail1:
 out:
+	/*
+	 * Reply
+	 */
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+
+	fipc_set_reg0(response, ret);
+
+	thc_ipc_reply(channel, request_cookie, response);
+
+	if (!ret) {
+		/*
+		 * unregister fs was successful; tear everything down
+		 */
+		destroy_fs_type_trampolines(fs_container);
+		lcd_cap_delete(sync_endpoint);
+		/* Marks thc_channel as dead; dispatch loop will free it */
+		destroy_async_fs_ring_channel(channel);
+		remove_fs(fs_container->fs_info);
+		glue_cap_remove(cspace, fs_container->my_ref);
+		glue_cap_remove(cspace, module_container->my_ref);
+		glue_cap_destroy(cspace);
+		kfree(fs_container);
+		kfree(module_container);
+	}
 
 	return ret;
 }

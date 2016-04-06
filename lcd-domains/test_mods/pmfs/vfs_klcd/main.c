@@ -199,9 +199,24 @@ static void loop(cptr_t register_chnl)
 				LIBLCD_MSG("kthread should stop");
 				stop = 1;
 			}
+
+#ifndef CONFIG_PREEMPT
+			/*
+			 * Play nice with the rest of the system
+			 */
+			cond_resched();
+#endif
 		}
 
 		);
+
+	/* 
+	 * NOTE: If the vfs klcd quits / is killed before 
+	 * unregister_filesystem runs, it could cause some proc fs
+	 * crap to crash (the struct file_system_type is still in
+	 * the registered fs list, but e.g. the const char *name just
+	 * went bye-bye when we unloaded the vfs's .ko.)
+	 */
 
 	LIBLCD_MSG("EXITED VFS DO_FINISH");
 

@@ -336,7 +336,6 @@ int unregister_filesystem(struct file_system_type *fs)
 	module_container = container_of(fs->owner,
 					struct module_container,
 					module);
-	LIBLCD_MSG("pmfs in unreg fs");
 	/*
 	 * Marshal and do rpc.
 	 *
@@ -351,7 +350,7 @@ int unregister_filesystem(struct file_system_type *fs)
 	async_msg_set_fn_type(request, UNREGISTER_FILESYSTEM);
 	fipc_set_reg0(request, cptr_val(fs_container->their_ref));
 	fipc_set_reg1(request, cptr_val(module_container->their_ref));
-
+	
 	ret = thc_ipc_call(vfs_async_chnl, request, &response);
 	if (ret) {
 		LIBLCD_ERR("async call failed");

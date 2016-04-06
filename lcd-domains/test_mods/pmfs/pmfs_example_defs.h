@@ -52,10 +52,13 @@ enum {
 
 /* STRUCT DEFS -------------------------------------------------- */
 
+struct fs_info;
 struct file_system_type_container {
 	struct file_system_type file_system_type;
 	cptr_t my_ref;
 	cptr_t their_ref;
+	/* We need this on the vfs side: */
+	struct fs_info *fs_info;
 };
 
 struct backing_dev_info_container {
