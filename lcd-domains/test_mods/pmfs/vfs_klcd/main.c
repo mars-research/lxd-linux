@@ -25,6 +25,8 @@ struct fs_info {
 };
 static LIST_HEAD(fs_infos);
 
+int pmfs_ready;
+
 struct fs_info * 
 add_fs(struct thc_channel *chnl, struct glue_cspace *cspace,
 	cptr_t sync_endpoint)
@@ -151,6 +153,42 @@ fail1:
 	return ret;
 }
 
+static void do_pmfs_test(void)
+{
+	int ret;
+	struct file_system_type *pmfs_fs_type;
+	struct dentry *dentry;
+
+	pmfs_fs_type = get_fs_type("pmfs");
+	if (!pmfs_fs_type) {
+		LIBLCD_ERR("couldn't get pmfs fs type");
+		ret = -EIO;
+		goto fail1;
+	}
+
+	dentry = pmfs_fs_type->mount(pmfs_fs_type,
+				0,
+				"/not/used",
+				"physaddr=0x100000000,init=2G");
+	if (!dentry) {
+		LIBLCD_ERR("error mounting pmfs?");
+		ret = -EIO;
+		goto fail2;
+	}
+	LIBLCD_MSG("vfs mounted pmfs");
+
+	pmfs_fs_type->kill_sb(dentry->d_sb);
+	LIBLCD_MSG("vfs unmounted pmfs");
+
+	put_filesystem(pmfs_fs_type); /* release reference */
+			
+	return 0;
+
+fail2:
+fail1:
+	return ret;
+}
+
 static void loop(cptr_t register_chnl)
 {
 	unsigned long tics = jiffies + VFS_REGISTER_FREQ * HZ;
@@ -174,6 +212,13 @@ static void loop(cptr_t register_chnl)
 				}
 				tics = jiffies + VFS_REGISTER_FREQ * HZ;
 				continue;
+			}
+
+			if (pmfs_ready) {
+				pmfs_ready = 0;
+				ASYNC(
+					stop = do_pmfs_test();
+					);
 			}
 
 			ret = async_loop(&fs, &msg);
