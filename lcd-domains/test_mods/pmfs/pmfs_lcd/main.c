@@ -16,6 +16,7 @@ cptr_t vfs_register_channel;
 struct thc_channel *vfs_async_chnl;
 struct glue_cspace *vfs_cspace;
 cptr_t vfs_sync_endpoint;
+int pmfs_done;
 
 /* LOOP ---------------------------------------- */
 
@@ -68,6 +69,8 @@ static void main_and_loop(void)
 				LIBLCD_MSG("SUCCESSFULLY REGISTERED PMFS!");
 			}
 
+			while (!pmfs_done)
+				THCYield();
 			exit_pmfs_fs();
 			LIBLCD_MSG("SUCCESSFULLY UNREGISTERED PMFS!");
 

@@ -11,8 +11,23 @@
 
 #include <libcap.h>
 #include <liblcd/liblcd.h>
+#include <linux/fs.h>
 
 #include <lcd_config/post_hook.h>
+
+
+static void force_pmfs_unreg(void)
+{
+	struct file_system_type *pmfs_fs_type;
+
+	pmfs_fs_type = get_fs_type("pmfs");
+	if (!pmfs_fs_type)
+		return;
+
+	LIBLCD_MSG("vfs forcing pmfs unregister");
+
+	unregister_filesystem(pmfs_fs_type);
+}
 
 static int boot_main(void)
 {
@@ -133,6 +148,11 @@ destroy_both:
 	lcd_cap_delete(lcd);
 	lcd_destroy_create_ctx(ctx);
 destroy_vfs:
+	/*
+	 * While we debug, make sure pmfs is no longer registered,
+	 * even if we failed, so we don't crash
+	 */
+	force_pmfs_unreg();
 	lcd_destroy_module_klcd(vfs, "lcd_test_mod_pmfs_vfs");
 lcd_exit:
 	/* frees endpoint */

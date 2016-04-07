@@ -15,8 +15,11 @@
 #include <linux/ctype.h>
 #include <linux/log2.h>
 #include "../internal.h"
+#include <asm/cacheflush.h>
 
 #include <lcd_config/post_hook.h>
+
+extern int pmfs_ready;
 
 /* GLUE SUPPORT -------------------------------------------------- */
 
@@ -842,6 +845,8 @@ file_system_type_mount(struct file_system_type *fs_type,
 	struct fipc_message *request, *response;
 	uint32_t request_cookie;
 
+	LIBLCD_MSG("vfs called mount");
+
 	fs_container = container_of(fs_type,
 				struct file_system_type_container,
 				file_system_type);
@@ -853,6 +858,8 @@ file_system_type_mount(struct file_system_type *fs_type,
 		LIBLCD_ERR("failed to volunteer fs memory");
 		goto fail0;
 	}
+
+	LIBLCD_MSG("vfs set up fs mem");
 	/*
 	 * Volunteer memory that contains void *data
 	 */
@@ -861,6 +868,8 @@ file_system_type_mount(struct file_system_type *fs_type,
 		LIBLCD_ERR("error volunteering void *data arg");
 		goto fail1;
 	}
+
+	LIBLCD_MSG("vfs set up data");
 	/*
 	 * Do async part:
 	 *
@@ -887,6 +896,8 @@ file_system_type_mount(struct file_system_type *fs_type,
 		LIBLCD_ERR("error sending request");
 		goto fail3;
 	}
+
+	LIBLCD_MSG("vfs sent async msg");
 	/*
 	 * Do sync part:
 	 *
@@ -908,6 +919,8 @@ file_system_type_mount(struct file_system_type *fs_type,
 		LIBLCD_ERR("call error");
 		goto fail4;
 	}
+
+	LIBLCD_MSG("vfs sent sync msg");
 	/*
 	 * Get *async* response
 	 */
@@ -925,6 +938,8 @@ file_system_type_mount(struct file_system_type *fs_type,
 	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->fs_async_chnl), 
 			response);
 
+	LIBLCD_MSG("vfs got mount async response");
+
 	if (cptr_is_null(dentry_ref)) {
 		LIBLCD_ERR("dentry from remote is null");
 		goto fail6;
@@ -936,6 +951,9 @@ file_system_type_mount(struct file_system_type *fs_type,
 		LIBLCD_ERR("couldn't find dentry");
 		goto fail7;
 	}
+	
+	LIBLCD_MSG("in mount: dentry sb is %p",
+		dentry_container->dentry.d_sb);
 	/*
 	 * Unvolunteer void *data
 	 */
@@ -1006,6 +1024,8 @@ file_system_type_kill_sb(struct super_block *sb,
 	 * it before, because some of the s_op's will be used in the body/
 	 * call graph of kill_sb.)
 	 */
+	LIBLCD_MSG("vfs called kill_sb, sb is %p", sb);
+
 	sb_container = container_of(sb, struct super_block_container, 
 				super_block);
 	/* It's safe to discard const here */
@@ -1032,6 +1052,8 @@ file_system_type_kill_sb(struct super_block *sb,
 		LIBLCD_ERR("error sending request");
 		goto fail2;
 	}
+
+	LIBLCD_MSG("vfs got kill_sb response");
 	/*
 	 * Nothing in response
 	 */
@@ -1046,7 +1068,9 @@ file_system_type_kill_sb(struct super_block *sb,
 	 *
 	 * (removing const is safe here)
 	 */
+
 	destroy_sb_trampolines((struct super_operations *)s_ops);
+	LIBLCD_MSG("vfs destroyed sb trampolines");
 	/*
 	 * Unvolunteer fs memory
 	 */
@@ -1170,6 +1194,13 @@ static int setup_sb_trampolines(struct super_block_container *sb_container,
 			fs_sync_endpoint, fs_async_chnl);
 	s_ops->alloc_inode =
 		LCD_HANDLE_TO_TRAMPOLINE(alloc_args->t_handle);
+	ret = set_memory_x(((unsigned long)alloc_args->t_handle) & PAGE_MASK,
+			ALIGN(LCD_TRAMPOLINE_SIZE(super_block_alloc_inode_trampoline),
+				PAGE_SIZE) >> PAGE_SHIFT);
+	if (ret) {
+		LIBLCD_ERR("set mem nx");
+		goto fail3;
+	}
 	/*
 	 * destroy_inode trampoline
 	 */
@@ -1177,7 +1208,7 @@ static int setup_sb_trampolines(struct super_block_container *sb_container,
 	if (!destroy_args) {
 		LIBLCD_ERR("kzalloc hidden args failed");
 		ret = -ENOMEM;
-		goto fail3;
+		goto fail4;
 	}
 	destroy_args->t_handle = LCD_DUP_TRAMPOLINE(
 		super_block_destroy_inode_trampoline);
@@ -1185,12 +1216,19 @@ static int setup_sb_trampolines(struct super_block_container *sb_container,
 		LIBLCD_ERR("dup trampoline");
 		ret = -ENOMEM;
 		kfree(destroy_args);
-		goto fail4;
+		goto fail5;
 	}
 	setup_rest_of_args(destroy_args, sb_container, fs_cspace,
 			fs_sync_endpoint, fs_async_chnl);
 	s_ops->destroy_inode =
 		LCD_HANDLE_TO_TRAMPOLINE(destroy_args->t_handle);
+	ret = set_memory_x(((unsigned long)destroy_args->t_handle) & PAGE_MASK,
+			ALIGN(LCD_TRAMPOLINE_SIZE(super_block_destroy_inode_trampoline),
+				PAGE_SIZE) >> PAGE_SHIFT);
+	if (ret) {
+		LIBLCD_ERR("set mem nx");
+		goto fail6;
+	}
 	/*
 	 * evict_inode trampoline
 	 */
@@ -1198,7 +1236,7 @@ static int setup_sb_trampolines(struct super_block_container *sb_container,
 	if (!evict_args) {
 		LIBLCD_ERR("kzalloc hidden args failed");
 		ret = -ENOMEM;
-		goto fail5;
+		goto fail7;
 	}
 	evict_args->t_handle = LCD_DUP_TRAMPOLINE(
 		super_block_evict_inode_trampoline);
@@ -1206,12 +1244,19 @@ static int setup_sb_trampolines(struct super_block_container *sb_container,
 		LIBLCD_ERR("dup trampoline");
 		ret = -ENOMEM;
 		kfree(evict_args);
-		goto fail6;
+		goto fail8;
 	}
 	setup_rest_of_args(evict_args, sb_container, fs_cspace,
 			fs_sync_endpoint, fs_async_chnl);
 	s_ops->evict_inode =
 		LCD_HANDLE_TO_TRAMPOLINE(evict_args->t_handle);
+	ret = set_memory_x(((unsigned long)evict_args->t_handle) & PAGE_MASK,
+			ALIGN(LCD_TRAMPOLINE_SIZE(super_block_evict_inode_trampoline),
+				PAGE_SIZE) >> PAGE_SHIFT);
+	if (ret) {
+		LIBLCD_ERR("set mem nx");
+		goto fail9;
+	}
 	/*
 	 * put_super trampoline
 	 */
@@ -1219,7 +1264,7 @@ static int setup_sb_trampolines(struct super_block_container *sb_container,
 	if (!put_args) {
 		LIBLCD_ERR("kzalloc hidden args failed");
 		ret = -ENOMEM;
-		goto fail7;
+		goto fail10;
 	}
 	put_args->t_handle = LCD_DUP_TRAMPOLINE(
 		super_block_put_super_trampoline);
@@ -1227,12 +1272,19 @@ static int setup_sb_trampolines(struct super_block_container *sb_container,
 		LIBLCD_ERR("dup trampoline");
 		ret = -ENOMEM;
 		kfree(put_args);
-		goto fail8;
+		goto fail11;
 	}
 	setup_rest_of_args(put_args, sb_container, fs_cspace,
 			fs_sync_endpoint, fs_async_chnl);
 	s_ops->put_super =
 		LCD_HANDLE_TO_TRAMPOLINE(put_args->t_handle);
+	ret = set_memory_x(((unsigned long)put_args->t_handle) & PAGE_MASK,
+			ALIGN(LCD_TRAMPOLINE_SIZE(super_block_put_super_trampoline),
+				PAGE_SIZE) >> PAGE_SHIFT);
+	if (ret) {
+		LIBLCD_ERR("set mem nx");
+		goto fail12;
+	}
 	/*
 	 * Install ops
 	 */
@@ -1240,6 +1292,10 @@ static int setup_sb_trampolines(struct super_block_container *sb_container,
 	
 	return 0;
 
+fail12:
+fail11:
+fail10:
+fail9:
 fail8:
 fail7:
 fail6:
@@ -1303,6 +1359,13 @@ static int setup_fs_type_trampolines(
 			fs_sync_endpoint, fs_async_chnl);
 	fs_container->file_system_type.mount = 
 		LCD_HANDLE_TO_TRAMPOLINE(mount_args->t_handle);
+	ret = set_memory_x(((unsigned long)mount_args->t_handle) & PAGE_MASK,
+			ALIGN(LCD_TRAMPOLINE_SIZE(file_system_type_mount_trampoline),
+				PAGE_SIZE) >> PAGE_SHIFT);
+	if (ret) {
+		LIBLCD_ERR("set mem nx");
+		goto fail3;
+	}
 	/*
 	 * kill_sb trampoline
 	 */
@@ -1310,7 +1373,7 @@ static int setup_fs_type_trampolines(
 	if (!kill_sb_args) {
 		LIBLCD_ERR("kzalloc hidden args failed");
 		ret = -ENOMEM;
-		goto fail3;
+		goto fail4;
 	}
 	kill_sb_args->t_handle = LCD_DUP_TRAMPOLINE(
 		file_system_type_kill_sb_trampoline);
@@ -1318,17 +1381,27 @@ static int setup_fs_type_trampolines(
 		LIBLCD_ERR("dup trampoline");
 		ret = -ENOMEM;
 		kfree(kill_sb_args);
-		goto fail4;
+		goto fail5;
 	}
 	setup_rest_of_args(kill_sb_args, fs_container, fs_cspace,
 			fs_sync_endpoint, fs_async_chnl);
 	fs_container->file_system_type.kill_sb = 
 		LCD_HANDLE_TO_TRAMPOLINE(kill_sb_args->t_handle);
+	ret = set_memory_x(((unsigned long)kill_sb_args->t_handle) & PAGE_MASK,
+			ALIGN(LCD_TRAMPOLINE_SIZE(file_system_type_kill_sb_trampoline),
+				PAGE_SIZE) >> PAGE_SHIFT);
+	if (ret) {
+		LIBLCD_ERR("set mem nx");
+		goto fail6;
+	}
+
 	/*
 	 * Done
 	 */
 	return 0;
 
+fail6:
+fail5:
 fail4:
 fail3:
 fail2:
@@ -1678,6 +1751,8 @@ out:
 	fipc_set_reg1(response, cptr_val(bdi_obj_ref));
 
 	thc_ipc_reply(channel, request_cookie, response);
+
+	pmfs_ready = 1;
 
 	return ret;
 }
@@ -2052,6 +2127,8 @@ int d_make_root_callee(struct fipc_message *request,
 	dentry_container = container_of(dentry,
 					struct dentry_container,
 					dentry);
+	LIBLCD_MSG("in d_make_root: d_sb is %p",
+		dentry_container->dentry.d_sb);
 	/*
 	 * Install in cspace, set up refs
 	 */

@@ -24,6 +24,7 @@ extern cptr_t vfs_register_channel;
 extern cptr_t vfs_sync_endpoint;
 extern struct glue_cspace *vfs_cspace;
 extern struct thc_channel *vfs_async_chnl;
+extern int pmfs_done;
 
 /* GLUE SUPPORT CODE -------------------------------------------------- */
 
@@ -1680,6 +1681,8 @@ out:
 	/* empty reply */
 
 	thc_ipc_reply(channel, request_cookie, response);
+
+	pmfs_done = 1;
 
 	return ret;
 }

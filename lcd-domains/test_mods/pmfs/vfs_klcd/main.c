@@ -153,11 +153,12 @@ fail1:
 	return ret;
 }
 
-static void do_pmfs_test(void)
+static int do_pmfs_test(void)
 {
 	int ret;
 	struct file_system_type *pmfs_fs_type;
 	struct dentry *dentry;
+	char *data;
 
 	pmfs_fs_type = get_fs_type("pmfs");
 	if (!pmfs_fs_type) {
@@ -166,24 +167,47 @@ static void do_pmfs_test(void)
 		goto fail1;
 	}
 
+	LIBLCD_MSG("vfs got pmfs fs type");
+
+	/* 
+	 * We can't pass this as a const char *, because pmfs
+	 * (indirectly through the vfs glue) needs to modify it
+	 * when it calls strsep. This is true even in the regular
+	 * world (take a look at how the void *data arg is set up,
+	 * and you will see).
+	 */
+	data = kstrdup("physaddr=0x100000000,init=2G", GFP_KERNEL);
+	if (!data) {
+		LIBLCD_ERR("strdup failed");
+		goto fail2;
+	}
+
+	LIBLCD_MSG("vfs data dup'd");
+
 	dentry = pmfs_fs_type->mount(pmfs_fs_type,
 				0,
 				"/not/used",
-				"physaddr=0x100000000,init=2G");
+				data);
 	if (!dentry) {
 		LIBLCD_ERR("error mounting pmfs?");
 		ret = -EIO;
-		goto fail2;
+		goto fail3;
 	}
 	LIBLCD_MSG("vfs mounted pmfs");
+
+	kfree(data);
+
+	LIBLCD_MSG("dentry sb is %p", dentry->d_sb);
 
 	pmfs_fs_type->kill_sb(dentry->d_sb);
 	LIBLCD_MSG("vfs unmounted pmfs");
 
-	put_filesystem(pmfs_fs_type); /* release reference */
+	module_put(pmfs_fs_type->owner); /* release reference */
 			
 	return 0;
 
+fail3:
+	kfree(data);
 fail2:
 fail1:
 	return ret;
@@ -237,7 +261,7 @@ static void loop(cptr_t register_chnl)
 					);
 			} else if (ret != -EWOULDBLOCK) {
 				LIBLCD_ERR("async loop failed");
-				break;
+				stop = 1;
 			}
 
 			if (kthread_should_stop()) {

@@ -28,6 +28,8 @@ int dispatch_sync_vfs_channel(void)
 	return 0;
 }
 
+#define trace(x) LIBLCD_MSG("vfs got " #x " msg")
+
 int dispatch_async_vfs_channel(struct thc_channel *channel, 
 			struct fipc_message *message,
 			struct glue_cspace *cspace,
@@ -37,56 +39,67 @@ int dispatch_async_vfs_channel(struct thc_channel *channel,
 	switch (fn_type) {
 
 	case UNREGISTER_FILESYSTEM:
+		trace(UNREGISTER_FILESYSTEM);
 		return unregister_filesystem_callee(message, channel, cspace,
 						sync_endpoint);
 		break;
 
 	case BDI_INIT:
+		trace(BDI_INIT);
 		return bdi_init_callee(message, channel, cspace,
 				sync_endpoint);
 		break;
 
 	case BDI_DESTROY:
+		trace(BDI_DESTROY);
 		return bdi_destroy_callee(message, channel, cspace,
 					sync_endpoint);
 		break;
 
 	case IGET_LOCKED:
+		trace(IGET_LOCKED);
 		return iget_locked_callee(message, channel, cspace,
 					sync_endpoint);
 		break;
 
 	case TRUNCATE_INODE_PAGES:
+		trace(TRUNCATE_INODE_PAGES);
 		return truncate_inode_pages_callee(message, channel, cspace,
 						sync_endpoint);
 		break;
 
 	case CLEAR_INODE:
+		trace(CLEAR_INODE);
 		return clear_inode_callee(message, channel, cspace,
 					sync_endpoint);
 		break;
 		
 	case IGET_FAILED:
+		trace(IGET_FAILED);
 		return iget_failed_callee(message, channel, cspace,
 					sync_endpoint);
 		break;
 		
 	case UNLOCK_NEW_INODE:
+		trace(UNLOCK_NEW_INODE);
 		return unlock_new_inode_callee(message, channel, cspace,
 					sync_endpoint);
 		break;
 
 	case D_MAKE_ROOT:
+		trace(D_MAKE_ROOT);
 		return d_make_root_callee(message, channel, cspace,
 					sync_endpoint);
 		break;
 
 	case MOUNT_NODEV:
+		trace(MOUNT_NODEV);
 		return mount_nodev_callee(message, channel, cspace,
 					sync_endpoint);
 		break;
 
 	case SUPER_BLOCK_PUT_SUPER:
+		trace(SUPER_BLOCK_PUT_SUPER);
 		return kill_anon_super_callee(message, channel, cspace,
 					sync_endpoint);
 		break;
