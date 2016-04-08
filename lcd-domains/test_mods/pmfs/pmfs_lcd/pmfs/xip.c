@@ -10,6 +10,10 @@
  * warranty of any kind, whether express or implied.
  */
 
+#ifdef LCD_ISOLATE
+#include <lcd_config/pre_hook.h>
+#endif
+
 #include <linux/mm.h>
 #include <linux/sched.h>
 #include <linux/fs.h>
@@ -18,6 +22,10 @@
 #include <asm/pgtable.h>
 #include "pmfs.h"
 #include "xip.h"
+
+#ifdef LCD_ISOLATE
+#include <lcd_config/post_hook.h>
+#endif
 
 /*
  * Wrappers. We need to use the rcu read lock to avoid

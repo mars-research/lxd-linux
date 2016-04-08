@@ -12,6 +12,7 @@
 #include <linux/fs.h>
 #include <linux/backing-dev.h>
 #include <linux/module.h>
+#include <linux/kthread.h>
 
 #include <libcap.h>
 #include <libfipc.h>
@@ -219,6 +220,8 @@ async_msg_blocking_send_start(struct thc_channel *chnl,
 		if (!ret || ret != -EWOULDBLOCK)
 			return ret;
 		cpu_relax();
+		if (kthread_should_stop())
+			return -EIO;
 	}
 }
 

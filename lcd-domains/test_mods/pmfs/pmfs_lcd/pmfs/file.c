@@ -13,6 +13,10 @@
  * warranty of any kind, whether express or implied.
  */
 
+#ifdef LCD_ISOLATE
+#include <lcd_config/pre_hook.h>
+#endif
+
 #include <linux/fs.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
@@ -23,6 +27,10 @@
 #include <asm/mman.h>
 #include "pmfs.h"
 #include "xip.h"
+
+#ifdef LCD_ISOLATE
+#include <lcd_config/post_hook.h>
+#endif
 
 static inline int pmfs_can_set_blocksize_hint(struct pmfs_inode *pi,
 					       loff_t new_size)

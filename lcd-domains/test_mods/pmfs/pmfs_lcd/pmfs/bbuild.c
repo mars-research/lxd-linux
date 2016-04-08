@@ -19,10 +19,18 @@
  * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+#ifdef LCD_ISOLATE
+#include <lcd_config/pre_hook.h>
+#endif
+
 #include <linux/fs.h>
 #include <linux/bitops.h>
 #include <linux/slab.h>
 #include "pmfs.h"
+
+#ifdef LCD_ISOLATE
+#include <lcd_config/post_hook.h>
+#endif
 
 struct scan_bitmap {
 	unsigned long bitmap_4k_size;

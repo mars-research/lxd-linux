@@ -20,6 +20,10 @@
  * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+#ifdef LCD_ISOLATE
+#include <lcd_config/pre_hook.h>
+#endif
+
 #include <linux/module.h>
 #include <linux/string.h>
 #include <linux/init.h>
@@ -31,6 +35,10 @@
 #include <linux/kthread.h>
 #include "pmfs.h"
 #include "journal.h"
+
+#ifdef LCD_ISOLATE
+#include <lcd_config/post_hook.h>
+#endif
 
 static void dump_transaction(struct pmfs_sb_info *sbi,
 		pmfs_transaction_t *trans)

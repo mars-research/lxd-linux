@@ -17,3 +17,9 @@ when does callee insert global variable into caller's cspace? Perhaps it checks
 if ref is non-null already (insert already done).
 
 4 - Tracking the percolation of shared, stateful objects is hard.
+
+5 - Handling error scenarios is hard. For example, consider LCD A and B. B
+does an rpc to A, and something happens inside A that causes an error. So
+A returns an error status to B. Perhaps B wants to do *additional* rpc's
+on A because of the error. A needs to be ready to handle those error-scenario
+rpc's, or else B will just sit there waiting.

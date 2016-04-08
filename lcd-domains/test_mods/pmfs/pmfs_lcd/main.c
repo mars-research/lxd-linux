@@ -76,14 +76,17 @@ static void main_and_loop(void)
 
 			);
 
-		ASYNC(
-			/* Wait until async channel is ready */
-			while (!vfs_async_chnl)
-				THCYield();
-			while (!stop)
+		/* By the time we hit this loop, the async channel
+		 * will be set up (the awe running init_pmfs_fs above
+		 * will not yield until it tries to use the async
+		 * channel). */
+		while (!stop) {
+			ASYNC(
 				stop = do_one_async();
-
 			);
+		}
+
+		LIBLCD_MSG("PMFS EXITED DISPATCH LOOP");
 
 		);
 

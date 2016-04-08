@@ -19,9 +19,17 @@
  * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+#ifdef LCD_ISOLATE
+#include <lcd_config/pre_hook.h>
+#endif
+
 #include <linux/fs.h>
 #include <linux/bitops.h>
 #include "pmfs.h"
+
+#ifdef LCD_ISOLATE
+#include <lcd_config/post_hook.h>
+#endif
 
 void pmfs_init_blockmap(struct super_block *sb, unsigned long init_used_size)
 {

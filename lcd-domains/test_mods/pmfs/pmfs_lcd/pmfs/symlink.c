@@ -13,8 +13,16 @@
  * warranty of any kind, whether express or implied.
  */
 
+#ifdef LCD_ISOLATE
+#include <lcd_config/pre_hook.h>
+#endif
+
 #include <linux/fs.h>
 #include "pmfs.h"
+
+#ifdef LCD_ISOLATE
+#include <lcd_config/post_hook.h>
+#endif
 
 int pmfs_block_symlink(struct inode *inode, const char *symname, int len)
 {

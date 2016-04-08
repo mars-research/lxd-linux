@@ -13,9 +13,17 @@
  * warranty of any kind, whether express or implied.
  */
 
+#ifdef LCD_ISOLATE
+#include <lcd_config/pre_hook.h>
+#endif
+
 #include <linux/fs.h>
 #include <linux/pagemap.h>
 #include "pmfs.h"
+
+#ifdef LCD_ISOLATE
+#include <lcd_config/post_hook.h>
+#endif
 
 /*
  *	Parent is locked.

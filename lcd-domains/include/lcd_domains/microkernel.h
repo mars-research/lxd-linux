@@ -24,7 +24,12 @@
  * --------------------------------------------------
  */
 
-#define LCD_DEBUG_LVL 1
+#define LCD_DEBUG_ERR  1
+#define LCD_DEBUG_WARN 2
+#define LCD_DEBUG_MSG  3
+#define LCD_DEBUG_VERB 4
+
+#define LCD_DEBUG_LVL LCD_DEBUG_ERR
 
 /* Controls debug msg output for microkernel's libcap */
 #define LCD_LIBCAP_DEBUG_LVL 0
@@ -59,11 +64,6 @@ static void __maybe_unused  __lcd_warn(char *file, int lineno, char *fmt, ...)
 	va_end(args);
 	printk("\n");
 }
-
-#define LCD_DEBUG_ERR  1
-#define LCD_DEBUG_WARN 2
-#define LCD_DEBUG_MSG  3
-#define LCD_DEBUG_VERB 4
 
 #define LCD_DEBUG(lvl, msg...) {					\
 	if (lvl <= LCD_DEBUG_LVL)					\

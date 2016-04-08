@@ -12,10 +12,19 @@
  * License version 2. This program is licensed "as is" without any
  * warranty of any kind, whether express or implied.
  */
+
+#ifdef LCD_ISOLATE
+#include <lcd_config/pre_hook.h>
+#endif
+
 #include <linux/fs.h>
 #include <linux/pagemap.h>
 #include "pmfs.h"
 #include "xip.h"
+
+#ifdef LCD_ISOLATE
+#include <lcd_config/post_hook.h>
+#endif
 
 /*
  * Couple of helper functions - make the code slightly cleaner.

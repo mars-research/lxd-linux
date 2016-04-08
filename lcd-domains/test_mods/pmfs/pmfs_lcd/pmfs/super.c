@@ -13,6 +13,10 @@
  * warranty of any kind, whether express or implied.
  */
 
+#ifdef LCD_ISOLATE
+#include <lcd_config/pre_hook.h>
+#endif
+
 #include <linux/module.h>
 #include <linux/string.h>
 #include <linux/slab.h>
@@ -33,6 +37,10 @@
 #include <linux/backing-dev.h>
 #include <linux/list.h>
 #include "pmfs.h"
+
+#ifdef LCD_ISOLATE
+#include <lcd_config/post_hook.h>
+#endif
 
 static struct super_operations pmfs_sops;
 static const struct export_operations pmfs_export_ops;

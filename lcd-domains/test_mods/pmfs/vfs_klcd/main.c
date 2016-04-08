@@ -10,12 +10,16 @@
 #include <liblcd/sync_ipc_poll.h>
 #include <linux/kthread.h>
 #include <linux/delay.h>
+#include <thc.h>
 
 #include "internal.h"
 
 #include <lcd_config/post_hook.h>
 
-#define VFS_REGISTER_FREQ (0.2)
+/* Don't use e.g. 0.5 * HZ. This will use floating point instructions.
+ * I thik floating point in general is bad in the kernel. But it's
+ * especially bad with thc/async. */
+#define VFS_REGISTER_FREQ (50)
 
 struct fs_info {
 	struct thc_channel *chnl;
@@ -86,6 +90,7 @@ static int async_loop(struct fs_info **fs_out, struct fipc_message **msg_out)
 			/*
 			 * Got a msg
 			 */
+			LIBLCD_MSG("vfs got a msg");
 			*fs_out = cursor;
 			return 0;
 		}
@@ -182,8 +187,6 @@ static int do_pmfs_test(void)
 		goto fail2;
 	}
 
-	LIBLCD_MSG("vfs data dup'd");
-
 	dentry = pmfs_fs_type->mount(pmfs_fs_type,
 				0,
 				"/not/used",
@@ -196,8 +199,8 @@ static int do_pmfs_test(void)
 	LIBLCD_MSG("vfs mounted pmfs");
 
 	kfree(data);
-
-	LIBLCD_MSG("dentry sb is %p", dentry->d_sb);
+	
+	LIBLCD_MSG("vfs calling kill_sb");
 
 	pmfs_fs_type->kill_sb(dentry->d_sb);
 	LIBLCD_MSG("vfs unmounted pmfs");
@@ -213,15 +216,31 @@ fail1:
 	return ret;
 }
 
+static void do_df_cancel(void *null_arg)
+{
+	LIBLCD_MSG("df cancel fired");
+	PTS()->awes_should_stop = 1;
+	if (!PTS()->awes_should_stop)
+		LIBLCD_ERR("awes should stop is not set?");
+}
+
 static void loop(cptr_t register_chnl)
 {
-	unsigned long tics = jiffies + VFS_REGISTER_FREQ * HZ;
+	unsigned long tics = jiffies + VFS_REGISTER_FREQ;
 	struct fipc_message *msg;
 	struct fs_info *fs;
 	int stop = 0;
 	int ret;
+	cancel_item_t ci;
 
-	DO_FINISH(
+	DO_FINISH_(DF_TAG,
+		/*
+		 * Set up do-finish cancellation so that when we exit
+		 * the loop, we can signal to other awe's that they should
+		 * terminate, and we don't block at the end of the
+		 * do-finish waiting for them.
+		 */
+		THCAddCancelItem(&ci, do_df_cancel, NULL);
 
 		while (!stop) {
 
@@ -234,7 +253,7 @@ static void loop(cptr_t register_chnl)
 					LIBLCD_ERR("register error");
 					break;
 				}
-				tics = jiffies + VFS_REGISTER_FREQ * HZ;
+				tics = jiffies + VFS_REGISTER_FREQ;
 				continue;
 			}
 
@@ -245,6 +264,8 @@ static void loop(cptr_t register_chnl)
 					);
 			}
 
+			if (stop)
+				break;
 			ret = async_loop(&fs, &msg);
 			if (!ret) {
 				ASYNC(
@@ -262,11 +283,13 @@ static void loop(cptr_t register_chnl)
 			} else if (ret != -EWOULDBLOCK) {
 				LIBLCD_ERR("async loop failed");
 				stop = 1;
+				break;
 			}
 
 			if (kthread_should_stop()) {
 				LIBLCD_MSG("kthread should stop");
 				stop = 1;
+				break;
 			}
 
 #ifndef CONFIG_PREEMPT
@@ -276,6 +299,10 @@ static void loop(cptr_t register_chnl)
 			cond_resched();
 #endif
 		}
+
+		LIBLCD_MSG("vfs exited loop");
+
+		CANCEL(DF_TAG);
 
 		);
 

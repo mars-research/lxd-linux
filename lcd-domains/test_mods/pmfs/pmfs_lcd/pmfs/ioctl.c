@@ -11,12 +11,20 @@
  * warranty of any kind, whether express or implied.
  */
 
+#ifdef LCD_ISOLATE
+#include <lcd_config/pre_hook.h>
+#endif
+
 #include <linux/capability.h>
 #include <linux/time.h>
 #include <linux/sched.h>
 #include <linux/compat.h>
 #include <linux/mount.h>
 #include "pmfs.h"
+
+#ifdef LCD_ISOLATE
+#include <lcd_config/post_hook.h>
+#endif
 
 long pmfs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
