@@ -98,8 +98,8 @@ int dispatch_async_vfs_channel(struct thc_channel *channel,
 					sync_endpoint);
 		break;
 
-	case SUPER_BLOCK_PUT_SUPER:
-		trace(SUPER_BLOCK_PUT_SUPER);
+	case KILL_ANON_SUPER:
+		trace(KILL_ANON_SUPER);
 		return kill_anon_super_callee(message, channel, cspace,
 					sync_endpoint);
 		break;

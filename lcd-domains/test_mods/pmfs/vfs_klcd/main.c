@@ -162,6 +162,7 @@ static int do_pmfs_test(void)
 	int ret;
 	struct file_system_type *pmfs_fs_type;
 	struct dentry *dentry;
+	struct super_block *sb;
 	char *data;
 
 	pmfs_fs_type = get_fs_type("pmfs");
@@ -198,10 +199,13 @@ static int do_pmfs_test(void)
 	LIBLCD_MSG("vfs mounted pmfs");
 
 	kfree(data);
+
+	sb = dentry->d_sb;
 	
 	LIBLCD_MSG("vfs calling kill_sb");
 
-	pmfs_fs_type->kill_sb(dentry->d_sb);
+	dput(dentry);
+	deactivate_locked_super(sb);
 	LIBLCD_MSG("vfs unmounted pmfs");
 
 	module_put(pmfs_fs_type->owner); /* release reference */
