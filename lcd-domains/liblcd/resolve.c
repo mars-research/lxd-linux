@@ -18,6 +18,7 @@
  */
 struct cred fake_cred;
 struct task_struct fake_task = {
+	.pid = 12345678,
 	.cred = &fake_cred,
 };
 struct task_struct *current_task = &fake_task;
@@ -187,9 +188,9 @@ void *ioremap_hpage_cache_ro(resource_size_t phys_addr, unsigned long size)
 	return lcd_ioremap_cache(phys_addr, size);
 }
 
-void iounmap(void *addr)
+void iounmap(volatile void __iomem *addr)
 {
-	lcd_iounmap(addr);
+	lcd_iounmap((void *)addr);
 }
 
 void __release_region(struct resource *parent, resource_size_t start,

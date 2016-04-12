@@ -1561,11 +1561,6 @@ static void setup_node_pointer(struct kmem_cache *cachep)
 	cachep->node = (struct kmem_cache_node **)&cachep->array[nr_cpu_ids];
 }
 
-/* BEGIN LCD */
-/* needed to zero out BSS */
-extern struct task_struct fake_task;
-/* END LCD */
-
 /*
  * Initialisation.  Called after the page allocator have been initialised and
  * before smp_init().
@@ -1573,14 +1568,6 @@ extern struct task_struct fake_task;
 void __init kmem_cache_init(void)
 {
 	int i;
-/* BEGIN LCD */
-/* need to zero out BSS data! (actually, this may not be necessary) */
-	memset(&kmalloc_caches, 0, sizeof(kmalloc_caches));
-	memset(&kmem_cache, 0, sizeof(kmem_cache));
-	memset(&slab_state, 0, sizeof(slab_state));
-	memset(&fake_task, 0, sizeof(fake_task));
-	memset(&init_kmem_cache_node, 0, sizeof(init_kmem_cache_node));
-/* END LCD */
 
 	kmem_cache = &kmem_cache_boot;
 	setup_node_pointer(kmem_cache);
