@@ -924,7 +924,7 @@ mount_nodev(struct file_system_type *fs_type,
 	fipc_set_reg2(request, cptr_val(fill_sup_container->my_ref));
 
 	LIBLCD_MSG("pmfs is calling mount nodev rpc");
-	ret = thc_ipc_send(vfs_async_chnl, request, &request_cookie);
+	ret = thc_ipc_send_request(vfs_async_chnl, request, &request_cookie);
 	if (ret) {
 		LIBLCD_ERR("error sending request");
 		goto fail5;
@@ -956,7 +956,7 @@ mount_nodev(struct file_system_type *fs_type,
 	/*
 	 * Get *async* response
 	 */
-	ret = thc_ipc_recv(vfs_async_chnl, request_cookie, &response);
+	ret = thc_ipc_recv_response(vfs_async_chnl, request_cookie, &response);
 	if (ret) {
 		LIBLCD_ERR("async recv failed");
 		goto fail7;

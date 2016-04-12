@@ -580,8 +580,8 @@ mount_nodev_fill_super(struct super_block *sb,
 	fipc_set_reg2(request, sb_container->super_block.s_flags);
 	fipc_set_reg3(request, silent);
 
-	ret = thc_ipc_send(hidden_args->fs_async_chnl, request, 
-			&request_cookie);
+	ret = thc_ipc_send_request(hidden_args->fs_async_chnl, request, 
+				&request_cookie);
 	if (ret) {
 		LIBLCD_ERR("error sending request");
 		goto fail4;
@@ -609,8 +609,9 @@ mount_nodev_fill_super(struct super_block *sb,
 	/*
 	 * Receive *async* response
 	 */
-	ret = thc_ipc_recv(hidden_args->fs_async_chnl, request_cookie, 
-			&response);
+	ret = thc_ipc_recv_response(hidden_args->fs_async_chnl, 
+				request_cookie, 
+				&response);
 	if (ret) {
 		LIBLCD_ERR("async recv failed");
 		goto fail6;
@@ -896,8 +897,8 @@ file_system_type_mount(struct file_system_type *fs_type,
 	fipc_set_reg0(request, cptr_val(fs_container->their_ref));
 	fipc_set_reg1(request, flags);
 
-	ret = thc_ipc_send(hidden_args->fs_async_chnl, request, 
-			&request_cookie);
+	ret = thc_ipc_send_request(hidden_args->fs_async_chnl, request, 
+				&request_cookie);
 	if (ret) {
 		LIBLCD_ERR("error sending request");
 		goto fail3;
@@ -930,8 +931,9 @@ file_system_type_mount(struct file_system_type *fs_type,
 	/*
 	 * Get *async* response
 	 */
-	ret = thc_ipc_recv(hidden_args->fs_async_chnl, request_cookie, 
-			&response);
+	ret = thc_ipc_recv_response(hidden_args->fs_async_chnl, 
+				request_cookie, 
+				&response);
 	if (ret) {
 		LIBLCD_ERR("async recv failed");
 		goto fail5;

@@ -216,14 +216,6 @@ fail1:
 	return ret;
 }
 
-static void do_df_cancel(void *null_arg)
-{
-	LIBLCD_MSG("df cancel fired");
-	PTS()->awes_should_stop = 1;
-	if (!PTS()->awes_should_stop)
-		LIBLCD_ERR("awes should stop is not set?");
-}
-
 static void loop(cptr_t register_chnl)
 {
 	unsigned long tics = jiffies + VFS_REGISTER_FREQ;
@@ -231,16 +223,8 @@ static void loop(cptr_t register_chnl)
 	struct fs_info *fs;
 	int stop = 0;
 	int ret;
-	cancel_item_t ci;
 
-	DO_FINISH_(DF_TAG,
-		/*
-		 * Set up do-finish cancellation so that when we exit
-		 * the loop, we can signal to other awe's that they should
-		 * terminate, and we don't block at the end of the
-		 * do-finish waiting for them.
-		 */
-		THCAddCancelItem(&ci, do_df_cancel, NULL);
+	DO_FINISH(
 
 		while (!stop) {
 
@@ -302,7 +286,7 @@ static void loop(cptr_t register_chnl)
 
 		LIBLCD_MSG("vfs exited loop");
 
-		CANCEL(DF_TAG);
+		THCStopAllAwes();
 
 		);
 
