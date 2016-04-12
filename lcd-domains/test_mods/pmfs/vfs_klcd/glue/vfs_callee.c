@@ -593,8 +593,8 @@ mount_nodev_fill_super(struct super_block *sb,
 	 *   -- data memory order
 	 *   -- data offset
 	 */
-	LIBLCD_MSG("in fill sup callee, sync cptr is 0x%lx",
-		cptr_val(hidden_args->fs_sync_endpoint));
+	LIBLCD_MSG("vfs mem sz is 0x%lx, offset is 0x%lx",
+		mem_sz, data_offset);
 
 	lcd_set_cr0(data_cptr);
 	/* Assumes mem_sz is 2^x pages */
@@ -702,6 +702,7 @@ static int get_phys_addr(char *cmdline, unsigned long *phys_addr)
 		LIBLCD_ERR("phys_addr not page aligned");
 		return -EINVAL;
 	}
+	
 
 	return 0;
 }
@@ -709,14 +710,22 @@ static int get_phys_addr(char *cmdline, unsigned long *phys_addr)
 /* adapted from pmfs/super.c:pmfs_parse_options */
 static int get_size(char *cmdline, unsigned long *size)
 {
+	int ret;
 	char *p, *rest;
 	substring_t args[MAX_OPT_ARGS];
 	match_table_t tokens = {
-		{ 0,	     "init=%s"		  },
+		{ 0,	     "init=%s"    	  },
 		{ 1,         NULL                 },
 	};
+	char *dup_cmdline = kstrdup(cmdline, GFP_KERNEL);
+	if (!dup_cmdline) {
+		LIBLCD_ERR("error dup'ing cmdline");
+		return -ENOMEM;
+	}
 
-	while ((p = strsep(&cmdline, ",")) != NULL) {
+	/* We use a duplicate of the cmdline because strsep inserts
+	 * nuls to do the separation. */
+	while ((p = strsep(&dup_cmdline, ",")) != NULL) {
 		int token;
 		if (!*p)
 			continue;
@@ -728,7 +737,8 @@ static int get_size(char *cmdline, unsigned long *size)
 			if (!isdigit(*args[0].from))
 				return -EINVAL;
 			*size = (unsigned long)memparse(args[0].from, &rest);
-			return 0;
+			ret = 0;
+			goto out;
 		default:
 			break;
 		}
@@ -737,7 +747,12 @@ static int get_size(char *cmdline, unsigned long *size)
 	 * No "init=" mount option. Fail.
 	 */
 	LIBLCD_ERR("no init= mount option?");
-	return -EINVAL;
+	ret = 0;
+	goto out;
+
+out:
+	kfree(dup_cmdline);
+	return ret;
 }
 
 static int setup_fs_memory(char *cmdline, cptr_t *fs_mem_cptr,
@@ -852,8 +867,6 @@ file_system_type_mount(struct file_system_type *fs_type,
 	struct fipc_message *request, *response;
 	uint32_t request_cookie;
 
-	LIBLCD_MSG("vfs called mount");
-
 	fs_container = container_of(fs_type,
 				struct file_system_type_container,
 				file_system_type);
@@ -865,8 +878,6 @@ file_system_type_mount(struct file_system_type *fs_type,
 		LIBLCD_ERR("failed to volunteer fs memory");
 		goto fail0;
 	}
-
-	LIBLCD_MSG("vfs set up fs mem");
 	/*
 	 * Volunteer memory that contains void *data
 	 */
@@ -875,8 +886,6 @@ file_system_type_mount(struct file_system_type *fs_type,
 		LIBLCD_ERR("error volunteering void *data arg");
 		goto fail1;
 	}
-
-	LIBLCD_MSG("vfs set up data");
 	/*
 	 * Do async part:
 	 *
@@ -903,8 +912,6 @@ file_system_type_mount(struct file_system_type *fs_type,
 		LIBLCD_ERR("error sending request");
 		goto fail3;
 	}
-
-	LIBLCD_MSG("vfs sent async msg");
 	/*
 	 * Do sync part:
 	 *
@@ -926,8 +933,6 @@ file_system_type_mount(struct file_system_type *fs_type,
 		LIBLCD_ERR("call error");
 		goto fail4;
 	}
-
-	LIBLCD_MSG("vfs sent sync msg");
 	/*
 	 * Get *async* response
 	 */
@@ -946,8 +951,6 @@ file_system_type_mount(struct file_system_type *fs_type,
 	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->fs_async_chnl), 
 			response);
 
-	LIBLCD_MSG("vfs got mount async response");
-
 	if (cptr_is_null(dentry_ref)) {
 		LIBLCD_ERR("dentry from remote is null");
 		goto fail6;
@@ -959,9 +962,6 @@ file_system_type_mount(struct file_system_type *fs_type,
 		LIBLCD_ERR("couldn't find dentry");
 		goto fail7;
 	}
-	
-	LIBLCD_MSG("in mount: dentry sb is %p",
-		dentry_container->dentry.d_sb);
 	/*
 	 * Unvolunteer void *data
 	 */
@@ -1032,8 +1032,6 @@ file_system_type_kill_sb(struct super_block *sb,
 	 * it before, because some of the s_op's will be used in the body/
 	 * call graph of kill_sb.)
 	 */
-	LIBLCD_MSG("vfs called kill_sb, sb is %p", sb);
-
 	sb_container = container_of(sb, struct super_block_container, 
 				super_block);
 	/* It's safe to discard const here */
@@ -1044,8 +1042,6 @@ file_system_type_kill_sb(struct super_block *sb,
 	 *
 	 * sb_container will get freed in the process ...
 	 */
-	
-	LIBLCD_MSG("vfs in kill_sb, getting send msg");
 	ret = async_msg_blocking_send_start(hidden_args->fs_async_chnl,
 					&request);
 	if (ret) {
@@ -1057,14 +1053,11 @@ file_system_type_kill_sb(struct super_block *sb,
 	fipc_set_reg0(request, cptr_val(fs_container->their_ref));
 	fipc_set_reg1(request, cptr_val(sb_container->their_ref));
 
-	LIBLCD_MSG("vfs doing ipc call");
 	ret = thc_ipc_call(hidden_args->fs_async_chnl, request, &response);
 	if (ret) {
 		LIBLCD_ERR("error sending request");
 		goto fail2;
 	}
-
-	LIBLCD_MSG("vfs got kill_sb response");
 	/*
 	 * Nothing in response
 	 */
@@ -1079,9 +1072,7 @@ file_system_type_kill_sb(struct super_block *sb,
 	 *
 	 * (removing const is safe here)
 	 */
-
 	destroy_sb_trampolines((struct super_operations *)s_ops);
-	LIBLCD_MSG("vfs destroyed sb trampolines");
 	/*
 	 * Unvolunteer fs memory
 	 */

@@ -923,7 +923,6 @@ mount_nodev(struct file_system_type *fs_type,
 	fipc_set_reg1(request, flags);
 	fipc_set_reg2(request, cptr_val(fill_sup_container->my_ref));
 
-	LIBLCD_MSG("pmfs is calling mount nodev rpc");
 	ret = thc_ipc_send_request(vfs_async_chnl, request, &request_cookie);
 	if (ret) {
 		LIBLCD_ERR("error sending request");
@@ -1306,7 +1305,6 @@ int mount_nodev_fill_super_callee(struct fipc_message *request,
 	/*
 	 * Do sync part
 	 */
-	LIBLCD_MSG("pmfs doing fill sup sync");
 	ret = sync_mount_nodev_fill_super_callee(sync_endpoint,
 						&data_cptr,
 						&mem_order,
@@ -1416,18 +1414,26 @@ static void *update_cmdline(char *old_cmdline, gpa_t new_fs_mem_gpa)
 		return NULL;
 	old_cmdline += 9;
 	/*
-	 * Skim over old physaddr
+	 * Skim over old physaddr and comma
 	 */
 	simple_strtoull(old_cmdline, &old_cmdline, 0);
+	old_cmdline++;
 	/*
 	 * Create new dup of cmdline, but with new physaddr
+	 *
+	 *   strlen(old_cmdline) for rest of original cmdline
+	 *   9  for physaddr=
+	 *   18 for 0x.... address
+	 *   1  for comma
+	 *   1  for nul
 	 */
-	new_cmdline = kzalloc(strlen(old_cmdline) + 9 + 18 + 1, GFP_KERNEL);
+	new_cmdline = kzalloc(strlen(old_cmdline) + 9 + 18 + 1 + 1, 
+			GFP_KERNEL);
 	if (!new_cmdline) {
 		LIBLCD_ERR("kzalloc failed");
 		return NULL;
 	}
-	snprintf(new_cmdline, strlen(old_cmdline) + 9 + 16 + 1,
+	snprintf(new_cmdline, strlen(old_cmdline) + 9 + 18 + 1 + 1,
 		"physaddr=0x%016lx,%s", gpa_val(new_fs_mem_gpa),
 		old_cmdline);
 
@@ -1517,7 +1523,6 @@ int file_system_type_mount_callee(struct fipc_message *request,
 	 *   -- void *data stuff
 	 *   -- fs memory stuff
 	 */
-	LIBLCD_MSG("pmfs got mount");
 	ret = sync_file_system_type_mount_callee(sync_endpoint,
 						&data_cptr,
 						&mem_order,
@@ -1566,7 +1571,6 @@ int file_system_type_mount_callee(struct fipc_message *request,
 	/*
 	 * Call real function
 	 */
-	LIBLCD_MSG("pmfs is calling its mount");
 	dentry = fs_container->file_system_type.mount(
 		&fs_container->file_system_type,
 		flags,
@@ -1577,7 +1581,6 @@ int file_system_type_mount_callee(struct fipc_message *request,
 		ret = -EINVAL;
 		goto fail6;
 	}
-	LIBLCD_MSG("pmfs got dentry from mount");
 	dentry_container = container_of(dentry,
 					struct dentry_container,
 					dentry);
@@ -1614,14 +1617,10 @@ out:
 	/*
 	 * Respond with ref to remote's dentry
 	 */
-	if (dentry_container) {
-		LIBLCD_MSG("pmfs sending dentry ref from mount");
+	if (dentry_container)
 		fipc_set_reg0(response, cptr_val(dentry_container->their_ref));
-	}
-	else {
-		LIBLCD_MSG("pmfs sending null from mount");
+	else
 		fipc_set_reg0(response, cptr_val(CAP_CPTR_NULL));
-	}
 
 	thc_ipc_reply(channel, request_cookie, response);
 

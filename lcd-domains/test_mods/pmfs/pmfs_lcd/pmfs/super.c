@@ -686,6 +686,8 @@ static int pmfs_fill_super(struct super_block *sb, void *data, int silent)
 	set_opt(sbi->s_mount_opt, MOUNTING);
 	initsize = sbi->initsize;
 
+	LIBLCD_MSG("data string is >%s<", (char *)data);
+
 	/* Init a new pmfs instance */
 	if (initsize) {
 		root_pi = pmfs_init(sb, initsize);
