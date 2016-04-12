@@ -857,6 +857,9 @@ d_make_root(struct inode *inode)
 	}
 	dentry_container->their_ref = __cptr(fipc_get_reg0(response));
 
+	LIBLCD_MSG("pmfs: dentry their ref is 0x%lx",
+		cptr_val(dentry_container->their_ref));
+
 	fipc_recv_msg_end(thc_channel_to_fipc(vfs_async_chnl), response);
 	
 	return &dentry_container->dentry;
@@ -1376,6 +1379,12 @@ int mount_nodev_fill_super_callee(struct fipc_message *request,
 		LIBLCD_ERR("fill super failed");
 		goto fail5;
 	}
+	/*
+	 * Get the dentry we created in fill sup
+	 */
+	dentry_container = container_of(sb_container->super_block.s_root,
+					struct dentry_container,
+					dentry);
 	/*
 	 * Unmap void *data, and delete from our cspace.
 	 */

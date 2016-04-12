@@ -617,6 +617,9 @@ mount_nodev_fill_super(struct super_block *sb,
 	s_flags = fipc_get_reg2(response);
 	dentry_ref = __cptr(fipc_get_reg3(response));
 
+	LIBLCD_MSG("vfs: fill sup caller got dentry ref 0x%lx",
+		cptr_val(dentry_ref));
+
 	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->fs_async_chnl), 
 			response);
 
@@ -2154,8 +2157,11 @@ out:
 	/*
 	 * Return new dentry ref
 	 */
-	if (dentry_container)
+	if (dentry_container) {
+		LIBLCD_MSG("vfs: returning dentry cptr 0x%lx",
+			cptr_val(dentry_container->my_ref));
 		fipc_set_reg0(response, cptr_val(dentry_container->my_ref));
+	}
 	else
 		fipc_set_reg0(response, cptr_val(CAP_CPTR_NULL));
 
