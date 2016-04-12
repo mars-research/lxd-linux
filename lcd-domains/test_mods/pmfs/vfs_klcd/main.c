@@ -90,7 +90,6 @@ static int async_loop(struct fs_info **fs_out, struct fipc_message **msg_out)
 			/*
 			 * Got a msg
 			 */
-			LIBLCD_MSG("vfs got a msg");
 			*fs_out = cursor;
 			return 0;
 		}

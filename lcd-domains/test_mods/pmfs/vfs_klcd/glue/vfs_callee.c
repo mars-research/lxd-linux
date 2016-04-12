@@ -521,10 +521,6 @@ mount_nodev_fill_super(struct super_block *sb,
 		sb,
 		struct super_block_container,
 		super_block);
-
-	LIBLCD_MSG("vfs in mount nodev fill super, sb is %p",
-		sb);
-
 	/*
 	 * Set up super block trampolines
 	 */
@@ -593,9 +589,6 @@ mount_nodev_fill_super(struct super_block *sb,
 	 *   -- data memory order
 	 *   -- data offset
 	 */
-	LIBLCD_MSG("vfs mem sz is 0x%lx, offset is 0x%lx",
-		mem_sz, data_offset);
-
 	lcd_set_cr0(data_cptr);
 	/* Assumes mem_sz is 2^x pages */
 	lcd_set_r0(ilog2(mem_sz >> PAGE_SHIFT));
@@ -1502,7 +1495,6 @@ int register_filesystem_callee(void)
 	fs_container->file_system_type.name = "pmfs";
 	module_container->their_ref = __cptr(lcd_r2());
 	sync_endpoint = lcd_cr0();
-	LIBLCD_MSG("reg fs cptr is 0x%lx", cptr_val(sync_endpoint));
 	tx = lcd_cr1();
 	rx = lcd_cr2();
 	/*
@@ -1823,7 +1815,8 @@ int iget_locked_callee(struct fipc_message *request,
 	struct pmfs_inode_vfs_container *inode_container = NULL;
 	struct fipc_message *response;
 	cptr_t sb_ref = __cptr(fipc_get_reg0(request));
-	unsigned long ino = fipc_get_reg1(request);
+	cptr_t their_sb_ref = __cptr(fipc_get_reg1(request));
+	unsigned long ino = fipc_get_reg2(request);
 	uint32_t request_cookie = thc_get_request_cookie(request);
 
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
@@ -1837,6 +1830,7 @@ int iget_locked_callee(struct fipc_message *request,
 		LIBLCD_ERR("super block lookup failed");
 		goto fail1;
 	}
+	sb_container->their_ref = their_sb_ref;
 	/*
 	 * Invoke the real function
 	 *
@@ -2130,8 +2124,6 @@ int d_make_root_callee(struct fipc_message *request,
 	dentry_container = container_of(dentry,
 					struct dentry_container,
 					dentry);
-	LIBLCD_MSG("in d_make_root: d_sb is %p",
-		dentry_container->dentry.d_sb);
 	/*
 	 * Install in cspace, set up refs
 	 */
@@ -2291,8 +2283,6 @@ int mount_nodev_callee(struct fipc_message *request,
 		ret = -ENOMEM;
 		goto fail5;
 	}
-	LIBLCD_MSG("setting up fill sup, sync cptr is 0x%lx",
-		cptr_val(sync_endpoint));
 	fill_sup_args->t_handle->hidden_args = fill_sup_args;
 	fill_sup_args->struct_container = fill_sup_container;
 	fill_sup_args->fs_cspace = cspace;
@@ -2318,7 +2308,6 @@ int mount_nodev_callee(struct fipc_message *request,
 		LIBLCD_ERR("mount_nodev failed");
 		goto fail7;
 	}
-	LIBLCD_MSG("vfs in mount_nodev");
 	/*
 	 * Pass back ref to their copy of the dentry (this was set up
 	 * in a deeper part of the crisscross call graph)

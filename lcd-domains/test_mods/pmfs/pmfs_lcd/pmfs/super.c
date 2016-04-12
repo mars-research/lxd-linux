@@ -686,8 +686,6 @@ static int pmfs_fill_super(struct super_block *sb, void *data, int silent)
 	set_opt(sbi->s_mount_opt, MOUNTING);
 	initsize = sbi->initsize;
 
-	LIBLCD_MSG("data string is >%s<", (char *)data);
-
 	/* Init a new pmfs instance */
 	if (initsize) {
 		root_pi = pmfs_init(sb, initsize);
@@ -1110,7 +1108,7 @@ static int __init init_inodecache(void)
 					}),
 						0, (SLAB_RECLAIM_ACCOUNT |
 							SLAB_MEM_SPREAD), 
-						init_once);
+					init_once);
 #else
 	pmfs_inode_cachep = kmem_cache_create("pmfs_inode_cache",
 					       sizeof(struct pmfs_inode_vfs),

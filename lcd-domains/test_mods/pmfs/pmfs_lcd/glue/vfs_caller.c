@@ -504,8 +504,12 @@ struct inode *iget_locked(struct super_block *sb, unsigned long ino)
 	/*
 	 * Marshal:
 	 *
-	 *   -- ref to sb obj
+	 *   -- their ref to sb obj
+	 *   -- ref to our sb
 	 *   -- ino
+	 *
+	 * Why do we have to pass ours? Because we call iget_locked
+	 * before we have returned our sb ref (from mount_nodev fill_super).
 	 */
 	ret = async_msg_blocking_send_start(vfs_async_chnl, &request);
 	if (ret) {
@@ -515,7 +519,8 @@ struct inode *iget_locked(struct super_block *sb, unsigned long ino)
 
 	async_msg_set_fn_type(request, IGET_LOCKED);
 	fipc_set_reg0(request, cptr_val(sb_container->their_ref));
-	fipc_set_reg1(request, ino);
+	fipc_set_reg1(request, cptr_val(sb_container->my_ref));
+	fipc_set_reg2(request, ino);
 
 	ret = thc_ipc_call(vfs_async_chnl, request, &response);
 	if (ret) {
@@ -543,8 +548,8 @@ struct inode *iget_locked(struct super_block *sb, unsigned long ino)
 	}
 	inode_container->pmfs_inode_vfs.vfs_inode.i_state =
 		fipc_get_reg1(response);
-	set_nlink(&inode_container->pmfs_inode_vfs.vfs_inode,
-		fipc_get_reg2(response));
+	inode_container->pmfs_inode_vfs.vfs_inode.__i_nlink = 
+		fipc_get_reg2(response);
 	inode_container->pmfs_inode_vfs.vfs_inode.i_mode =
 		fipc_get_reg3(response);
 
@@ -768,6 +773,18 @@ fail2:
 fail1:
 out:
 	return;
+}
+
+void
+inode_init_once(struct inode *inode)
+{
+	return; /* no-op */
+}
+
+void
+set_nlink(struct inode *inode, unsigned int link)
+{
+	inode->__i_nlink = link;
 }
 
 struct dentry *
