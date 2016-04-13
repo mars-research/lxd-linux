@@ -149,8 +149,10 @@ destroy_both:
 	lcd_destroy_create_ctx(ctx);
 destroy_vfs:
 	/*
-	 * While we debug, make sure pmfs is no longer registered,
-	 * even if we failed, so we don't crash
+	 * Ensure the pmfs fs type is unregistered. If we unload
+	 * the vfs module before unregistering the pmfs fs, we
+	 * will get repeated faults (due to a proc fs thread trying
+	 * to read all current file systems).
 	 */
 	force_pmfs_unreg();
 	lcd_destroy_module_klcd(vfs, "lcd_test_mod_pmfs_vfs");

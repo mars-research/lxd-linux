@@ -141,7 +141,7 @@ static void destroy_sb_writers(struct super_block *s)
 /* For the PMFS LCD example. */
 struct super_block_container {
 	struct super_block super_block;
-	u64 f1, f2, f3;
+	u64 f1, f2;
 };
 
 /**

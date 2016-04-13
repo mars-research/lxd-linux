@@ -69,9 +69,13 @@ static void main_and_loop(void)
 				LIBLCD_MSG("SUCCESSFULLY REGISTERED PMFS!");
 			}
 
-			while (!pmfs_done)
-				THCYield();
+			/* Yield for now. We will get scheduled one last
+			 * time when dispatch loop exits. */
+			THCYield();
+
+			/* Dispatch loop yield to us; time to tear down. */
 			exit_pmfs_fs();
+
 			LIBLCD_MSG("SUCCESSFULLY UNREGISTERED PMFS!");
 
 			);
@@ -80,7 +84,7 @@ static void main_and_loop(void)
 		 * will be set up (the awe running init_pmfs_fs above
 		 * will not yield until it tries to use the async
 		 * channel). */
-		while (!stop) {
+		while (!stop && !pmfs_done) {
 			ASYNC(
 				stop = do_one_async();
 			);

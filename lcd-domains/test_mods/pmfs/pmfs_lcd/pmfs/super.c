@@ -1174,19 +1174,14 @@ static struct dentry *pmfs_mount(struct file_system_type *fs_type,
 
 #ifdef LCD_ISOLATE
 
-/* We shouldn't need to include this struct def. Kind of ugly right now. */
-struct ipc_channel {
-	int type;
-	u64 channel_cptr;
-	struct list_head channel_list;
-	int expected_cptrs;
-};
+/* We shouldn't need to include these struct defs. Kind of ugly right now. */
 
 struct file_system_type_container {
 	struct file_system_type file_system_type;
 	u64 ref1;
 	u64 ref2;
-	struct ipc_channel c;
+	void *fs_info;
+	u64 ref3;
 };
 
 struct module_container {

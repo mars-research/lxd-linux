@@ -60,6 +60,7 @@ struct file_system_type_container {
 	cptr_t their_ref;
 	/* We need this on the vfs side: */
 	struct fs_info *fs_info;
+	cptr_t fs_memory;
 };
 
 struct backing_dev_info_container {
@@ -79,7 +80,6 @@ struct super_block_container {
 	struct super_block super_block;
 	cptr_t my_ref;
 	cptr_t their_ref;
-	cptr_t fs_memory; /* for convenience */
 };
 
 struct pmfs_inode_vfs_container {

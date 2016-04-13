@@ -617,9 +617,6 @@ mount_nodev_fill_super(struct super_block *sb,
 	s_flags = fipc_get_reg2(response);
 	dentry_ref = __cptr(fipc_get_reg3(response));
 
-	LIBLCD_MSG("vfs: fill sup caller got dentry ref 0x%lx",
-		cptr_val(dentry_ref));
-
 	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->fs_async_chnl), 
 			response);
 
@@ -875,6 +872,12 @@ file_system_type_mount(struct file_system_type *fs_type,
 		goto fail0;
 	}
 	/*
+	 * XXX: We store this here for convenience. It's not really
+	 * required in order for the example to work. We need it to
+	 * do the revoke after the super block is unmounted.
+	 */
+	fs_container->fs_memory = fs_mem_cptr;
+	/*
 	 * Volunteer memory that contains void *data
 	 */
 	ret = setup_data(data, &data_cptr, &mem_order, &data_offset);
@@ -1019,7 +1022,7 @@ file_system_type_kill_sb(struct super_block *sb,
 		hidden_args->struct_container;
 	struct super_block_container *sb_container;
 	struct super_operations *s_ops;
-	cptr_t fs_mem_cptr;
+	cptr_t fs_mem_cptr = fs_container->fs_memory;
 	int ret;
 	struct fipc_message *request, *response;
 	/*
@@ -1032,7 +1035,6 @@ file_system_type_kill_sb(struct super_block *sb,
 				super_block);
 	/* It's safe to discard const here */
 	s_ops = (struct super_operations *)sb->s_op;
-	fs_mem_cptr = sb_container->fs_memory;
 	/*
 	 * Marshal refs to fs type and super block, and do rpc.
 	 *
@@ -2157,11 +2159,8 @@ out:
 	/*
 	 * Return new dentry ref
 	 */
-	if (dentry_container) {
-		LIBLCD_MSG("vfs: returning dentry cptr 0x%lx",
-			cptr_val(dentry_container->my_ref));
+	if (dentry_container)
 		fipc_set_reg0(response, cptr_val(dentry_container->my_ref));
-	}
 	else
 		fipc_set_reg0(response, cptr_val(CAP_CPTR_NULL));
 

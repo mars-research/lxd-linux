@@ -857,9 +857,6 @@ d_make_root(struct inode *inode)
 	}
 	dentry_container->their_ref = __cptr(fipc_get_reg0(response));
 
-	LIBLCD_MSG("pmfs: dentry their ref is 0x%lx",
-		cptr_val(dentry_container->their_ref));
-
 	fipc_recv_msg_end(thc_channel_to_fipc(vfs_async_chnl), response);
 	
 	return &dentry_container->dentry;
@@ -1693,6 +1690,7 @@ int file_system_type_kill_sb_callee(struct fipc_message *request,
 	 */
 	glue_cap_remove(cspace, sb_container->my_ref);
 	kfree(sb_container);
+	LIBLCD_MSG("pmfs returned from kill_sb");
 	/*
 	 * Nothing to reply with
 	 */
@@ -1716,22 +1714,19 @@ out:
 }
 
 /* Stolen from part of pmfs/super.c:pmfs_put_super */
-static void do_unmap(struct super_block *sb)
+static void do_unmap(void *virt_addr, u64 size)
 {
-	struct pmfs_sb_info *sbi = PMFS_SB(sb);
-	struct pmfs_super_block *ps = pmfs_get_super(sb);
-	u64 size = le64_to_cpu(ps->s_size);
 	gpa_t fs_mem_gpa;
 	cptr_t fs_mem_cptr;
 	int ret;
 	unsigned long unused1, unused2;
 
-	if (sbi->virt_addr) {
+	if (virt_addr) {
 		/*
 		 * Translate fs mem gva -> gpa
 		 */
 		fs_mem_gpa = isolated_lcd_gva2gpa(
-			__gva((unsigned long)sbi->virt_addr));
+			__gva((unsigned long)virt_addr));
 		/*
 		 * Look up capability for fs mem
 		 */
@@ -1763,6 +1758,8 @@ int super_block_put_super_callee(struct fipc_message *request,
 	struct fipc_message *response;
 	cptr_t sb_ref = __cptr(fipc_get_reg0(request));
 	uint32_t request_cookie = thc_get_request_cookie(request);
+	void *virt_addr;
+	u64 size;
 
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 
@@ -1777,6 +1774,12 @@ int super_block_put_super_callee(struct fipc_message *request,
 		goto fail1;
 	}
 	/*
+	 * Get the info we need to do the unmap. These data structures
+	 * are going to go bye-bye during put_super.
+	 */
+	virt_addr = PMFS_SB(&sb_container->super_block)->virt_addr;
+	size = le64_to_cpu(pmfs_get_super(&sb_container->super_block)->s_size);
+	/*
 	 * Invoke real function (this doesn't kill the struct sb yet; not
 	 * until fs type -> kill_sb). This will call iounmap, which does
 	 * nothing (the real unmap follows).
@@ -1785,7 +1788,7 @@ int super_block_put_super_callee(struct fipc_message *request,
 	/*
 	 * Unmap fs memory and delete cap
 	 */
-	do_unmap(&sb_container->super_block);
+	do_unmap(virt_addr, size);
 	/*
 	 * Nothing to reply with
 	 */
