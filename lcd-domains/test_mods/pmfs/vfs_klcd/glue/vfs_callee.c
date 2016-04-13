@@ -281,6 +281,19 @@ super_block_alloc_inode_trampoline(struct super_block *super_block)
 	return super_block_alloc_inode_p(super_block, hidden_args);
 }
 
+static void glue_destroy_inode(struct rcu_head *head)
+{
+	struct inode *inode = container_of(head, struct inode, i_rcu);
+	struct pmfs_inode_vfs_container *inode_container =
+		container_of(
+			container_of(inode,
+				struct pmfs_inode_vfs,
+				vfs_inode),
+			struct pmfs_inode_vfs_container,
+			pmfs_inode_vfs);
+	kfree(inode_container);
+}
+
 void
 noinline
 super_block_destroy_inode(struct inode *inode,
@@ -337,8 +350,8 @@ out:
 	 * Remove our copy from cspace, and destroy it
 	 */
 	glue_cap_remove(hidden_args->fs_cspace, inode_container->my_ref);
-	kfree(inode_container);
-
+	call_rcu(&inode_container->pmfs_inode_vfs.vfs_inode.i_rcu, 
+		glue_destroy_inode);
 	return;
 }
 
