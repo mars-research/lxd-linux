@@ -165,14 +165,14 @@ static int do_pmfs_test(void)
 	struct super_block *sb;
 	char *data;
 
-	pmfs_fs_type = get_fs_type("pmfs");
+	pmfs_fs_type = get_fs_type("pmfs_lcd");
 	if (!pmfs_fs_type) {
 		LIBLCD_ERR("couldn't get pmfs fs type");
 		ret = -EIO;
 		goto fail1;
 	}
 
-	LIBLCD_MSG("vfs got pmfs fs type");
+	PMFS_EX_DEBUG(LIBLCD_MSG("vfs got pmfs fs type"));
 
 	/* 
 	 * We can't pass this as a const char *, because pmfs
@@ -196,17 +196,17 @@ static int do_pmfs_test(void)
 		ret = -EIO;
 		goto fail3;
 	}
-	LIBLCD_MSG("vfs mounted pmfs");
+	PMFS_EX_DEBUG(LIBLCD_MSG("vfs mounted pmfs"));
 
 	kfree(data);
 
 	sb = dentry->d_sb;
 	
-	LIBLCD_MSG("vfs calling kill_sb");
+	PMFS_EX_DEBUG(LIBLCD_MSG("vfs calling kill_sb"));
 
 	dput(dentry);
 	deactivate_locked_super(sb);
-	LIBLCD_MSG("vfs unmounted pmfs");
+	PMFS_EX_DEBUG(LIBLCD_MSG("vfs unmounted pmfs"));
 
 	module_put(pmfs_fs_type->owner); /* release reference */
 			
@@ -268,13 +268,14 @@ static void loop(cptr_t register_chnl)
 					}
 					);
 			} else if (ret != -EWOULDBLOCK) {
-				LIBLCD_ERR("async loop failed");
+				PMFS_EX_DEBUG(LIBLCD_ERR("async loop failed"));
 				stop = 1;
 				break;
 			}
 
 			if (kthread_should_stop()) {
-				LIBLCD_MSG("kthread should stop");
+				PMFS_EX_DEBUG(
+					LIBLCD_MSG("kthread should stop"));
 				stop = 1;
 				break;
 			}
@@ -287,7 +288,7 @@ static void loop(cptr_t register_chnl)
 #endif
 		}
 
-		LIBLCD_MSG("vfs exited loop");
+		PMFS_EX_DEBUG(LIBLCD_MSG("vfs exited loop"));
 
 		THCStopAllAwes();
 
@@ -301,7 +302,7 @@ static void loop(cptr_t register_chnl)
 	 * went bye-bye when we unloaded the vfs's .ko.)
 	 */
 
-	LIBLCD_MSG("EXITED VFS DO_FINISH");
+	PMFS_EX_DEBUG(LIBLCD_MSG("EXITED VFS DO_FINISH"));
 
 	return;
 }

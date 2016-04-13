@@ -1507,10 +1507,11 @@ int register_filesystem_callee(void)
 	 *    -- cr2: our rx ring buffer
 	 *
 	 * XXX: We don't bother passing fs name for now. Just hard code
-	 * it to "pmfs".
+	 * it to "pmfs_lcd" (we use "pmfs_lcd" instead of "pmfs" so that
+	 * we can use the original pmfs at the same time).
 	 */
 	fs_container->their_ref = __cptr(lcd_r1());
-	fs_container->file_system_type.name = "pmfs";
+	fs_container->file_system_type.name = "pmfs_lcd"; 
 	module_container->their_ref = __cptr(lcd_r2());
 	sync_endpoint = lcd_cr0();
 	tx = lcd_cr1();

@@ -28,7 +28,7 @@ int dispatch_sync_vfs_channel(void)
 	return 0;
 }
 
-#define trace(x) LIBLCD_MSG("vfs got " #x " msg")
+#define trace(x) PMFS_EX_DEBUG(LIBLCD_MSG("vfs got " #x " msg"))
 
 int dispatch_async_vfs_channel(struct thc_channel *channel, 
 			struct fipc_message *message,
