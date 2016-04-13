@@ -10,7 +10,7 @@
 
 #include <lcd_config/post_hook.h>
 
-#define trace(x) LIBLCD_MSG("pmfs got " #x " msg")
+#define trace(x) PMFS_EX_DEBUG(LIBLCD_MSG("pmfs got " #x " msg"))
 
 int dispatch_fs_channel(struct thc_channel *channel,
 			struct fipc_message *message,

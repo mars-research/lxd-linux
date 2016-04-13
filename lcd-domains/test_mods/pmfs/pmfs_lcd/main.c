@@ -66,7 +66,7 @@ static void main_and_loop(void)
 				LIBLCD_ERR("pmfs register failed");
 				stop = 1;
 			} else {
-				LIBLCD_MSG("SUCCESSFULLY REGISTERED PMFS!");
+				PMFS_EX_DEBUG(LIBLCD_MSG("SUCCESSFULLY REGISTERED PMFS!"));
 			}
 
 			/* Yield for now. We will get scheduled one last
@@ -76,7 +76,8 @@ static void main_and_loop(void)
 			/* Dispatch loop yield to us; time to tear down. */
 			exit_pmfs_fs();
 
-			LIBLCD_MSG("SUCCESSFULLY UNREGISTERED PMFS!");
+			PMFS_EX_DEBUG(
+				LIBLCD_MSG("SUCCESSFULLY UNREGISTERED PMFS!"));
 
 			);
 
@@ -90,11 +91,11 @@ static void main_and_loop(void)
 			);
 		}
 
-		LIBLCD_MSG("PMFS EXITED DISPATCH LOOP");
+		PMFS_EX_DEBUG(LIBLCD_MSG("PMFS EXITED DISPATCH LOOP"));
 
 		);
 
-	LIBLCD_MSG("EXITED PMFS DO_FINISH");
+	PMFS_EX_DEBUG(LIBLCD_MSG("EXITED PMFS DO_FINISH"));
 
 	return;
 }

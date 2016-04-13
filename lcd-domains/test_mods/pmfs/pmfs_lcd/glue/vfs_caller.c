@@ -1690,7 +1690,6 @@ int file_system_type_kill_sb_callee(struct fipc_message *request,
 	 */
 	glue_cap_remove(cspace, sb_container->my_ref);
 	kfree(sb_container);
-	LIBLCD_MSG("pmfs returned from kill_sb");
 	/*
 	 * Nothing to reply with
 	 */
