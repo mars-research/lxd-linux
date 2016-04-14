@@ -25,7 +25,7 @@
 
 /* MACROS/FLAGS -------------------------------------------------- */
 
-#define DEBUG_PMFS_EXAMPLE 0
+#define DEBUG_PMFS_EXAMPLE 1
 
 /* Function flags */
 enum {
@@ -53,12 +53,12 @@ enum {
 /* async rpc buffers are 2^PMFS_ASYNC_RPC_BUFFER_ORDER bytes */
 #define PMFS_ASYNC_RPC_BUFFER_ORDER 12
 
-#define PMFS_EXAMPLE_NUM_ITER 100
+#define PMFS_EXAMPLE_NUM_ITER 5
 
 #if DEBUG_PMFS_EXAMPLE
-#define PMFS_EX_DEBUG(x) do { x } while(0)
+#define PMFS_EX_DEBUG(xx) do { xx; } while(0)
 #else
-#define PMFS_EX_DEBUG(x)
+#define PMFS_EX_DEBUG(xx)
 #endif
 
 /* STRUCT DEFS -------------------------------------------------- */
@@ -233,6 +233,54 @@ async_msg_blocking_send_start(struct thc_channel *chnl,
 		if (kthread_should_stop())
 			return -EIO;
 	}
+}
+
+static inline unsigned long pmfs_ex_start_stopwatch(void)
+{
+	unsigned long stamp;
+	/*
+	 * Assumes x86
+	 *
+	 * rdtsc returns current cycle counter on cpu; 
+	 * low 32 bits in %rax, high 32 bits in %rdx.
+	 *
+	 * Note: We use rdtsc to start the stopwatch because it won't
+	 * wait for prior instructions to complete (that we don't care
+	 * about). It is not exact - meaning that instructions after
+	 * it in program order may start executing before the read
+	 * is completed (so we may slightly underestimate the time to
+	 * execute the intervening instructions). But also note that
+	 * the two subsequent move instructions are also counted against
+	 * us (overestimate).
+	 */
+	asm volatile(
+		"rdtsc\n\t"
+		"shl $32, %%rdx\n\t"
+		"or %%rdx, %%rax\n\t" 
+		: "=a" (stamp)
+		:
+		: "rdx");
+	return stamp;
+}
+
+static inline unsigned long pmfs_ex_stop_stopwatch(void)
+{
+	unsigned long stamp;
+	/*
+	 * Assumes x86
+	 *
+	 * Unlike start_stopwatch, we want to wait until all prior
+	 * instructions are done, so we use rdtscp. (We don't care
+	 * about the tsc aux value.)
+	 */
+	asm volatile(
+		"rdtscp\n\t"
+		"shl $32, %%rdx\n\t"
+		"or %%rdx, %%rax\n\t" 
+		: "=a" (stamp)
+		:
+		: "rdx", "rcx");
+	return stamp;
 }
 
 #endif /* PMFS_EXAMPLE_DEFS_H */

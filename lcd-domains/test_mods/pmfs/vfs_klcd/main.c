@@ -160,10 +160,12 @@ fail1:
 static int do_pmfs_test(void)
 {
 	int ret;
-	struct file_system_type *pmfs_fs_type;
 	struct dentry *dentry;
 	struct super_block *sb;
 	char *data;
+	int i;
+	unsigned long start, stop;
+	struct file_system_type *pmfs_fs_type;
 
 	pmfs_fs_type = get_fs_type("pmfs_lcd");
 	if (!pmfs_fs_type) {
@@ -187,26 +189,41 @@ static int do_pmfs_test(void)
 		goto fail2;
 	}
 
-	dentry = pmfs_fs_type->mount(pmfs_fs_type,
-				0,
-				"/not/used",
-				data);
-	if (!dentry) {
-		LIBLCD_ERR("error mounting pmfs?");
-		ret = -EIO;
-		goto fail3;
+	printk(KERN_ERR "Mount timings:\n\n");
+
+	for (i = 0; i < PMFS_EXAMPLE_NUM_ITER; i++) {
+
+		PMFS_EX_DEBUG(LIBLCD_MSG("vfs mounting pmfs, iter %d", i));
+
+		start = pmfs_ex_start_stopwatch();
+		dentry = pmfs_fs_type->mount(pmfs_fs_type,
+					0,
+					"/not/used",
+					data);
+		stop = pmfs_ex_stop_stopwatch();
+		if (!dentry) {
+			LIBLCD_ERR("error mounting pmfs?");
+			ret = -EIO;
+			goto fail3;
+		}
+
+		printk(KERN_ERR "%d: %lu\n", i, stop - start);
+
+		PMFS_EX_DEBUG(LIBLCD_MSG("vfs mounted pmfs"));
+
+		sb = dentry->d_sb;
+	
+		PMFS_EX_DEBUG(LIBLCD_MSG("vfs calling kill_sb"));
+
+		dput(dentry);
+		deactivate_locked_super(sb);
+		PMFS_EX_DEBUG(LIBLCD_MSG("vfs unmounted pmfs"));
+
 	}
-	PMFS_EX_DEBUG(LIBLCD_MSG("vfs mounted pmfs"));
+
+	printk(KERN_ERR "Mount Experiment Done\n");
 
 	kfree(data);
-
-	sb = dentry->d_sb;
-	
-	PMFS_EX_DEBUG(LIBLCD_MSG("vfs calling kill_sb"));
-
-	dput(dentry);
-	deactivate_locked_super(sb);
-	PMFS_EX_DEBUG(LIBLCD_MSG("vfs unmounted pmfs"));
 
 	module_put(pmfs_fs_type->owner); /* release reference */
 			
@@ -215,6 +232,8 @@ static int do_pmfs_test(void)
 fail3:
 	kfree(data);
 fail2:
+	module_put(pmfs_fs_type->owner); /* release reference */
+	pmfs_fs_type = NULL;
 fail1:
 	return ret;
 }

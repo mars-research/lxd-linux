@@ -20,7 +20,7 @@ static void force_pmfs_unreg(void)
 {
 	struct file_system_type *pmfs_fs_type;
 
-	pmfs_fs_type = get_fs_type("pmfs");
+	pmfs_fs_type = get_fs_type("pmfs_lcd");
 	if (!pmfs_fs_type)
 		return;
 

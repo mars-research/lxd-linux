@@ -25,6 +25,7 @@ extern cptr_t vfs_sync_endpoint;
 extern struct glue_cspace *vfs_cspace;
 extern struct thc_channel *vfs_async_chnl;
 extern int pmfs_done;
+int pmfs_mount_count;
 
 /* GLUE SUPPORT CODE -------------------------------------------------- */
 
@@ -1361,7 +1362,9 @@ int mount_nodev_fill_super_callee(struct fipc_message *request,
 	/*
 	 * Map void *data arg
 	 */
+	LIBLCD_MSG("mapping data");
 	ret = lcd_map_virt(data_cptr, mem_order, &data_gva);
+	LIBLCD_MSG("done mapping data");
 	if (ret) {
 		LIBLCD_ERR("error mapping void *data");
 		goto fail4;
@@ -1569,7 +1572,9 @@ int file_system_type_mount_callee(struct fipc_message *request,
 	/*
 	 * Map void *data
 	 */
+	LIBLCD_MSG("mapping data");
 	ret = lcd_map_virt(data_cptr, mem_order, &data_gva);
+	LIBLCD_MSG("done mapping data");
 	if (ret) {
 		LIBLCD_ERR("couldn't map void *data arg");
 		goto fail3;
@@ -1577,7 +1582,9 @@ int file_system_type_mount_callee(struct fipc_message *request,
 	/*
 	 * Map fs memory
 	 */
+	LIBLCD_MSG("mapping fs mem\n");
 	ret = lcd_map_phys(fs_mem_cptr, fs_mem_order, &fs_mem_gpa);
+	LIBLCD_MSG("done mapping fs mem\n");
 	if (ret) {
 		LIBLCD_ERR("error mapping fs memory");
 		goto fail4;
@@ -1707,18 +1714,21 @@ out:
 
 	thc_ipc_reply(channel, request_cookie, response);
 
-	pmfs_done = 1;
+	pmfs_mount_count++;
+	if (pmfs_mount_count == PMFS_EXAMPLE_NUM_ITER - 1)
+		pmfs_done = 1;
 
 	return ret;
 }
 
 /* Stolen from part of pmfs/super.c:pmfs_put_super */
-static void do_unmap(void *virt_addr, u64 size)
+static void do_unmap(void *virt_addr)
 {
 	gpa_t fs_mem_gpa;
 	cptr_t fs_mem_cptr;
 	int ret;
-	unsigned long unused1, unused2;
+	unsigned long size;
+	unsigned long unused;
 
 	if (virt_addr) {
 		/*
@@ -1729,8 +1739,8 @@ static void do_unmap(void *virt_addr, u64 size)
 		/*
 		 * Look up capability for fs mem
 		 */
-		ret = lcd_phys_to_cptr(fs_mem_gpa, &fs_mem_cptr, &unused1,
-				&unused2);
+		ret = lcd_phys_to_cptr(fs_mem_gpa, &fs_mem_cptr, &size,
+				&unused);
 		if (ret) {
 			LIBLCD_ERR("failed to resolve phys to cptr");
 			fs_mem_cptr = CAP_CPTR_NULL;
@@ -1738,6 +1748,7 @@ static void do_unmap(void *virt_addr, u64 size)
 		/*
 		 * Unmap the memory from our address space
 		 */
+		LIBLCD_MSG("unmapping fs mem, sz is 0x%lx", size);
 		lcd_unmap_phys(fs_mem_gpa, ilog2(size >> PAGE_SHIFT));
 		/*
 		 * Delete our capability
@@ -1758,7 +1769,6 @@ int super_block_put_super_callee(struct fipc_message *request,
 	cptr_t sb_ref = __cptr(fipc_get_reg0(request));
 	uint32_t request_cookie = thc_get_request_cookie(request);
 	void *virt_addr;
-	u64 size;
 
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 
@@ -1777,7 +1787,6 @@ int super_block_put_super_callee(struct fipc_message *request,
 	 * are going to go bye-bye during put_super.
 	 */
 	virt_addr = PMFS_SB(&sb_container->super_block)->virt_addr;
-	size = le64_to_cpu(pmfs_get_super(&sb_container->super_block)->s_size);
 	/*
 	 * Invoke real function (this doesn't kill the struct sb yet; not
 	 * until fs type -> kill_sb). This will call iounmap, which does
@@ -1787,7 +1796,7 @@ int super_block_put_super_callee(struct fipc_message *request,
 	/*
 	 * Unmap fs memory and delete cap
 	 */
-	do_unmap(virt_addr, size);
+	do_unmap(virt_addr);
 	/*
 	 * Nothing to reply with
 	 */

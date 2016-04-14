@@ -831,9 +831,8 @@ static int setup_data(void *data, cptr_t *data_cptr,
 		goto fail1;
 	}
 	data_len = strlen(data);
-	mem_len = roundup_pow_of_two(ALIGN(data + data_len - page_address(p),
-								PAGE_SIZE));
-	*mem_order = ilog2(mem_len >> PAGE_SHIFT);
+	mem_len = ALIGN(data + data_len - page_address(p), PAGE_SIZE);
+	*mem_order = ilog2(roundup_pow_of_two(mem_len >> PAGE_SHIFT));
 	/*
 	 * Volunteer memory
 	 */
