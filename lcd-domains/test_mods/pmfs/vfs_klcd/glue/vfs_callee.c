@@ -1691,6 +1691,7 @@ out:
 		glue_cap_remove(cspace, module_container->my_ref);
 		glue_cap_destroy(cspace);
 		kfree(fs_container);
+		free_percpu(module_container->module.refptr);
 		kfree(module_container);
 	}
 
