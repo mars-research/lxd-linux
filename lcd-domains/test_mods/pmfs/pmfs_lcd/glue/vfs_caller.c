@@ -310,6 +310,8 @@ int register_filesystem(struct file_system_type *fs)
 	 */
 	vfs_async_chnl = chnl;
 
+	trace_channel(vfs_async_chnl);
+
 	return ret;
 
 fail6:
@@ -363,6 +365,8 @@ int unregister_filesystem(struct file_system_type *fs)
 	 */
 	ret = fipc_get_reg0(response);
 	fipc_recv_msg_end(thc_channel_to_fipc(vfs_async_chnl), response);
+
+	trace_channel(vfs_async_chnl);
 	/*
 	 * Tear down.
 	 *
@@ -435,6 +439,10 @@ int bdi_init(struct backing_dev_info *bdi)
 	 */
 	ret = fipc_get_reg0(response);
 	bdi_container->their_ref = __cptr(fipc_get_reg1(response));
+
+	fipc_recv_msg_end(thc_channel_to_fipc(vfs_async_chnl), response);
+
+	trace_channel(vfs_async_chnl);
 	/*
 	 * Pass back return value
 	 */
@@ -480,6 +488,8 @@ void bdi_destroy(struct backing_dev_info *bdi)
 	 * Nothing is in response
 	 */
 	fipc_recv_msg_end(thc_channel_to_fipc(vfs_async_chnl), response);
+
+	trace_channel(vfs_async_chnl);
 	/*
 	 * Remove bdi obj from cspace
 	 */
@@ -556,6 +566,8 @@ struct inode *iget_locked(struct super_block *sb, unsigned long ino)
 
 	fipc_recv_msg_end(thc_channel_to_fipc(vfs_async_chnl), response);
 
+	trace_channel(vfs_async_chnl);
+
 	/*
 	 * We also know that i_mapping -> i_data, at least for pmfs. (So
 	 * although i_mapping is a pointer, the data it points to is embedded
@@ -629,6 +641,8 @@ void truncate_inode_pages(struct address_space *mapping, loff_t lstart)
 
 	fipc_recv_msg_end(thc_channel_to_fipc(vfs_async_chnl), response);
 
+	trace_channel(vfs_async_chnl);
+
 	goto out;
 fail2:
 fail1:
@@ -675,6 +689,8 @@ void clear_inode(struct inode *inode)
 
 	fipc_recv_msg_end(thc_channel_to_fipc(vfs_async_chnl), response);
 
+	trace_channel(vfs_async_chnl);
+
 	goto out;
 fail2:
 fail1:
@@ -720,6 +736,8 @@ void iget_failed(struct inode *inode)
 	 */
 
 	fipc_recv_msg_end(thc_channel_to_fipc(vfs_async_chnl), response);
+
+	trace_channel(vfs_async_chnl);
 
 	goto out;
 fail2:
@@ -768,6 +786,8 @@ void unlock_new_inode(struct inode *inode)
 		fipc_get_reg0(response);
 
 	fipc_recv_msg_end(thc_channel_to_fipc(vfs_async_chnl), response);
+
+	trace_channel(vfs_async_chnl);
 
 	goto out;
 fail2:
@@ -859,6 +879,8 @@ d_make_root(struct inode *inode)
 	dentry_container->their_ref = __cptr(fipc_get_reg0(response));
 
 	fipc_recv_msg_end(thc_channel_to_fipc(vfs_async_chnl), response);
+
+	trace_channel(vfs_async_chnl);
 	
 	return &dentry_container->dentry;
 
@@ -886,6 +908,7 @@ mount_nodev(struct file_system_type *fs_type,
 	unsigned long mem_sz;
 	uint32_t request_cookie;
 	struct fipc_message *request, *response;
+	cptr_t dentry_ref;
 	
 	fs_container = container_of(
 		fs_type,
@@ -981,12 +1004,15 @@ mount_nodev(struct file_system_type *fs_type,
 	/*
 	 * Unmarshal returned dentry
 	 */
-	if (cptr_is_null(__cptr(fipc_get_reg0(response)))) {
+	dentry_ref = __cptr(fipc_get_reg0(response));
+	fipc_recv_msg_end(thc_channel_to_fipc(vfs_async_chnl), response);
+
+	if (cptr_is_null(dentry_ref)) {
 		LIBLCD_ERR("got null from remote mount_nodev");
 		goto fail8;
 	}
 	ret = glue_cap_lookup_dentry_type(vfs_cspace,
-					__cptr(fipc_get_reg0(response)),
+					dentry_ref,
 					&dentry_container);
 	if (ret) {
 		LIBLCD_ERR("couldn't find dentry");
@@ -1003,6 +1029,9 @@ mount_nodev(struct file_system_type *fs_type,
 	/*
 	 * Done
 	 */
+
+	trace_channel(vfs_async_chnl);
+
 	return &dentry_container->dentry;
 
 fail9:
@@ -1052,6 +1081,8 @@ void kill_anon_super(struct super_block *sb)
 	 */
 
 	fipc_recv_msg_end(thc_channel_to_fipc(vfs_async_chnl), response);
+
+	trace_channel(vfs_async_chnl);
 
 	goto out;
 
@@ -1138,6 +1169,8 @@ reply:
 
 	thc_ipc_reply(channel, request_cookie, response);
 
+	trace_channel(vfs_async_chnl);
+
 	return ret;
 }
 
@@ -1199,6 +1232,8 @@ reply:
 
 	thc_ipc_reply(channel, request_cookie, response);
 
+	trace_channel(vfs_async_chnl);
+
 	return ret;
 }
 
@@ -1257,6 +1292,8 @@ out:
 	/* empty reply */
 
 	thc_ipc_reply(channel, request_cookie, response);
+
+	trace_channel(vfs_async_chnl);
 
 	return ret;
 }
@@ -1362,9 +1399,7 @@ int mount_nodev_fill_super_callee(struct fipc_message *request,
 	/*
 	 * Map void *data arg
 	 */
-	LIBLCD_MSG("mapping data");
 	ret = lcd_map_virt(data_cptr, mem_order, &data_gva);
-	LIBLCD_MSG("done mapping data");
 	if (ret) {
 		LIBLCD_ERR("error mapping void *data");
 		goto fail4;
@@ -1424,6 +1459,8 @@ out:
 	}
 
 	thc_ipc_reply(channel, request_cookie, response);
+
+	trace_channel(vfs_async_chnl);
 
 	return ret;
 }
@@ -1572,9 +1609,7 @@ int file_system_type_mount_callee(struct fipc_message *request,
 	/*
 	 * Map void *data
 	 */
-	LIBLCD_MSG("mapping data");
 	ret = lcd_map_virt(data_cptr, mem_order, &data_gva);
-	LIBLCD_MSG("done mapping data");
 	if (ret) {
 		LIBLCD_ERR("couldn't map void *data arg");
 		goto fail3;
@@ -1582,9 +1617,7 @@ int file_system_type_mount_callee(struct fipc_message *request,
 	/*
 	 * Map fs memory
 	 */
-	LIBLCD_MSG("mapping fs mem\n");
 	ret = lcd_map_phys(fs_mem_cptr, fs_mem_order, &fs_mem_gpa);
-	LIBLCD_MSG("done mapping fs mem\n");
 	if (ret) {
 		LIBLCD_ERR("error mapping fs memory");
 		goto fail4;
@@ -1654,6 +1687,8 @@ out:
 
 	thc_ipc_reply(channel, request_cookie, response);
 
+	trace_channel(vfs_async_chnl);
+
 	return ret;
 }
 
@@ -1715,8 +1750,10 @@ out:
 	thc_ipc_reply(channel, request_cookie, response);
 
 	pmfs_mount_count++;
-	if (pmfs_mount_count == PMFS_EXAMPLE_NUM_ITER - 1)
+	if (pmfs_mount_count == PMFS_EXAMPLE_NUM_ITER)
 		pmfs_done = 1;
+
+	trace_channel(vfs_async_chnl);
 
 	return ret;
 }
@@ -1748,7 +1785,6 @@ static void do_unmap(void *virt_addr)
 		/*
 		 * Unmap the memory from our address space
 		 */
-		LIBLCD_MSG("unmapping fs mem, sz is 0x%lx", size);
 		lcd_unmap_phys(fs_mem_gpa, ilog2(size >> PAGE_SHIFT));
 		/*
 		 * Delete our capability
@@ -1813,6 +1849,8 @@ out:
 	/* empty reply */
 
 	thc_ipc_reply(channel, request_cookie, response);
+
+	trace_channel(vfs_async_chnl);
 
 	return ret;
 }

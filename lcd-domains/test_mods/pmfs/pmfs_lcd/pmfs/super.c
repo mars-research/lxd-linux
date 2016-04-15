@@ -385,7 +385,7 @@ static struct pmfs_inode *pmfs_init(struct super_block *sb,
 	struct pmfs_direntry *de;
 	unsigned long blocknr;
 
-	pmfs_dbg("creating an empty pmfs of size %lu\n", size);
+	pmfs_dbg_verbose("creating an empty pmfs of size %lu\n", size);
 	sbi->virt_addr = pmfs_ioremap(sb, sbi->phys_addr, size);
 	sbi->block_start = (unsigned long)0;
 	sbi->block_end = ((unsigned long)(size) >> PAGE_SHIFT);

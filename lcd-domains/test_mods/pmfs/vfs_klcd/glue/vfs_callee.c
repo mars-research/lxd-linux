@@ -249,6 +249,7 @@ super_block_alloc_inode(struct super_block *super_block,
 	/*
 	 * Return inode
 	 */
+	trace_channel(thc_channel_to_fipc(hidden_args->fs_async_chnl));
 	return &inode_container->pmfs_inode_vfs.vfs_inode;
 
 fail5:
@@ -341,6 +342,8 @@ super_block_destroy_inode(struct inode *inode,
 	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->fs_async_chnl), 
 			response);
 
+	trace_channel(thc_channel_to_fipc(hidden_args->fs_async_chnl));
+
 	goto out;
 
 fail2:
@@ -420,6 +423,8 @@ super_block_evict_inode(struct inode *inode,
 	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->fs_async_chnl), 
 			response);
 
+	trace_channel(thc_channel_to_fipc(hidden_args->fs_async_chnl));
+
 	goto out;
 
 fail2:
@@ -482,6 +487,8 @@ super_block_put_super(struct super_block *sb,
 	 */
 	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->fs_async_chnl), 
 			response);
+
+	trace_channel(thc_channel_to_fipc(hidden_args->fs_async_chnl));
 
 	goto out;
 
@@ -650,6 +657,8 @@ mount_nodev_fill_super(struct super_block *sb,
 	/*
 	 * Done
 	 */
+
+	trace_channel(thc_channel_to_fipc(hidden_args->fs_async_chnl));
 	return 0;
 
 fail8:
@@ -981,6 +990,8 @@ file_system_type_mount(struct file_system_type *fs_type,
 	/*
 	 * Done
 	 */
+	trace_channel(thc_channel_to_fipc(hidden_args->fs_async_chnl));
+
 	return &dentry_container->dentry;
 
 fail7:
@@ -1091,6 +1102,8 @@ file_system_type_kill_sb(struct super_block *sb,
 	/*
 	 * Done
 	 */
+	trace_channel(thc_channel_to_fipc(hidden_args->fs_async_chnl));
+
 	goto out;
 fail2:
 fail1:
@@ -1564,6 +1577,8 @@ int register_filesystem_callee(void)
 	 */
 	lcd_set_r1(cptr_val(fs_container->my_ref));
 	lcd_set_r2(cptr_val(module_container->my_ref));
+
+	trace_channel(chnl);
 	
 	goto out;
 
@@ -1613,22 +1628,12 @@ int unregister_filesystem_callee(struct fipc_message *request,
 	struct file_system_type_container *fs_container;
 	struct module_container *module_container;
 	int ret;
-	cptr_t fs_ref, m_ref;
+	cptr_t fs_ref = __cptr(fipc_get_reg0(request));
+	cptr_t m_ref = __cptr(fipc_get_reg1(request));
 	uint32_t request_cookie = thc_get_request_cookie(request);
 	struct fipc_message *response;
-	/*
-	 * Unmarshal refs:
-	 *
-	 *   -- fs ref
-	 *   -- module ref
-	 */
-	fs_ref = __cptr(fipc_get_reg0(request));
-	m_ref = __cptr(fipc_get_reg1(request));
-	ret = fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
-	if (ret) {
-		LIBLCD_ERR("failed to mark msg as recvd");
-		goto fail1;
-	}
+
+	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 	/*
 	 * Bind
 	 */
@@ -1664,7 +1669,6 @@ int unregister_filesystem_callee(struct fipc_message *request,
 fail4:
 fail3:
 fail2:
-fail1:
 out:
 	/*
 	 * Reply
@@ -1677,6 +1681,8 @@ out:
 	fipc_set_reg0(response, ret);
 
 	thc_ipc_reply(channel, request_cookie, response);
+
+	trace_channel(channel);
 
 	if (!ret) {
 		/*
@@ -1708,6 +1714,12 @@ int bdi_init_callee(struct fipc_message *request,
 	cptr_t bdi_obj_ref = CAP_CPTR_NULL;
 	struct fipc_message *response;
 	uint32_t request_cookie = thc_get_request_cookie(request);
+	cptr_t bdi_their_ref = __cptr(fipc_get_reg0(request));
+	unsigned long ra_pages = fipc_get_reg1(request);
+	unsigned int capabilities = fipc_get_reg2(request);
+
+	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
+
 	/*
 	 * Set up our own private copy
 	 */
@@ -1732,10 +1744,9 @@ int bdi_init_callee(struct fipc_message *request,
 	 *   -- bdi.ra_pages
 	 *   -- bdi.capabilities
 	 */
-	bdi_container->their_ref = __cptr(fipc_get_reg0(request));
-	bdi_container->backing_dev_info.ra_pages = fipc_get_reg1(request);
-	bdi_container->backing_dev_info.capabilities = fipc_get_reg2(request);
-	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
+	bdi_container->their_ref = bdi_their_ref;
+	bdi_container->backing_dev_info.ra_pages = ra_pages;
+	bdi_container->backing_dev_info.capabilities = capabilities;
 	/*
 	 * Invoke real function
 	 */
@@ -1765,6 +1776,8 @@ out:
 	fipc_set_reg1(response, cptr_val(bdi_obj_ref));
 
 	thc_ipc_reply(channel, request_cookie, response);
+
+	trace_channel(channel);
 
 	pmfs_ready = 1;
 
@@ -1819,6 +1832,8 @@ out:
 	/* empty response */
 
 	thc_ipc_reply(channel, request_cookie, response);
+
+	trace_channel(channel);
 
 	return ret;
 }
@@ -1902,6 +1917,8 @@ out:
 
 	thc_ipc_reply(channel, request_cookie, response);
 
+	trace_channel(channel);
+
 	return ret;
 }
 
@@ -1953,6 +1970,8 @@ out:
 
 	thc_ipc_reply(channel, request_cookie, response);
 
+	trace_channel(channel);
+
 	return ret;
 }
 
@@ -1998,6 +2017,8 @@ out:
 	/* empty response */
 	
 	thc_ipc_reply(channel, request_cookie, response);
+
+	trace_channel(channel);
 
 	return ret;
 }
@@ -2045,6 +2066,8 @@ out:
 	/* empty response */
 
 	thc_ipc_reply(channel, request_cookie, response);
+
+	trace_channel(channel);
 
 	return ret;
 }
@@ -2096,6 +2119,8 @@ out:
 			inode_container->pmfs_inode_vfs.vfs_inode.i_state);
 
 	thc_ipc_reply(channel, request_cookie, response);
+
+	trace_channel(channel);
 
 	return ret;
 }
@@ -2179,6 +2204,8 @@ out:
 		fipc_set_reg0(response, cptr_val(CAP_CPTR_NULL));
 
 	thc_ipc_reply(channel, request_cookie, response);
+
+	trace_channel(channel);
 
 	return ret;
 }
@@ -2377,6 +2404,8 @@ out:
 
 	thc_ipc_reply(channel, request_cookie, response);
 
+	trace_channel(channel);
+
 	return ret;
 }
 
@@ -2427,6 +2456,8 @@ out:
 	/* Empty response */
 
 	thc_ipc_reply(channel, request_cookie, response);
+
+	trace_channel(channel);
 
 	return ret;
 }

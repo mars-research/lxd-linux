@@ -454,6 +454,7 @@ static int main_for_lcd(struct lcd *lcd)
 	for (;;) {
 		ret = run_once(lcd, &lcd_ret);
 		if (ret < 0 || should_stop(lcd)) {
+			lcd_arch_dump_lcd(lcd->lcd_arch);
 			return ret;
 		} else if (ret == 1) {
 			/* lcd exited */

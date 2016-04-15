@@ -217,7 +217,7 @@ static int do_pmfs_test(void)
 
 		dput(dentry);
 		deactivate_locked_super(sb);
-		PMFS_EX_DEBUG(LIBLCD_MSG("vfs unmounted pmfs"));
+		PMFS_EX_DEBUG(LIBLCD_MSG("vfs unmounted pmfs, iter %d", i));
 
 	}
 

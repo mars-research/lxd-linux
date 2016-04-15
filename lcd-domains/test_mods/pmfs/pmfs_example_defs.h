@@ -25,7 +25,7 @@
 
 /* MACROS/FLAGS -------------------------------------------------- */
 
-#define DEBUG_PMFS_EXAMPLE 1
+#define DEBUG_PMFS_EXAMPLE 0
 
 /* Function flags */
 enum {
@@ -53,13 +53,15 @@ enum {
 /* async rpc buffers are 2^PMFS_ASYNC_RPC_BUFFER_ORDER bytes */
 #define PMFS_ASYNC_RPC_BUFFER_ORDER 12
 
-#define PMFS_EXAMPLE_NUM_ITER 5
+#define PMFS_EXAMPLE_NUM_ITER 10
 
 #if DEBUG_PMFS_EXAMPLE
 #define PMFS_EX_DEBUG(xx) do { xx; } while(0)
 #else
-#define PMFS_EX_DEBUG(xx)
+#define PMFS_EX_DEBUG(xx) do { } while(0)
 #endif
+
+#define trace_channel(x) do { } while(0)
 
 /* STRUCT DEFS -------------------------------------------------- */
 
