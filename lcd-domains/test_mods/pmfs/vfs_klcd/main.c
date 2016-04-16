@@ -186,10 +186,11 @@ static int do_pmfs_test(void)
 	data = kstrdup("physaddr=0x100000000,init=2G", GFP_KERNEL);
 	if (!data) {
 		LIBLCD_ERR("strdup failed");
+		ret = -ENOMEM;
 		goto fail2;
 	}
 
-	printk(KERN_ERR "Mount timings:\n\n");
+	printk(KERN_ERR "Mount Timings:\n\n");
 
 	for (i = 0; i < PMFS_EXAMPLE_NUM_ITER; i++) {
 
