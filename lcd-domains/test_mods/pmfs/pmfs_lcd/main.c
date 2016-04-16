@@ -20,43 +20,11 @@ int pmfs_done;
 
 /* LOOP ---------------------------------------- */
 
-static int do_one_async(void)
-{
-	int ret;
-	struct fipc_message *msg;
-	/*
-	 * Do one async receive
-	 */
-	ret = thc_ipc_poll_recv(vfs_async_chnl, &msg);
-	if (ret) {
-		if (ret == -EWOULDBLOCK)
-			return 0;
-		else if (ret == -EPIPE) {
-			/*
-			 * Channel is dead
-			 */
-			kfree(vfs_async_chnl);
-			return 1; /* stop */
-		} else {
-			LIBLCD_ERR("async recv failed");
-			return ret; /* stop */
-		}
-	}
-	/*
-	 * Got a message. Dispatch.
-	 */
-	ret = dispatch_fs_channel(vfs_async_chnl, msg,
-				vfs_cspace, vfs_sync_endpoint);
-	if (ret)
-		LIBLCD_ERR("async dispatch failed");
-
-	return ret;
-}
-
 static void main_and_loop(void)
 {
 	int ret;
 	int stop = 0;
+	struct fipc_message *msg;
 
 	DO_FINISH(
 
@@ -69,16 +37,6 @@ static void main_and_loop(void)
 				PMFS_EX_DEBUG(LIBLCD_MSG("SUCCESSFULLY REGISTERED PMFS!"));
 			}
 
-			/* Yield for now. We will get scheduled one last
-			 * time when dispatch loop exits. */
-			THCYield();
-
-			/* Dispatch loop yield to us; time to tear down. */
-			exit_pmfs_fs();
-
-			PMFS_EX_DEBUG(
-				LIBLCD_MSG("SUCCESSFULLY UNREGISTERED PMFS!"));
-
 			);
 
 		/* By the time we hit this loop, the async channel
@@ -86,13 +44,51 @@ static void main_and_loop(void)
 		 * will not yield until it tries to use the async
 		 * channel). */
 		while (!stop && !pmfs_done) {
+			/*
+			 * Do one async receive
+			 */
+			ret = thc_ipc_poll_recv(vfs_async_chnl, &msg);
+			if (ret) {
+				if (ret == -EWOULDBLOCK) {
+					continue;
+				} else {
+					LIBLCD_ERR("async recv failed");
+					stop = 1; /* stop */
+				}
+			}
+			/*
+			 * Got a message. Dispatch.
+			 */
 			ASYNC(
-				stop = do_one_async();
-			);
-		}
 
+				ret = dispatch_fs_channel(vfs_async_chnl, msg,
+							vfs_cspace, 
+							vfs_sync_endpoint);
+				if (ret) {
+					LIBLCD_ERR("async dispatch failed");
+					stop = 1;
+				}
+
+				);
+		}
+		
 		PMFS_EX_DEBUG(LIBLCD_MSG("PMFS EXITED DISPATCH LOOP"));
 
+		);
+
+	/*
+	 * We don't expect any requests coming back to us, so it's safe
+	 * to just run this without a loop (it's effectively polling since
+	 * only one awe will run in this do-finish).
+	 */
+	DO_FINISH(
+		ASYNC(
+			exit_pmfs_fs();
+
+			PMFS_EX_DEBUG(
+				LIBLCD_MSG("SUCCESSFULLY UNREGISTERED PMFS!"));
+
+			);
 		);
 
 	PMFS_EX_DEBUG(LIBLCD_MSG("EXITED PMFS DO_FINISH"));

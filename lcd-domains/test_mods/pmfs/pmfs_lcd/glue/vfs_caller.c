@@ -205,9 +205,12 @@ static void destroy_async_channel(struct thc_channel *chnl)
 	 */
 	kfree(thc_channel_to_fipc(chnl));
 	/*
-	 * Remove and free async channel group item
+	 * Free the async channel
+	 *
+	 * XXX: This is ok to do because there is no dispatch loop
+	 * polling on the channel when we free it.
 	 */
-	thc_channel_mark_dead(chnl);
+	kfree(chnl);
 
 	return;
 

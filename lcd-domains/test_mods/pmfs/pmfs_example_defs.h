@@ -53,7 +53,7 @@ enum {
 /* async rpc buffers are 2^PMFS_ASYNC_RPC_BUFFER_ORDER bytes */
 #define PMFS_ASYNC_RPC_BUFFER_ORDER 12
 
-#define PMFS_EXAMPLE_NUM_ITER 10
+#define PMFS_EXAMPLE_NUM_ITER 100
 
 #if DEBUG_PMFS_EXAMPLE
 #define PMFS_EX_DEBUG(xx) do { xx; } while(0)
