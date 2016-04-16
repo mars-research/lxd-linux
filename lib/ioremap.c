@@ -14,6 +14,8 @@
 #include <asm/pgtable.h>
 #include <asm/tlbflush.h>
 
+#define DEBUG_IOREMAP 0
+
 static int ioremap_pte_range(pmd_t *pmd, unsigned long addr,
 		unsigned long end, phys_addr_t phys_addr, pgprot_t prot)
 {
@@ -42,7 +44,7 @@ static inline int ioremap_pmd_range(pud_t *pud, unsigned long addr,
 	pmd_page = pmd_alloc(&init_mm, pud, addr);
 	if (!pmd_page)
 		return -ENOMEM;
-
+#if DEBUG_IOREMAP
 	if (hpages)
 	{
 		printk (KERN_INFO "PMD_MAPPING (START) [%s,%d]"
@@ -51,6 +53,7 @@ static inline int ioremap_pmd_range(pud_t *pud, unsigned long addr,
 			addr, end, (unsigned long)(phys_addr+addr), (end-addr));
 
 	}
+#endif
 
 	pmd = pmd_page;
 	do {
@@ -94,7 +97,7 @@ static inline int ioremap_pud_range(pgd_t *pgd, unsigned long addr,
 	pud_page = pud_alloc(&init_mm, pgd, addr);
 	if (!pud_page)
 		return -ENOMEM;
-
+#if DEBUG_IOREMAP
 	if (hpages)
 	{
 		printk (KERN_INFO "PUD_MAPPING (START) [%s,%d]"
@@ -102,6 +105,7 @@ static inline int ioremap_pud_range(pgd_t *pgd, unsigned long addr,
 			"PA(0x%lx), SIZE(0x%lx)\n", __FUNCTION__, __LINE__,
 			addr, end, (unsigned long)(phys_addr+addr), (end-addr));
 	}
+#endif
 
 	pud = pud_page;
 	do {
@@ -170,12 +174,12 @@ int ioremap_hpage_range(unsigned long addr,
 	int err;
 
 	BUG_ON(addr >= end);
-
+#if DEBUG_IOREMAP
 	printk (KERN_INFO "[%s,%d] hpages ON; startVA(0x%lx), endVA(0x%lx), "
 			"startPA(0x%lx), startPFN(0x%lx)\n", __FUNCTION__, __LINE__,
 			addr, end, (unsigned long)phys_addr,
 			(unsigned long)phys_addr >> PAGE_SHIFT);
-
+#endif
 	start = addr;
 	phys_addr -= addr;
 	pgd = pgd_offset_k(addr);
