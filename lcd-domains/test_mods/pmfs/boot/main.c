@@ -232,9 +232,9 @@ static int boot_main(void)
 		goto destroy_both;
 	}
 	/*
-	 * Wait for 2 seconds
+	 * Wait for 4 seconds
 	 */
-	msleep(10000);
+	msleep(4000);
 	/*
 	 * Tear everything down
 	 */
