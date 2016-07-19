@@ -278,12 +278,12 @@ static void create_kthread(struct kthread_create_info *create)
  *
  * Returns a task_struct or ERR_PTR(-ENOMEM).
  */
-#if !defined(LCD_ISOLATE)
 struct task_struct *kthread_create_on_node(int (*threadfn)(void *data),
 					   void *data, int node,
 					   const char namefmt[],
 					   ...)
 {
+#if !defined(LCD_ISOLATE)
 	struct kthread_create_info create;
 
 	create.threadfn = threadfn;
@@ -314,9 +314,12 @@ struct task_struct *kthread_create_on_node(int (*threadfn)(void *data),
 		set_cpus_allowed_ptr(create.result, cpu_all_mask);
 	}
 	return create.result;
+#else 
+	printk(KERN_ALERT "kthread_create_on_node is not implemented\n");
+	return 0;
+#endif
 }
 EXPORT_SYMBOL(kthread_create_on_node);
-#endif /*LCD_ISOLATE */
 
 static void __kthread_bind(struct task_struct *p, unsigned int cpu, long state)
 {

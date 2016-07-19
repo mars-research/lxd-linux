@@ -858,11 +858,12 @@ void __init trap_init(void)
 	set_bit(IA32_SYSCALL_VECTOR, used_vectors);
 #endif
 
+#if !defined(LCD_ISOLATE)	
 #ifdef CONFIG_X86_32
 	set_system_trap_gate(SYSCALL_VECTOR, &system_call);
 	set_bit(SYSCALL_VECTOR, used_vectors);
 #endif
-
+#endif
 	/*
 	 * Set the IDT descriptor to a fixed read-only location, so that the
 	 * "sidt" instruction will not leak the location of the kernel, and

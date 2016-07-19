@@ -870,11 +870,12 @@ ENTRY(\label)
 	CFI_ENDPROC
 END(\label)
 	.endm
-
+#if !defined(LCD_ISOLATE)
 	FORK_LIKE  clone
 	FORK_LIKE  fork
 	FORK_LIKE  vfork
 	FIXED_FRAME stub_iopl, sys_iopl
+#endif
 
 ENTRY(ptregscall_common)
 	DEFAULT_FRAME 1 8	/* offset 8: return address */
@@ -1351,6 +1352,7 @@ bad_gs:
 	jmp  2b
 	.previous
 
+#if !defined(LCD_ISOLATE)
 /* Call softirq on interrupt stack. Interrupts are off. */
 ENTRY(call_softirq)
 	CFI_STARTPROC
@@ -1370,6 +1372,7 @@ ENTRY(call_softirq)
 	ret
 	CFI_ENDPROC
 END(call_softirq)
+#endif
 
 #ifdef CONFIG_XEN
 zeroentry xen_hypervisor_callback xen_do_hypervisor_callback

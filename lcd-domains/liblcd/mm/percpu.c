@@ -187,9 +187,11 @@ static DEFINE_SPINLOCK(pcpu_lock);	/* protects index data structures */
 
 static struct list_head *pcpu_slot __read_mostly; /* chunk list slots */
 
+#if !defined(LCD_ISOLATE)
 /* reclaim work to release fully free chunks, scheduled from free path */
 static void pcpu_reclaim(struct work_struct *work);
 static DECLARE_WORK(pcpu_reclaim_work, pcpu_reclaim);
+#endif /*LCD_ISOLATE */
 
 static bool pcpu_addr_in_first_chunk(void *addr)
 {
@@ -205,6 +207,7 @@ static bool pcpu_addr_in_reserved_chunk(void *addr)
 	return addr >= first_start &&
 		addr < first_start + pcpu_reserved_chunk_limit;
 }
+
 
 static int __pcpu_size_to_slot(int size)
 {
@@ -264,6 +267,7 @@ static void __maybe_unused pcpu_next_pop(struct pcpu_chunk *chunk,
 	*rs = find_next_bit(chunk->populated, end, *rs);
 	*re = find_next_zero_bit(chunk->populated, end, *rs + 1);
 }
+
 
 /*
  * (Un)populated page region iterators.  Iterate over (un)populated
@@ -670,6 +674,7 @@ static int __init pcpu_verify_alloc_info(const struct pcpu_alloc_info *ai);
 #include "percpu-vm.c"
 #endif
 
+
 /**
  * pcpu_chunk_addr_search - determine chunk containing specified address
  * @addr: address for which the chunk needs to be determined.
@@ -871,6 +876,7 @@ void __percpu *__alloc_reserved_percpu(size_t size, size_t align)
 	return pcpu_alloc(size, align, true);
 }
 
+//#if !defined(LCD_ISOLATE)
 /**
  * pcpu_reclaim - reclaim fully free chunks, workqueue function
  * @work: unused
@@ -880,7 +886,7 @@ void __percpu *__alloc_reserved_percpu(size_t size, size_t align)
  * CONTEXT:
  * workqueue context.
  */
-static void pcpu_reclaim(struct work_struct *work)
+static void __maybe_unused pcpu_reclaim(struct work_struct *work)
 {
 	LIST_HEAD(todo);
 	struct list_head *head = &pcpu_slot[pcpu_nr_slots - 1];
@@ -945,7 +951,11 @@ void free_percpu(void __percpu *ptr)
 
 		list_for_each_entry(pos, &pcpu_slot[pcpu_nr_slots - 1], list)
 			if (pos != chunk) {
+#if defined(LCD_ISOLATE)
+				printk(KERN_ALERT "schedule_work in free_percpu is not implemented\n");
+#else
 				schedule_work(&pcpu_reclaim_work);
+#endif
 				break;
 			}
 	}

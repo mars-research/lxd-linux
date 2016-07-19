@@ -82,6 +82,7 @@ lib-y += $(addprefix liblcd/kernel/irq/, \
 lib-y += $(addprefix liblcd/kernel/, \
 	kthread.o \
 	cpu.o \
+	spinlock.o \
 	)
 
 lib-y += liblcd/resolve.o

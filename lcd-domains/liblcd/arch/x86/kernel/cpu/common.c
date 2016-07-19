@@ -1127,6 +1127,7 @@ static const unsigned int exception_stack_sizes[N_EXCEPTION_STACKS] = {
 static DEFINE_PER_CPU_PAGE_ALIGNED(char, exception_stacks
 	[(N_EXCEPTION_STACKS - 1) * EXCEPTION_STKSZ + DEBUG_STKSZ]);
 
+#if !defined(LCD_ISOLATE)
 /* May not be marked __init: used by software suspend */
 void syscall_init(void)
 {
@@ -1148,7 +1149,7 @@ void syscall_init(void)
 	       X86_EFLAGS_TF|X86_EFLAGS_DF|X86_EFLAGS_IF|
 	       X86_EFLAGS_IOPL|X86_EFLAGS_AC);
 }
-
+#endif
 /*
  * Copies of the original ist values from the tss are only accessed during
  * debugging, no special alignment required.
@@ -1279,7 +1280,9 @@ void __cpuinit cpu_init(void)
 	load_idt((const struct desc_ptr *)&idt_descr);
 
 	memset(me->thread.tls_array, 0, GDT_ENTRY_TLS_ENTRIES * 8);
+#if !defined(LCD_ISOLATE)	
 	syscall_init();
+#endif
 
 	wrmsrl(MSR_FS_BASE, 0);
 	wrmsrl(MSR_KERNEL_GS_BASE, 0);

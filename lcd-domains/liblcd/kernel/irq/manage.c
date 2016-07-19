@@ -171,7 +171,7 @@ int irq_do_set_affinity(struct irq_data *data, const struct cpumask *mask,
 
 	return ret;
 }
-
+#if !defined(LCD_ISOLATE)
 int __irq_set_affinity_locked(struct irq_data *data, const struct cpumask *mask)
 {
 	struct irq_chip *chip = irq_data_get_irq_chip(data);
@@ -217,6 +217,7 @@ int irq_set_affinity(unsigned int irq, const struct cpumask *mask)
 	raw_spin_unlock_irqrestore(&desc->lock, flags);
 	return ret;
 }
+
 
 int irq_set_affinity_hint(unsigned int irq, const struct cpumask *m)
 {
@@ -298,6 +299,8 @@ irq_set_affinity_notifier(unsigned int irq, struct irq_affinity_notify *notify)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(irq_set_affinity_notifier);
+
+#endif /* LCD_ISOLATE */
 
 #ifndef CONFIG_AUTO_IRQ_AFFINITY
 /*
@@ -788,6 +791,10 @@ irq_thread_check_affinity(struct irq_desc *desc, struct irqaction *action) { }
 static irqreturn_t
 irq_forced_thread_fn(struct irq_desc *desc, struct irqaction *action)
 {
+#if defined(LCD_ISOLATE)
+	printk(KERN_ALERT "irq_forced_thread_fn is not implemented\n");
+	return (irqreturn_t) 0;
+#else	
 	irqreturn_t ret;
 
 	local_bh_disable();
@@ -795,6 +802,7 @@ irq_forced_thread_fn(struct irq_desc *desc, struct irqaction *action)
 	irq_finalize_oneshot(desc, action);
 	local_bh_enable();
 	return ret;
+#endif
 }
 
 /*

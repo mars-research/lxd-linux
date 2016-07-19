@@ -77,12 +77,12 @@ long strnlen_user(const char __user *str, long count)
 	return 0L;
 }
 
-void __lockfunc _raw_spin_unlock_irqrestore(raw_spinlock_t *lock, 
-					unsigned long flags)
-{
-	lcd_printk("resolve.c: trying to call dummy _raw_spin_unlock_irqrestore!");
-	return;
-}
+//void __lockfunc _raw_spin_unlock_irqrestore(raw_spinlock_t *lock, 
+//					unsigned long flags)
+//{
+//	lcd_printk("resolve.c: trying to call dummy _raw_spin_unlock_irqrestore!");
+//	return;
+//}
 
 /* MUTEXES ------------------------------------------------------------ */
 
@@ -340,13 +340,7 @@ void hrtimer_init(struct hrtimer *timer, clockid_t clock_id,
 
 void ignore_signals(struct task_struct *t)
 {
-	int i;
-
 	printk(KERN_ALERT "ignore_signals is not implemented\n");
-	for (i = 0; i < _NSIG; ++i)
-		t->sighand->action[i].sa.sa_handler = SIG_IGN;
-
-	flush_signals(t);
 	return;
 }
 
@@ -361,6 +355,25 @@ void __wake_up(wait_queue_head_t *q, unsigned int mode,
 	return;
 }
 
+void irq_enter(void) {
+	return;
+}
+
+void irq_exit(void) {
+	return; 
+};
+
+void user_enter(void) {
+	return;
+}
+
+void user_exit(void) {
+	return;
+}
+
+
+
+
 /* Some per-cpu declarations, that don't work at the moment */
 
 // I should probably init it with a meaningful value
@@ -371,3 +384,4 @@ DECLARE_PER_CPU_SHARED_ALIGNED(struct tss_struct, init_tss);
 DEFINE_PER_CPU(struct kernel_stat, kstat);
 
 unsigned long loops_per_jiffy = (1<<12);
+
