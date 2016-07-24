@@ -1034,3 +1034,12 @@ int lcd_arch_set_gva_root(struct lcd_arch *lcd_arch, gpa_t a)
 	vmx_put_cpu(lcd_arch);
 	return 0;
 }
+
+int lcd_arch_set_gs_base(struct lcd_arch *lcd_arch, gva_t a)
+{
+  lcd_arch->regs.gs = gva_val(a);
+  vmx_get_cpu(lcd_arch);
+  vmcs_writel(GUEST_GS_BASE, gva_val(a));
+  vmx_put_cpu(lcd_arch);
+  return 0;
+}

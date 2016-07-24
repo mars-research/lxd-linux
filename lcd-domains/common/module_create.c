@@ -189,6 +189,12 @@ static int setup_phys_addr_space(cptr_t lcd, struct lcd_create_ctx *ctx,
 				LCD_STACK_GP_ADDR, c);
 	if (ret)
 		goto fail3;
+  c = &(lcd_to_boot_info(ctx)->lcd_boot_cptrs.stack_prot);
+  ret = do_grant_and_map_for_mem(lcd, ctx, ctx->stack_prot,
+      LCD_ARCH_GS_BASE, c);
+  if (ret)
+    goto fail4;
+
 	/*
 	 * Map and grant kernel module
 	 */
@@ -196,11 +202,12 @@ static int setup_phys_addr_space(cptr_t lcd, struct lcd_create_ctx *ctx,
 					m_init_link_addr, m_core_link_addr,
 					m_init_size, m_core_size);
 	if (ret)
-		goto fail4;
+		goto fail5;
 
 	return 0;
 
-fail4:  /* Just return; caller should kill new LCD and free up resources. */
+fail5:  /* Just return; caller should kill new LCD and free up resources. */
+fail4:
 fail3:
 fail2:
 fail1:
@@ -456,7 +463,7 @@ static int do_cptr_cache_init(struct cptr_cache *cache)
 
 static int get_pages_for_lcd(struct lcd_create_ctx *ctx)
 {
-	struct page *p1, *p2, *p3;
+	struct page *p1, *p2, *p3, *p4;
 	int ret;
 	/*
 	 * We explicity zero things out. If this code is used inside
@@ -503,8 +510,22 @@ static int get_pages_for_lcd(struct lcd_create_ctx *ctx)
 	memset(lcd_page_address(p3), 0, LCD_STACK_SIZE);
 	ctx->stack = lcd_page_address(p3);
 
+  /*
+   * Alloc stack protector page
+   */
+  p4 = lcd_alloc_pages(0, LCD_STACK_PROT_ORDER);
+  if (!p4) {
+    LIBLCD_ERR("alloc stack prot pages failed");
+    ret = -ENOMEM;
+    goto fail5;
+  }
+  memset(lcd_page_address(p4), 0, LCD_STACK_PROT_SIZE);
+  ctx->stack_prot = lcd_page_address(p4);
+
 	return 0;
 
+fail5:
+  lcd_free_pages(p3, LCD_STACK_ORDER);
 fail4:
 	lcd_free_pages(p2, LCD_BOOTSTRAP_PAGE_TABLES_ORDER);
 fail3:
@@ -612,7 +633,8 @@ int lcd_create_module_lcd(char *mdir, char *mname, cptr_t *lcd_out,
 				gva_add(LCD_STACK_GV_ADDR,
 					LCD_STACK_SIZE - sizeof(void *)),
 				LCD_BOOTSTRAP_PAGE_TABLES_GP_ADDR,
-				LCD_UTCB_GP_ADDR);
+				LCD_UTCB_GP_ADDR,
+				LCD_ARCH_GS_GV_BASE);
 	if (ret) {
 		LIBLCD_ERR("error configuring LCDs registers");
 		goto fail6;
