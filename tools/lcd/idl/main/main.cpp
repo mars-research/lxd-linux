@@ -95,10 +95,10 @@ int main(int argc, char ** argv)
 	      exit(0);
 	    }
 
-	    char* of_name = (char*) malloc(sizeof(char)*(strlen(m->identifier())+3));
+	    char* of_name = (char*) malloc(sizeof(char)*(strlen(m->identifier())+10));
 	    std::ostringstream total;
-	    total << m->identifier() << ".c";
-	    strncpy(of_name, total.str().c_str(), strlen(m->identifier())+3);
+	    total << m->identifier() << "_server.c";
+	    strncpy(of_name, total.str().c_str(), strlen(m->identifier())+10);
 
 	    FILE *of = fopen(of_name, "w");
 	    if(!of)
@@ -110,6 +110,7 @@ int main(int argc, char ** argv)
 	      }
 	    CCSTFile* ccst_tree = generate_server_source(m);
 	    ccst_tree->write(of, 0);
+	    fclose(of);
 	  }
 
 	  printf("Completed Server source writing\n");
@@ -147,10 +148,10 @@ int main(int argc, char ** argv)
 	      exit(0);
 	    }
 
-	    char* of_name = (char*) malloc(sizeof(char)*(strlen(m->identifier())+3));
+	    char* of_name = (char*) malloc(sizeof(char)*(strlen(m->identifier())+10));
 	    std::ostringstream total;
-	    total << m->identifier() << ".c";
-	    strncpy(of_name, total.str().c_str(), strlen(m->identifier())+3);
+	    total << m->identifier() << "_client.c";
+	    strncpy(of_name, total.str().c_str(), strlen(m->identifier())+10);
 
 	    FILE *of = fopen(of_name, "w");
 	    if(!of)
@@ -162,9 +163,9 @@ int main(int argc, char ** argv)
 	      }
 	    CCSTFile* ccst_tree = generate_client_source(m);
 	    ccst_tree->write(of, 0);
+	    fclose(of);
 	  }
 	  printf("completed client source writing\n");
-	  
 	}
       else
 	{
