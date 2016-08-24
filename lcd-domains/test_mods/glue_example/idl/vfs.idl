@@ -11,7 +11,7 @@
  * functions, e.g. on the callee side). The other option is to have the
  * idl compiler just generate declarations in the glue code so that
  * including the original header is unnecessary. */
-include ../original/include/vfs.h;
+include "../original/include/vfs.h"
 
 /* - I suggest to use "<" and ">" to improve readability, 
    - "struct fs" which is used as part of the projection definition
