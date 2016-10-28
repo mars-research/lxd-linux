@@ -174,7 +174,7 @@ int __lcd_alloc_pages_exact_node(struct lcd *caller, cptr_t slot, int nid,
 	/*
 	 * Allocate zero'd pages on node
 	 */
-	p = alloc_pages_exact_node(nid, flags | __GFP_ZERO, order);
+	p = __alloc_pages_node(nid, flags | __GFP_ZERO, order);
 	if (!p) {
 		LCD_ERR("alloc failed");
 		ret = -ENOMEM;

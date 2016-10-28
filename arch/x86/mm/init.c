@@ -161,12 +161,12 @@ int direct_gbpages
 static void __init init_gbpages(void)
 {
 #ifdef CONFIG_X86_64
-	if (direct_gbpages && cpu_has_gbpages)
+	if (direct_gbpages && boot_cpu_has(X86_FEATURE_GBPAGES))
 		printk(KERN_INFO "Using GB pages for direct mapping\n");
 	else
 	{
 		printk(KERN_INFO "direct_gbpages(%d). cpu_has_gbpages(%d)."
-				"GB pages not supported.\n", direct_gbpages, cpu_has_gbpages);
+				"GB pages not supported.\n", direct_gbpages, boot_cpu_has(X86_FEATURE_GBPAGES));
 		direct_gbpages = 0;
 	}
 #endif

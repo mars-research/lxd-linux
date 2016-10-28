@@ -339,7 +339,7 @@ asmlinkage long sys_futex(u32 __user *uaddr, int op, u32 val,
 asmlinkage long sys_init_module(void __user *umod, unsigned long len,
 				const char __user *uargs);
 asmlinkage long sys_delete_module(const char __user *name_user,
-				unsigned int flags);
+				unsigned int flags, bool for_lcd);
 
 #ifdef CONFIG_OLD_SIGSUSPEND
 asmlinkage long sys_sigsuspend(old_sigset_t mask);

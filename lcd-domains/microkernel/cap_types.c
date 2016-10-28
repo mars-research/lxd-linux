@@ -7,6 +7,7 @@
 #include <linux/list.h>
 #include <linux/bitops.h>
 #include <linux/slab.h>
+#include <linux/vmalloc.h>
 #include <linux/log2.h>
 #include <libcap.h>
 #include <lcd_domains/microkernel.h>

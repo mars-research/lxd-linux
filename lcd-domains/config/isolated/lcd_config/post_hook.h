@@ -294,8 +294,8 @@ static inline void force_up_write(void *x)
 #undef virt_to_page
 #define virt_to_page(addr) lcd_virt_to_head_page(addr)
 
-#undef alloc_pages_exact_node
-#define alloc_pages_exact_node(x, y, z) lcd_alloc_pages_exact_node(x,y,z)
+#undef __alloc_pages_node
+#define __alloc_pages_node(x, y, z) lcd_alloc_pages_exact_node(x,y,z)
 
 #undef free_memcg_kmem_pages
 #define free_memcg_kmem_pages(x, y) lcd_free_memcg_kmem_pages(x, y)

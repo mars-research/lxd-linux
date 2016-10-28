@@ -4,17 +4,9 @@
  *  Copyright (C) 1991, 1992  Linus Torvalds
  */
 
-/* BEGIN LCD */
-#include <lcd_config/pre_hook.h>
-/* END LCD */
-
 #include <linux/ctype.h>
 #include <linux/compiler.h>
 #include <linux/export.h>
-
-/* BEGIN LCD */
-#include <lcd_config/post_hook.h>
-/* END LCD */
 
 const unsigned char _ctype[] = {
 _C,_C,_C,_C,_C,_C,_C,_C,				/* 0-7 */

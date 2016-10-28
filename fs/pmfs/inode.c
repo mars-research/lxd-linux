@@ -857,7 +857,7 @@ static int pmfs_read_inode(struct inode *inode, struct pmfs_inode *pi)
 
 	inode->i_blocks = le64_to_cpu(pi->i_blocks);
 	inode->i_mapping->a_ops = &pmfs_aops_xip;
-	inode->i_mapping->backing_dev_info = &pmfs_backing_dev_info;
+	//inode->i_mapping->backing_dev_info = &pmfs_backing_dev_info;
 
 	switch (inode->i_mode & S_IFMT) {
 	case S_IFREG:
@@ -1589,7 +1589,7 @@ void pmfs_get_inode_flags(struct inode *inode, struct pmfs_inode *pi)
 }
 
 static ssize_t pmfs_direct_IO(int rw, struct kiocb *iocb,
-	const struct iovec *iov, loff_t offset, unsigned long nr_segs)
+	const struct iovec *iov, loff_t offset) //, unsigned long nr_segs)
 {
 	struct file *filp = iocb->ki_filp;
 	struct inode *inode = filp->f_mapping->host;
@@ -1625,7 +1625,7 @@ err:
 }
 
 const struct address_space_operations pmfs_aops_xip = {
-	.get_xip_mem		= pmfs_get_xip_mem,
+	//.get_xip_mem		= pmfs_get_xip_mem,
 	.direct_IO		= pmfs_direct_IO,
 	/*.xip_mem_protect	= pmfs_xip_mem_protect,*/
 };

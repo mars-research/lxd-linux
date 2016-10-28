@@ -70,7 +70,7 @@ static int ioremap_pte_range(pmd_t *pmd, unsigned long addr,
 }
 
 static inline int ioremap_pmd_range(pud_t *pud, unsigned long addr,
-		unsigned long end, phys_addr_t phys_addr, pgprot_t prot, int hpages)
+		unsigned long end, phys_addr_t phys_addr, pgprot_t prot)//, int hpages)
 {
 	pmd_t *pmd_page, *pmd;
 	unsigned long next;
@@ -80,7 +80,8 @@ static inline int ioremap_pmd_range(pud_t *pud, unsigned long addr,
 	if (!pmd_page)
 		return -ENOMEM;
 
-	if (hpages)
+//	if (hpages)
+	if (0)
 	{
 		printk (KERN_INFO "PMD_MAPPING (START) [%s,%d]"
 			" VA START(0x%lx), VA END(0x%lx), "
@@ -103,10 +104,10 @@ static inline int ioremap_pmd_range(pud_t *pud, unsigned long addr,
 		if (ioremap_pte_range(pmd, addr, next, phys_addr + addr, prot))
 			return -ENOMEM;
 
-#if 1
+#if 0
 //FIXME: Check if pmd_set_huge is good enough to remove the below block
 #error "PMFS: feature Already enabled in the latest kernel"
-		if (hpages && cpu_has_pse && ((next-addr)>=PMD_SIZE))
+		if (hpages && boot_cpu_has(X86_FEATURE_PSE) && ((next-addr)>=PMD_SIZE))
 		{
 			u64 pfn = ((u64)(phys_addr + addr)) >> PAGE_SHIFT;
 			prot = __pgprot((unsigned long)prot.pgprot | _PAGE_PSE);
@@ -168,7 +169,7 @@ static inline int ioremap_pud_range(pgd_t *pgd, unsigned long addr,
 
 		if (ioremap_pmd_range(pud, addr, next, phys_addr + addr, prot))
 			return -ENOMEM;
-#if 1
+#if 0
 		if (hpages && cpu_has_gbpages && ((next-addr)>=PUD_SIZE))
 		{
 			u64 pfn = ((u64)(phys_addr + addr)) >> PAGE_SHIFT;

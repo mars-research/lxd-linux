@@ -216,7 +216,7 @@ bottomup:
 	return arch_get_unmapped_area(filp, addr0, len, pgoff, flags);
 }
 
-
+#if 0
 static unsigned long arch_get_unmapped_area_bottomup_sz(struct file *file,
 		unsigned long addr, unsigned long len, unsigned long align_size,
 		unsigned long pgoff, unsigned long flags)
@@ -363,4 +363,4 @@ unsigned long arch_get_unmapped_area_sz(struct file *file,
 				pgoff, flags);
 }
 EXPORT_SYMBOL(arch_get_unmapped_area_sz);
-
+#endif

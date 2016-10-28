@@ -226,7 +226,7 @@ out:
 
 static int pmfs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 {
-	struct inode *inode = filp->f_dentry->d_inode;
+	struct inode *inode = file_inode(filp);
 	struct super_block *sb = inode->i_sb;
 	struct pmfs_inode *pi;
 	char *blk_base;
@@ -301,7 +301,7 @@ out:
 
 const struct file_operations pmfs_dir_operations = {
 	.read		= generic_read_dir,
-	.readdir	= pmfs_readdir,
+	.iterate	= pmfs_readdir,
 	.fsync		= noop_fsync,
 	.unlocked_ioctl = pmfs_ioctl,
 #ifdef CONFIG_COMPAT

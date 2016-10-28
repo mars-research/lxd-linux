@@ -14,8 +14,8 @@ async_rpc/boot nonisolated
 async_rpc/caller isolated
 async_rpc/callee isolated
 
-bug/boot nonisolated
-bug/lcd isolated   
+#bug/boot nonisolated
+#bug/lcd isolated   
 
 create_klcd/boot nonisolated
 create_klcd/klcd nonisolated

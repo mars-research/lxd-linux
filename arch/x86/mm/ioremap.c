@@ -81,7 +81,7 @@ static int __ioremap_check_ram(unsigned long start_pfn, unsigned long nr_pages,
  * caller shouldn't need to know that small detail.
  */
 static void __iomem *___ioremap_caller(resource_size_t phys_addr,
-		unsigned long size, unsigned long prot_val, void *caller,
+		unsigned long size, enum page_cache_mode pcm, void *caller,
 				unsigned int hpages, unsigned int readonly)
 {
 	unsigned long offset, vaddr;
@@ -338,15 +338,11 @@ void __iomem *ioremap_wt(resource_size_t phys_addr, unsigned long size)
 }
 EXPORT_SYMBOL(ioremap_wt);
 
-void __iomem *ioremap_cache(resource_size_t phys_addr, unsigned long size)
-{
-	return __ioremap_caller(phys_addr, size, _PAGE_CACHE_MODE_WB,
-				__builtin_return_address(0));
 void __iomem *
 ioremap_hpage_cache(resource_size_t phys_addr, unsigned long size)
 {
 	/* Map using hugepages */
-	return ___ioremap_caller(phys_addr, size, _PAGE_CACHE_WB,
+	return ___ioremap_caller(phys_addr, size, _PAGE_CACHE_MODE_WB,
 				__builtin_return_address(0), 1, 0);
 }
 EXPORT_SYMBOL(ioremap_hpage_cache);
@@ -355,7 +351,7 @@ void __iomem *
 ioremap_hpage_cache_ro(resource_size_t phys_addr, unsigned long size)
 {
 	/* Map using hugepages */
-	return ___ioremap_caller(phys_addr, size, _PAGE_CACHE_WB,
+	return ___ioremap_caller(phys_addr, size, _PAGE_CACHE_MODE_WB,
 				__builtin_return_address(0), 1, 1);
 }
 EXPORT_SYMBOL(ioremap_hpage_cache_ro);
@@ -363,7 +359,7 @@ EXPORT_SYMBOL(ioremap_hpage_cache_ro);
 void __iomem *ioremap_cache(resource_size_t phys_addr, unsigned long size)
 {
 	/* Map using 4k pages */
-	return ___ioremap_caller(phys_addr, size, _PAGE_CACHE_WB,
+	return ___ioremap_caller(phys_addr, size, _PAGE_CACHE_MODE_WB,
 				__builtin_return_address(0), 0, 0);
 }
 EXPORT_SYMBOL(ioremap_cache);
@@ -371,7 +367,7 @@ EXPORT_SYMBOL(ioremap_cache);
 void __iomem *ioremap_cache_ro(resource_size_t phys_addr, unsigned long size)
 {
 	/* Map using 4k pages */
-	return ___ioremap_caller(phys_addr, size, _PAGE_CACHE_WB,
+	return ___ioremap_caller(phys_addr, size, _PAGE_CACHE_MODE_WB,
 				__builtin_return_address(0), 0, 1);
 }
 

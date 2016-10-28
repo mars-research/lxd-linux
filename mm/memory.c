@@ -3852,9 +3852,11 @@ static void __unmap_xip_hugetlb_range(struct vm_area_struct *vma,
 void unmap_xip_hugetlb_range(struct vm_area_struct *vma,
 							unsigned long start, unsigned long end)
 {
-	mutex_lock(&vma->vm_file->f_mapping->i_mmap_mutex);
+//	mutex_lock(&vma->vm_file->f_mapping->i_mmap_mutex);
+	i_mmap_lock_write(vma->vm_file->f_mapping);
 	__unmap_xip_hugetlb_range(vma, start, end);
-	mutex_unlock(&vma->vm_file->f_mapping->i_mmap_mutex);
+	i_mmap_unlock_write(vma->vm_file->f_mapping);
+	//mutex_unlock(&vma->vm_file->f_mapping->i_mmap_mutex);
 }
 EXPORT_SYMBOL(unmap_xip_hugetlb_range);
 
