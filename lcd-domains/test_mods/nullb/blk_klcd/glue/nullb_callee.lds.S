@@ -1,0 +1,11 @@
+#include <liblcd/trampoline_link.h>
+
+SECTIONS
+{
+	LCD_TRAMPOLINE_LINKER_SECTION(queue_rq_fn_trampoline)
+	LCD_TRAMPOLINE_LINKER_SECTION(map_queue_fn_trampoline)
+	LCD_TRAMPOLINE_LINKER_SECTION(init_hctx_fn_trampoline)
+	LCD_TRAMPOLINE_LINKER_SECTION(softirq_done_fn_trampoline)
+	LCD_TRAMPOLINE_LINKER_SECTION(open_trampoline)
+}
+INSERT AFTER .text;
