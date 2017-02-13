@@ -49,3 +49,8 @@ llvm_example/lcd isolated
 
 ioremap/boot nonisolated
 ioremap/lcd isolated
+
+nullb/boot nonisolated
+nullb/nullb_lcd isolated
+nullb/blk_klcd nonisolated
+
