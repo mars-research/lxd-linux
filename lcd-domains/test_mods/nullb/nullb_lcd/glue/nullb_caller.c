@@ -420,27 +420,42 @@ struct blk_mq_hw_ctx *blk_mq_map_queue(struct request_queue *rq, int ctx_index)
 fail_async:
 
 }
+#endif 
 
 void blk_queue_logical_block_size(struct request_queue *rq, unsigned short size)
 {
 	int ret;
 	struct fipc_message *request;
 	struct fipc_message *response;
+	struct request_queue_container *rq_container;
+
+	rq_container = container_of(rq, struct request_queue_container,
+					request_queue);
+	
 	ret = async_msg_blocking_send_start(blk_async_chl, &request);
 	if (ret) {
 		LIBLCD_ERR("failed to get a send slot");
 		goto fail_async;
 	}
+
 	async_msg_set_fn_type(request, BLK_QUEUE_LOGICAL_BLOCK_SIZE);
-	fipc_set_reg2(request, size);
+	
+	fipc_set_reg0(request, size);
+	fipc_set_reg1(request, rq_container->other_ref.cptr);
+
 	ret = thc_ipc_call(blk_async_chl, request, &response);
 	if (ret) {
 		LIBLCD_ERR("thc_ipc_call");
 		goto fail_ipc;
 	}
-	fipc_recv_msg_end(thc_channel_to_fipc(blk_async_chl), response);
-	return;fail_async:
 
+	fipc_recv_msg_end(thc_channel_to_fipc(blk_async_chl), response);
+
+	return;
+
+fail_async:
+fail_ipc:
+	return;
 }
 
 void blk_queue_physical_block_size(struct request_queue *rq, unsigned int size)
@@ -448,23 +463,38 @@ void blk_queue_physical_block_size(struct request_queue *rq, unsigned int size)
 	int ret;
 	struct fipc_message *request;
 	struct fipc_message *response;
+	struct request_queue_container *rq_container;
+
+	rq_container = container_of(rq, struct request_queue_container,
+					request_queue);
+
 	ret = async_msg_blocking_send_start(blk_async_chl, &request);
 	if (ret) {
 		LIBLCD_ERR("failed to get a send slot");
 		goto fail_async;
 	}
+
 	async_msg_set_fn_type(request, BLK_QUEUE_PHYSICAL_BLOCK_SIZE);
-	fipc_set_reg2(request, size);
+
+	fipc_set_reg0(request, size);
+	fipc_set_reg1(request, rq_container->other_ref.cptr);
+
 	ret = thc_ipc_call(blk_async_chl, request, &response);
 	if (ret) {
 		LIBLCD_ERR("thc_ipc_call");
 		goto fail_ipc;
 	}
+	
 	fipc_recv_msg_end(thc_channel_to_fipc(blk_async_chl), response);
-	return;fail_async:
+	
+	return;
 
+fail_async:
+fail_ipc:
+	return;
 }
 
+#if 0
 void add_disk(struct gendisk *disk)
 {
 	struct gendisk_container *disk_container;

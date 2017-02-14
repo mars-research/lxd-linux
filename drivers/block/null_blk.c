@@ -658,6 +658,7 @@ static int null_add_dev(void)
 	if (queue_mode == NULL_Q_MQ && use_per_node_hctx)
 		submit_queues = nr_online_nodes;
 
+	printk("submit_queues %d, nr_online_nodes %d \n",submit_queues, nr_online_nodes);
 	rv = setup_queues(nullb);
 	if (rv)
 		goto out_free_nullb;

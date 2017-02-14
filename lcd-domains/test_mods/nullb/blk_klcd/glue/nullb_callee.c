@@ -264,54 +264,71 @@ int blk_mq_map_queue_callee(struct fipc_message *request, struct thc_channel *ch
 
 int blk_queue_logical_block_size_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
 {
-#if 0
-	struct request_queue *rq;
-	unsigned 	short size;
+	unsigned short size;
 	struct fipc_message *response;
-	unsigned 	int request_cookie;
+	unsigned int request_cookie;
+	struct request_queue_container *rq_container;
+	int ret;
+	
 	request_cookie = thc_get_request_cookie(request);
+	
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
-	rq = kzalloc(*sizeof( rq ), GFP_KERNEL);
-	if (!rq) {
-		LIBLCD_ERR("kzalloc");
-		goto fail_alloc;
-	}
-	size = fipc_get_reg2(request);
-	blk_queue_logical_block_size(rq, size);
+	
+	size = fipc_get_reg0(request);
+	ret = glue_cap_lookup_request_queue_type(c_cspace, __cptr(fipc_get_reg1(request)),
+					&rq_container);
+	if(ret) {
+		 LIBLCD_ERR("lookup");
+		 goto fail_lookup;
+	}	
+
+	blk_queue_logical_block_size(&rq_container->request_queue, size);
+	
 	if (async_msg_blocking_send_start(channel, &response)) {
 		LIBLCD_ERR("error getting response msg");
-		return -EIO;
+		goto fail_async;
 	}
+	
 	thc_ipc_reply(channel, request_cookie, response);
 	return ret;
-#endif
-	return 0;
+
+fail_async:
+fail_lookup:
+	return ret;
 }
 
 int blk_queue_physical_block_size_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
 {
-#if 0
-	struct request_queue *rq;
-	unsigned 	int size;
+	unsigned int size;
 	struct fipc_message *response;
-	unsigned 	int request_cookie;
+	unsigned int request_cookie;
+	struct request_queue_container *rq_container;
+	int ret;
+
 	request_cookie = thc_get_request_cookie(request);
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
-	rq = kzalloc(*sizeof( rq ), GFP_KERNEL);
-	if (!rq) {
-		LIBLCD_ERR("kzalloc");
-		goto fail_alloc;
+	
+	size = fipc_get_reg0(request);
+	ret = glue_cap_lookup_request_queue_type(c_cspace, __cptr(fipc_get_reg1(request)),
+			&rq_container);
+	if(ret) {
+		LIBLCD_ERR("lookup");
+		goto fail_lookup;
 	}
-	size = fipc_get_reg2(request);
-	blk_queue_physical_block_size(rq, size);
+
+	blk_queue_physical_block_size(&rq_container->request_queue, size);
+	
 	if (async_msg_blocking_send_start(channel, &response)) {
 		LIBLCD_ERR("error getting response msg");
-		return -EIO;
+		goto fail_async;
 	}
 	thc_ipc_reply(channel, request_cookie, response);
+	
 	return ret;
-#endif
-	return 0;
+
+fail_async:
+fail_lookup:
+	return ret;
 }
 
 int add_disk_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)

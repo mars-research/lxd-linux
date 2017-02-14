@@ -905,11 +905,9 @@ static int null_add_dev(void)
 	nullb->index = nullb_indexes++;
 	mutex_unlock(&lock);
 	
-	printk("*** returning before anything happens! **** \n");
-	return 0;
 
-	//blk_queue_logical_block_size(nullb->q, bs);
-//	blk_queue_physical_block_size(nullb->q, bs);
+	blk_queue_logical_block_size(nullb->q, bs);
+	blk_queue_physical_block_size(nullb->q, bs);
 
 	sprintf(nullb->disk_name, "nullb%d", nullb->index);
 
@@ -922,6 +920,8 @@ static int null_add_dev(void)
 		goto done;
 	}
 #endif
+	printk("*** returning before anything happens! **** \n");
+	return 0;
 
 //	disk = nullb->disk = alloc_disk_node(1, home_node);
 //	if (!disk) {
