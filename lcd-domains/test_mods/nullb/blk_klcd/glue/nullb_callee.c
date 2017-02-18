@@ -136,66 +136,47 @@ int blk_mq_end_request_callee(struct fipc_message *request, struct thc_channel *
 
 int blk_mq_free_tag_set_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
 {
-#if 0
-	struct blk_mq_tag_set *set;
-	struct blk_mq_ops_container *ops_container;
+
 	struct fipc_message *response;
-	unsigned 	int request_cookie;
-	struct trampoline_hidden_args *queue_rq_hidden_args;
-	struct trampoline_hidden_args *map_queue_hidden_args;
-	struct trampoline_hidden_args *init_hctx_hidden_args;
-	struct trampoline_hidden_args *sirq_done_hidden_args;
-	int sync_ret;
-	unsigned 	long mem_order;
-	unsigned 	long driver_data_offset;
-	cptr_t driver_data_cptr;
-	gva_t driver_data_gva;
+	unsigned int request_cookie;
+	struct blk_mq_tag_set_container *set_container;
+	struct blk_mq_ops_container *ops_container;
+	cptr_t set_ref = __cptr(fipc_get_reg0(request));
+	int ret;
 	
 	request_cookie = thc_get_request_cookie(request);
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
-	set = kzalloc(*sizeof( set ), GFP_KERNEL);
-	if (!set) {
-		LIBLCD_ERR("kzalloc");
-		goto fail_alloc;
-	}
-		set->ops = kzalloc(*sizeof( set->ops ), GFP_KERNEL);
-	if (!set->ops) {
-		LIBLCD_ERR("kzalloc");
-		goto fail_alloc;
-	}
-	set->nr_hw_queues = fipc_get_reg2(request);
-	set->queue_depth = fipc_get_reg3(request);
-	set->reserved_tags = fipc_get_reg4(request);
-	set->cmd_size = fipc_get_reg5(request);
-	set->flags = fipc_get_reg6(request);
-	sync_ret = lcd_cptr_alloc(&driver_data_cptr);
-	if (sync_ret) {
-		LIBLCD_ERR("failed to get cptr");
-		lcd_exit(-1);
-	}
-	lcd_set_cr0(driver_data_cptr);
-	sync_ret = lcd_sync_recv(sync_ep);
-	lcd_set_cr0(CAP_CPTR_NULL);
-	if (sync_ret) {
-		LIBLCD_ERR("failed to recv");
-		lcd_exit(-1);
-	}
-	mem_order = lcd_r0();
-	driver_data_offset = lcd_r1();
-	sync_ret = lcd_map_virt(driver_data_cptr, mem_order, &driver_data_gva);
-	if (sync_ret) {
-		LIBLCD_ERR("failed to map void *driver_data");
-		lcd_exit(-1);
-	}
-	blk_mq_free_tag_set(set);
+
+        ret = glue_cap_lookup_blk_mq_tag_set_type(c_cspace, set_ref, &set_container);
+        if (ret) {
+                LIBLCD_ERR("lookup");
+                goto fail_lookup;
+        }
+	
+	ret = glue_cap_lookup_blk_mq_ops_type(c_cspace, set_ref, &ops_container);
+        if (ret) {
+                LIBLCD_ERR("lookup");
+                goto fail_lookup;
+        }
+	
+	blk_mq_free_tag_set(&set_container->blk_mq_tag_set);
 	if (async_msg_blocking_send_start(channel, &response)) {
 		LIBLCD_ERR("error getting response msg");
-		return -EIO;
+		ret = -EIO;
+		goto fail_async;
 	}
 	thc_ipc_reply(channel, request_cookie, response);
+
+	glue_cap_remove(c_cspace, set_container->my_ref);
+	glue_cap_remove(c_cspace, ops_container->my_ref);
+	kfree(ops_container);
+	kfree(set_container);
+
 	return ret;
-#endif
-	return 0;
+
+fail_async:
+fail_lookup:
+	return ret;
 }
 
 int blk_mq_start_request_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
@@ -331,208 +312,148 @@ fail_lookup:
 	return ret;
 }
 
-int add_disk_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
+int alloc_disk_node_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
 {
-#if 0
-	struct gendisk_container *disk_container;
+	int minors;
+	int node_id;
+	int ret;
+	unsigned int request_cookie;
 	struct fipc_message *response;
-	unsigned 	int request_cookie;
-	int err;
-	int sync_ret;
-	unsigned 	long mem_order;
-	unsigned 	long private_data_offset;
-	cptr_t private_data_cptr;
-	gva_t private_data_gva;
+	struct gendisk *disk;
+	struct gendisk_container *disk_container;
 
 	request_cookie = thc_get_request_cookie(request);
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
-	disk_container = kzalloc(sizeof( struct gendisk_container   ), GFP_KERNEL);
-	if (!disk_container) {
-		LIBLCD_ERR("kzalloc");
+
+	minors = fipc_get_reg0(request);
+	node_id = fipc_get_reg1(request);
+	
+	disk = alloc_disk_node(minors, node_id);
+	if(!disk) {
+		LIBLCD_ERR("call to alloc_disk_node failed");
 		goto fail_alloc;
 	}
-	err = glue_cap_insert_gendisk_type(c_cspace, disk_container, &disk_container->my_ref);
-	if (!err) {
+
+	disk_container = container_of(disk, struct gendisk_container, gendisk);
+
+	ret = glue_cap_insert_gendisk_type(c_cspace, disk_container, &disk_container->my_ref);
+	if (ret) {
 		LIBLCD_ERR("lcd insert");
 		goto fail_insert;
 	}
-	disk_container->other_ref.cptr = fipc_get_reg4(response);
-	disk->flags = fipc_get_reg1(request);
-	disk->major = fipc_get_reg2(request);
-	disk->first_minor = fipc_get_reg3(request);
-	sync_ret = lcd_cptr_alloc(&private_data_cptr);
-	if (sync_ret) {
-		LIBLCD_ERR("failed to get cptr");
-		lcd_exit(-1);
-	}
-	lcd_set_cr0(private_data_cptr);
-	sync_ret = lcd_sync_recv(sync_ep);
-	lcd_set_cr0(CAP_CPTR_NULL);
-	if (sync_ret) {
-		LIBLCD_ERR("failed to recv");
-		lcd_exit(-1);
-	}
-	mem_order = lcd_r0();
-	private_data_offset = lcd_r1();
-	sync_ret = lcd_map_virt(private_data_cptr, mem_order, &private_data_gva);
-	if (sync_ret) {
-		LIBLCD_ERR("failed to map void *private_data");
-		lcd_exit(-1);
-	}
-	add_disk(( &disk_container->gendisk ));
+
+	disk_container->other_ref.cptr = fipc_get_reg2(request);
+	
 	if (async_msg_blocking_send_start(channel, &response)) {
 		LIBLCD_ERR("error getting response msg");
-		return -EIO;
+		goto fail_async;
 	}
-	fipc_set_reg1(response, disk_container->other_ref.cptr);
+
+	fipc_set_reg0(response, disk_container->my_ref.cptr);
 	thc_ipc_reply(channel, request_cookie, response);
+
 	return ret;
-#endif
-	return 0;
+
+fail_async:
+fail_insert:
+fail_alloc:
+	glue_cap_remove(c_cspace, disk_container->my_ref);
+	return ret;
 }
+
 
 int put_disk_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
 {
-#if 0
 	struct gendisk *disk;
+	struct gendisk_container *disk_container;
+	struct block_device_operations_container *blo_container;
+	struct module_container *module_container;
 	struct fipc_message *response;
-	unsigned 	int request_cookie;
-	int sync_ret;
-	unsigned 	long mem_order;
-	unsigned 	long private_data_offset;
-	cptr_t private_data_cptr;
-	gva_t private_data_gva;
+	unsigned int request_cookie;
+	int ret;
 
 	request_cookie = thc_get_request_cookie(request);
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
-	disk = kzalloc(*sizeof( disk ), GFP_KERNEL);
-	if (!disk) {
-		LIBLCD_ERR("kzalloc");
-		goto fail_alloc;
-	}
-	disk->flags = fipc_get_reg2(request);
-	disk->major = fipc_get_reg3(request);
-	disk->first_minor = fipc_get_reg4(request);
-	sync_ret = lcd_cptr_alloc(&private_data_cptr);
-	if (sync_ret) {
-		LIBLCD_ERR("failed to get cptr");
-		lcd_exit(-1);
-	}
-	lcd_set_cr0(private_data_cptr);
-	sync_ret = lcd_sync_recv(sync_ep);
-	lcd_set_cr0(CAP_CPTR_NULL);
-	if (sync_ret) {
-		LIBLCD_ERR("failed to recv");
-		lcd_exit(-1);
-	}
-	mem_order = lcd_r0();
-	private_data_offset = lcd_r1();
-	sync_ret = lcd_map_virt(private_data_cptr, mem_order, &private_data_gva);
-	if (sync_ret) {
-		LIBLCD_ERR("failed to map void *private_data");
-		lcd_exit(-1);
-	}
+
+        ret = glue_cap_lookup_gendisk_type(c_cspace, __cptr(fipc_get_reg0(request)),
+                                        &disk_container);
+        if (ret) {
+                LIBLCD_ERR("lookup");
+                goto fail_lookup;
+        }
+	
+	ret = glue_cap_lookup_blk_dev_ops_type(c_cspace, __cptr(fipc_get_reg1(request)),
+                                        &blo_container);
+        if (ret) {
+                LIBLCD_ERR("lookup");
+                goto fail_lookup;
+        }
+        
+	ret = glue_cap_lookup_module_type(c_cspace, __cptr(fipc_get_reg2(request)),
+                                        &module_container);
+        if (ret) {
+                LIBLCD_ERR("lookup");
+                goto fail_lookup;
+        }
+
+ 	/* disk_container may be deleted after the call to put_disk,
+	 * so remove from cspace here */
+	glue_cap_remove(c_cspace, disk_container->my_ref);
+
 	put_disk(disk);
+
 	if (async_msg_blocking_send_start(channel, &response)) {
 		LIBLCD_ERR("error getting response msg");
-		return -EIO;
+		ret = -EIO;
+		goto fail_async;
 	}
+
 	thc_ipc_reply(channel, request_cookie, response);
+	glue_cap_remove(c_cspace, blo_container->my_ref);
+	glue_cap_remove(c_cspace, module_container->my_ref);
+	kfree(blo_container);
+	kfree(module_container);
+
 	return ret;
-#endif
-	return 0;
+
+fail_async:
+fail_lookup:
+	return ret;
 }
 
 int del_gendisk_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
 {
-#if 0
 	struct gendisk *gp;
+	struct gendisk_container *disk_container;
 	struct fipc_message *response;
-	unsigned 	int request_cookie;
-	int sync_ret;
-	unsigned 	long mem_order;
-	unsigned 	long private_data_offset;
-	cptr_t private_data_cptr;
-	gva_t private_data_gva;
-
+	unsigned int request_cookie;
+	int ret;
 	request_cookie = thc_get_request_cookie(request);
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
-	gp = kzalloc(*sizeof( gp ), GFP_KERNEL);
-	if (!gp) {
-		LIBLCD_ERR("kzalloc");
-		goto fail_alloc;
-	}
-	gp->flags = fipc_get_reg2(request);
-	gp->major = fipc_get_reg3(request);
-	gp->first_minor = fipc_get_reg4(request);
-	sync_ret = lcd_cptr_alloc(&private_data_cptr);
-	if (sync_ret) {
-		LIBLCD_ERR("failed to get cptr");
-		lcd_exit(-1);
-	}
-	lcd_set_cr0(private_data_cptr);
-	sync_ret = lcd_sync_recv(sync_ep);
-	lcd_set_cr0(CAP_CPTR_NULL);
-	if (sync_ret) {
-		LIBLCD_ERR("failed to recv");
-		lcd_exit(-1);
-	}
-	mem_order = lcd_r0();
-	private_data_offset = lcd_r1();
-	sync_ret = lcd_map_virt(private_data_cptr, mem_order, &private_data_gva);
-	if (sync_ret) {
-		LIBLCD_ERR("failed to map void *private_data");
-		lcd_exit(-1);
-	}
+	
+        ret = glue_cap_lookup_gendisk_type(c_cspace, __cptr(fipc_get_reg0(request)),
+                                        &disk_container);
+        if (ret) {
+                LIBLCD_ERR("lookup");
+                goto fail_lookup;
+        }
+
+	gp = &disk_container->gendisk;
+
 	del_gendisk(gp);
+	
 	if (async_msg_blocking_send_start(channel, &response)) {
 		LIBLCD_ERR("error getting response msg");
 		return -EIO;
 	}
 	thc_ipc_reply(channel, request_cookie, response);
+
 	return ret;
-#endif
-	return 0;
+
+fail_lookup:
+	return ret;
 }
 
-int disk_node_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
-{
-#if 0
-	int minors;
-	int node_id;
-	struct fipc_message *response;
-	unsigned 	int request_cookie;
-	struct gendisk *func_ret;
-	int sync_ret;
-	unsigned 	long mem_order;
-	unsigned 	long private_data_offset;
-	cptr_t private_data_cptr;
-	gva_t private_data_gva;
-
-	request_cookie = thc_get_request_cookie(request);
-	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
-	minors = fipc_get_reg1(request);
-	node_id = fipc_get_reg2(request);
-	func_ret = kzalloc(*sizeof( func_ret ), GFP_KERNEL);
-	if (!func_ret) {
-		LIBLCD_ERR("kzalloc");
-		goto fail_alloc;
-	}
-		func_ret = disk_node(minors, node_id);
-	if (async_msg_blocking_send_start(channel, &response)) {
-		LIBLCD_ERR("error getting response msg");
-		return -EIO;
-	}
-	fipc_set_reg2(response, func_ret->flags);
-	fipc_set_reg3(response, func_ret->major);
-	fipc_set_reg4(response, func_ret->first_minor);
-	fipc_set_reg3(response, func_ret->private_data);
-	thc_ipc_reply(channel, request_cookie, response);
-	return ret;
-#endif
-	return 0;
-
-}
 static int setup_async_fs_ring_channel(cptr_t tx, cptr_t rx,
                                 struct thc_channel **chnl_out)
 {
@@ -727,29 +648,54 @@ out:
 
 int unregister_blkdev_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
 {
-#if 0
-	unsigned 	int devno;
-	char *name;
+	unsigned int devno;
 	struct fipc_message *response;
-	unsigned 	int request_cookie;
+	unsigned int request_cookie;
+	int ret = 0;
+
 	request_cookie = thc_get_request_cookie(request);
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
-	name = kzalloc(sizeof( char   ), GFP_KERNEL);
-	if (!name) {
-		LIBLCD_ERR("kzalloc");
-		lcd_exit(-1);
-	}
-	devno = fipc_get_reg1(request);
-	name = fipc_get_reg2(request);
-	unregister_blkdev(devno, name);
+	
+	devno = fipc_get_reg0(request);
+	unregister_blkdev(devno, "nullb");
 	if (async_msg_blocking_send_start(channel, &response)) {
 		LIBLCD_ERR("error getting response msg");
 		return -EIO;
 	}
 	thc_ipc_reply(channel, request_cookie, response);
+
 	return ret;
-#endif 
-	return 0;
+}
+
+int blk_cleanup_queue_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep) 
+{
+        struct fipc_message *response;
+        unsigned int request_cookie;
+	struct request_queue_container *rq_container;
+        int ret = 0; 
+
+        request_cookie = thc_get_request_cookie(request);
+        fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
+             
+        ret = glue_cap_lookup_request_queue_type(c_cspace, __cptr(fipc_get_reg0(request)),
+                                        &rq_container);
+        if(ret) {
+                 LIBLCD_ERR("lookup");
+                 goto fail_lookup;
+        }
+
+	blk_cleanup_queue(&rq_container->request_queue);
+
+        if (async_msg_blocking_send_start(channel, &response)) {
+                LIBLCD_ERR("error getting response msg");
+                return -EIO;
+        }
+        thc_ipc_reply(channel, request_cookie, response);
+
+        return ret;
+
+fail_lookup:
+	return ret;
 }
 
 int _queue_rq_fn(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data *bd, struct trampoline_hidden_args *hidden_args)
@@ -841,8 +787,6 @@ queue_rq_fn_trampoline(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data *bd)
 	return queue_rq_fn_fp(ctx, bd, hidden_args);
 
 }
-
-
 
 struct blk_mq_hw_ctx *_map_queue_fn(struct request_queue *rq, int m, struct trampoline_hidden_args *hidden_args)
 {
@@ -967,42 +911,41 @@ void LCD_TRAMPOLINE_LINKAGE(softirq_done_fn_trampoline) softirq_done_fn_trampoli
 
 }
 
-int open(struct block_device *device, int mode, struct trampoline_hidden_args *hidden_args)
+int open(struct block_device *device, fmode_t mode, struct trampoline_hidden_args *hidden_args)
 {
-	int ret;
-	struct fipc_message *request;
-	struct fipc_message *response;
-	int func_ret;
-	ret = async_msg_blocking_send_start(hidden_args->async_chnl, &request);
-	if (ret) {
-		LIBLCD_ERR("failed to get a send slot");
-		goto fail_async;
-	}
-	async_msg_set_fn_type(request, OPEN);
-	fipc_set_reg2(request, mode);
-	ret = thc_ipc_call(hidden_args->async_chnl, request, &response);
-	if (ret) {
-		LIBLCD_ERR("thc_ipc_call");
-		goto fail_ipc;
-	}
-	func_ret = fipc_get_reg1(response);
-	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->async_chnl), response);
-	return func_ret;
-fail_async:
-fail_ipc:
-	return func_ret;
+	printk("[nullb-open] Null block driver doesn't perform any operations here, so"
+		"returning directly from klcd layer \n");
+	return 0;
+}
 
+void release(struct gendisk *disk, fmode_t mode, struct trampoline_hidden_args *hidden_args)
+{
+	printk("[nullb-release] Null block driver doesn't perform any operations here, so"
+		"returning directly from klcd layer \n");
+	return;
 }
 
 LCD_TRAMPOLINE_DATA(open_trampoline);
-int LCD_TRAMPOLINE_LINKAGE(open_trampoline) open_trampoline(struct block_device *device, int mode)
+int LCD_TRAMPOLINE_LINKAGE(open_trampoline) open_trampoline(struct block_device *device, fmode_t mode)
 
 {
-	int ( *volatile open_fp )(struct block_device *, int , struct trampoline_hidden_args *);
+	int ( *volatile open_fp )(struct block_device *, fmode_t , struct trampoline_hidden_args *);
 	struct trampoline_hidden_args *hidden_args;
 	LCD_TRAMPOLINE_PROLOGUE(hidden_args, open_trampoline);
 	open_fp = open;
 	return open_fp(device, mode, hidden_args);
+
+}
+
+LCD_TRAMPOLINE_DATA(release_trampoline);
+void LCD_TRAMPOLINE_LINKAGE(release_trampoline) release_trampoline(struct gendisk *disk, fmode_t mode)
+
+{
+	void ( *volatile rel_fp )(struct gendisk *, fmode_t , struct trampoline_hidden_args *);
+	struct trampoline_hidden_args *hidden_args;
+	LCD_TRAMPOLINE_PROLOGUE(hidden_args, release_trampoline);
+	rel_fp = release;
+	return rel_fp(disk, mode, hidden_args);
 
 }
 
@@ -1229,3 +1172,196 @@ fail_alloc1:
 	return func_ret;
 
 }
+
+int add_disk_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
+{
+
+	struct gendisk_container *disk_container;
+	struct block_device_operations_container *blo_container;
+	struct request_queue_container *rq_container;
+	struct gendisk *disk;
+	struct trampoline_hidden_args *open_hargs;
+	struct trampoline_hidden_args *rel_hargs;
+	struct module_container *module_container;
+	struct fipc_message *response;
+	unsigned int request_cookie;
+	int ret;
+	char disk_name[DISK_NAME_LEN];
+
+	/* hack for now - hardcoding it here, ran out of regs! */
+	sector_t size;
+
+	request_cookie = thc_get_request_cookie(request);
+	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
+
+	ret = glue_cap_lookup_gendisk_type(c_cspace, __cptr(fipc_get_reg0(request)),
+					&disk_container);
+	if (ret) {
+		LIBLCD_ERR("lookup");
+		goto fail_lookup1;
+	}
+
+       	ret = glue_cap_lookup_request_queue_type(c_cspace, __cptr(fipc_get_reg3(request)),
+                                        &rq_container);
+        if(ret) {
+                 LIBLCD_ERR("lookup");
+                 goto fail_lookup2;
+        }
+ 
+	blo_container = kzalloc(sizeof(*blo_container), GFP_KERNEL);
+	if(!blo_container) {
+		LIBLCD_ERR("alloc failed");
+		goto fail_alloc1;
+	}
+
+	blo_container->other_ref.cptr = fipc_get_reg1(request);
+
+	ret = glue_cap_insert_blk_dev_ops_type(c_cspace, blo_container, &blo_container->my_ref);	
+	if(ret) {
+		LIBLCD_ERR("lcd insert");
+		goto fail_insert1;
+	}
+	
+	module_container =  kzalloc(sizeof(*module_container), GFP_KERNEL);
+	if(!module_container) {
+		LIBLCD_ERR("alloc failed");
+		goto fail_alloc2;
+	}
+
+	module_container->other_ref.cptr = fipc_get_reg2(request);
+	
+        /*
+         * Some special module inits required:
+         *
+         *   -- module refcnt = reference count (changed to atomic, no
+	 *   percpu alloc needed as in 3.12 (pmfs))
+         *   -- module state = MODULE_STATE_LIVE
+         *   -- module name = "pmfs"
+         *
+         * These are normally done by the module loader. But since we
+         * are creating our own struct module instance, we need to do
+         * the initialization ourselves.
+         */
+        
+	//module_container->module.refptr = alloc_percpu(struct module_ref);
+        //if (!module_container->module.refptr) {
+        //        LIBLCD_ERR("alloc percpu refptr failed");
+        //        ret = -ENOMEM;
+        //        goto fail_alloc3;
+        //}
+
+        module_container->module.state = MODULE_STATE_LIVE;
+        strcpy(module_container->module.name, "nullb");
+
+        ret = glue_cap_insert_module_type(
+                c_cspace,
+                module_container,
+                &module_container->my_ref);
+        if (ret) {
+                LIBLCD_ERR("insert");
+                goto fail_insert2;
+        }
+
+	/* setup the fops */	
+	blo_container->block_device_operations.owner = &module_container->module;
+
+        open_hargs = kzalloc(sizeof(*open_hargs), GFP_KERNEL);
+        if (!open_hargs) {
+                LIBLCD_ERR("kzalloc hidden args");
+                goto fail_alloc4;
+        }
+
+        open_hargs->t_handle = LCD_DUP_TRAMPOLINE(open_trampoline);
+        if (!open_hargs->t_handle) {
+                LIBLCD_ERR("duplicate trampoline");
+                goto fail_dup1;
+        }
+
+        open_hargs->t_handle->hidden_args = open_hargs;
+        open_hargs->struct_container = blo_container;
+        open_hargs->cspace = c_cspace;
+        open_hargs->async_chnl = channel;
+        blo_container->block_device_operations.open = LCD_HANDLE_TO_TRAMPOLINE(open_hargs->t_handle);
+
+        ret = set_memory_x(((unsigned long)open_hargs->t_handle) & PAGE_MASK,
+                        ALIGN(LCD_TRAMPOLINE_SIZE(open_trampoline),
+                                PAGE_SIZE) >> PAGE_SHIFT);
+        if (ret) {
+                LIBLCD_ERR("set mem nx");
+                goto fail_x1;
+        }
+
+	rel_hargs = kzalloc(sizeof(*rel_hargs), GFP_KERNEL);
+        if (!rel_hargs) {
+                LIBLCD_ERR("kzalloc hidden args");
+                goto fail_alloc5;
+        }
+
+        rel_hargs->t_handle = LCD_DUP_TRAMPOLINE(release_trampoline);
+        if (!rel_hargs->t_handle) {
+                LIBLCD_ERR("duplicate trampoline");
+                goto fail_dup2;
+        }
+
+	rel_hargs->t_handle->hidden_args = rel_hargs;
+        rel_hargs->struct_container = blo_container;
+        rel_hargs->cspace = c_cspace;
+        rel_hargs->async_chnl = channel;
+        blo_container->block_device_operations.release = LCD_HANDLE_TO_TRAMPOLINE(rel_hargs->t_handle);
+
+        ret = set_memory_x(((unsigned long)rel_hargs->t_handle) & PAGE_MASK,
+                        ALIGN(LCD_TRAMPOLINE_SIZE(release_trampoline),
+                                PAGE_SIZE) >> PAGE_SHIFT);
+        if (ret) {
+                LIBLCD_ERR("set mem nx");
+                goto fail_x2;
+        }
+
+	disk = &disk_container->gendisk;
+
+	disk->flags = fipc_get_reg4(request);
+	disk->major = fipc_get_reg5(request);
+	disk->first_minor = fipc_get_reg6(request);
+	disk->queue = &rq_container->request_queue;
+	
+	size = 250 * 1024 * 1024 * 1024ULL;
+	set_capacity(disk, size >> 9);
+	
+	disk->fops = &blo_container->block_device_operations;
+	sprintf(disk_name, "nullb%d", disk->first_minor);
+	strncpy(disk->disk_name, disk_name, DISK_NAME_LEN);
+
+	add_disk(disk);
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+
+	fipc_set_reg0(response, blo_container->my_ref.cptr);
+	fipc_set_reg1(response, module_container->my_ref.cptr);
+	thc_ipc_reply(channel, request_cookie, response);
+	
+	return ret;
+
+fail_x2:
+fail_dup2:
+	kfree(rel_hargs);
+fail_alloc5:
+fail_x1:
+fail_dup1:
+	kfree(open_hargs);
+fail_alloc4:
+	glue_cap_remove(c_cspace, module_container->my_ref);
+fail_insert2:
+	kfree(module_container);
+fail_alloc2:
+	glue_cap_remove(c_cspace, blo_container->my_ref);
+fail_insert1:
+	kfree(blo_container);
+fail_alloc1:
+fail_lookup2:
+fail_lookup1:
+
+	return ret;
+}
+

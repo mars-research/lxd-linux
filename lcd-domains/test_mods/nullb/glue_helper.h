@@ -21,13 +21,15 @@
 enum dispatch_t {
         BLK_MQ_ALLOC_TAG_SET,
         BLK_MQ_INIT_QUEUE,
-        BLK_MQ_END_REQUEST,
+        BLK_CLEANUP_QUEUE,
+	BLK_MQ_END_REQUEST,
         BLK_MQ_FREE_TAG_SET,
         BLK_MQ_START_REQUEST,
         BLK_MQ_MAP_QUEUE,
         BLK_QUEUE_LOGICAL_BLOCK_SIZE,
         BLK_QUEUE_PHYSICAL_BLOCK_SIZE,
-        ADD_DISK,
+        ALLOC_DISK,
+	ADD_DISK,
         PUT_DISK,
         DEL_GENDISK,
         DISK_NODE,
@@ -130,6 +132,10 @@ int glue_cap_insert_blk_mq_hw_ctx_type(struct glue_cspace *cspace,
                         struct blk_mq_hw_ctx_container *ctx_container,
                         cptr_t *c_out);
 
+int glue_cap_insert_blk_dev_ops_type(struct glue_cspace *cspace,
+                        struct block_device_operations_container *blo_container,
+                        cptr_t *c_out);
+
 int glue_cap_insert_blk_mq_queue_data_type(struct glue_cspace *cspace,
                         struct blk_mq_queue_data_container *bd_container,
                         cptr_t *c_out);
@@ -165,6 +171,10 @@ int glue_cap_lookup_module_type(struct glue_cspace *cspace,
 int glue_cap_lookup_request_queue_type(struct glue_cspace *cspace,
                         cptr_t c,
                         struct request_queue_container **req_queue_container);
+
+int glue_cap_lookup_blk_dev_ops_type(struct glue_cspace *cspace,
+		 	cptr_t c,
+			struct block_device_operations_container **blo_container);
 
 void glue_cap_remove(struct glue_cspace *cspace, cptr_t c);
 

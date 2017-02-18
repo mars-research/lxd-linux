@@ -7,5 +7,6 @@ SECTIONS
 	LCD_TRAMPOLINE_LINKER_SECTION(init_hctx_fn_trampoline)
 	LCD_TRAMPOLINE_LINKER_SECTION(softirq_done_fn_trampoline)
 	LCD_TRAMPOLINE_LINKER_SECTION(open_trampoline)
+	LCD_TRAMPOLINE_LINKER_SECTION(release_trampoline)
 }
 INSERT AFTER .text;

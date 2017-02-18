@@ -59,6 +59,14 @@ int dispatch_async_loop(struct thc_channel *channel, struct fipc_message *messag
 			trace(BLK_QUEUE_PHYSICAL_BLOCK_SIZE);
 			return blk_queue_physical_block_size_callee(message, channel, cspace, sync_ep);
 
+		case BLK_CLEANUP_QUEUE:
+			trace(BLK_CLEANUP_QUEUE);
+			return blk_cleanup_queue_callee(message, channel, cspace, sync_ep);
+
+		case ALLOC_DISK:
+			trace(ALLOC_DISK);
+			return alloc_disk_node_callee(message, channel, cspace, sync_ep);
+
 		case ADD_DISK:
 			trace(ADD_DISK);
 			return add_disk_callee(message, channel, cspace, sync_ep);
@@ -70,10 +78,6 @@ int dispatch_async_loop(struct thc_channel *channel, struct fipc_message *messag
 		case DEL_GENDISK:
 			trace(DEL_GENDISK);
 			return del_gendisk_callee(message, channel, cspace, sync_ep);
-
-		case DISK_NODE:
-			trace(DISK_NODE);
-			return disk_node_callee(message, channel, cspace, sync_ep);
 
 		//case REGISTER_BLKDEV:
 		//	trace(REGISTER_BLKDEV);

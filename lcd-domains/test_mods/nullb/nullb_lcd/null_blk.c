@@ -544,7 +544,7 @@ static void null_del_dev(struct nullb *nullb)
 		del_gendisk(nullb->disk);
 	blk_cleanup_queue(nullb->q);
 	if (queue_mode == NULL_Q_MQ)
-		//blk_mq_free_tag_set(&nullb->tag_set);
+		blk_mq_free_tag_set(&nullb->tag_set_container->set);
 	if (!use_lightnvm)
 		put_disk(nullb->disk);
 	cleanup_queues(nullb);
@@ -920,14 +920,11 @@ static int null_add_dev(void)
 		goto done;
 	}
 #endif
-	printk("*** returning before anything happens! **** \n");
-	return 0;
-
-//	disk = nullb->disk = alloc_disk_node(1, home_node);
-//	if (!disk) {
-//		rv = -ENOMEM;
-//		goto out_cleanup_lightnvm;
-//	}
+	disk = nullb->disk = alloc_disk_node(1, home_node);
+	if (!disk) {
+		rv = -ENOMEM;
+		goto out_cleanup_lightnvm;
+	}
 	size = gb * 1024 * 1024 * 1024ULL;
 	set_capacity(disk, size >> 9);
 
@@ -941,7 +938,12 @@ static int null_add_dev(void)
 	disk->queue		= nullb->q;
 	strncpy(disk->disk_name, nullb->disk_name, DISK_NAME_LEN);
 
-//	add_disk(disk);
+	//add_disk(disk);
+	/* AB - add_disk is defined as a static inline in genhd.h 
+	 * so redefinition of the same symbol in the glue creates 
+	 * problems. Instead, I call the function what add_disk calls 
+	 * directly from here! */
+	device_add_disk(NULL, disk);
 
 #ifndef LCD_ISOLATE
 done:
@@ -952,6 +954,7 @@ done:
 
 	return 0;
 
+out_cleanup_lightnvm:
 #ifndef LCD_ISOLATE
 out_cleanup_lightnvm:
 	if (use_lightnvm)
@@ -962,7 +965,7 @@ out_cleanup_blk_queue:
 
 out_cleanup_tags:
 	if (queue_mode == NULL_Q_MQ)
-		//blk_mq_free_tag_set(&nullb->tag_set);
+		blk_mq_free_tag_set(&nullb->tag_set_container->set);
 
 out_cleanup_queues:
 	cleanup_queues(nullb);
@@ -985,7 +988,7 @@ int null_init(void)
 {
 	int ret = 0;
 	unsigned int i;
-	//struct nullb *nullb;
+	struct nullb *nullb;
 
 	if (bs > PAGE_SIZE) {
 		pr_warn("null_blk: invalid block size\n");
@@ -1036,25 +1039,25 @@ int null_init(void)
 
 	for (i = 0; i < nr_devices; i++) {
 		ret = null_add_dev();
-//		if (ret)
-//			goto err_dev;
+		if (ret)
+			goto err_dev;
 	}
 
 	printk("null: module loaded\n");
 	return 0;
 
-//err_dev:
-//	while (!list_empty(&nullb_list)) {
-//		nullb = list_entry(nullb_list.next, struct nullb, list);
-//		null_del_dev(nullb);
-//	}
+err_dev:
+	while (!list_empty(&nullb_list)) {
+		nullb = list_entry(nullb_list.next, struct nullb, list);
+		null_del_dev(nullb);
+	}
 #ifndef LCD_ISOLATE
 	/* This should have been guarded around use_lightnvm 
 	 * in original code */
 	kmem_cache_destroy(ppa_cache);
 err_ppa:
 #endif
-//	unregister_blkdev(null_major, "nullb");
+	unregister_blkdev(null_major, "nullb");
 	return ret;
 }
 
@@ -1066,7 +1069,7 @@ void null_exit(void)
 {
 	struct nullb *nullb;
 
-	//unregister_blkdev(null_major, "nullb");
+	unregister_blkdev(null_major, "nullb");
 
 	mutex_lock(&lock);
 	while (!list_empty(&nullb_list)) {

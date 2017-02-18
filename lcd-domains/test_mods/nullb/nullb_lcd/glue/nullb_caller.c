@@ -316,6 +316,41 @@ fail_alloc:
 	return NULL;
 }
 
+void blk_cleanup_queue(struct request_queue *q)
+{
+	struct request_queue_container *rq_container;
+	struct fipc_message *request;
+	struct fipc_message *response;
+	int ret;
+
+	ret = async_msg_blocking_send_start(blk_async_chl, &request);
+	if (ret) {
+		LIBLCD_ERR("failed to get a send slot");
+		goto fail_async;
+	}
+	
+	rq_container = container_of(q, struct request_queue_container,
+						request_queue);
+
+	async_msg_set_fn_type(request, BLK_CLEANUP_QUEUE);
+	fipc_set_reg0(request, rq_container->other_ref.cptr);
+	
+	ret = thc_ipc_call(blk_async_chl, request, &response);
+	if (ret) {
+	 	LIBLCD_ERR("thc_ipc_call");
+		goto fail_ipc;
+	}
+	
+	fipc_recv_msg_end(thc_channel_to_fipc(blk_async_chl), response);
+	glue_cap_remove(c_cspace, rq_container->my_ref);
+	kfree(rq_container);
+	return;
+
+fail_ipc:
+fail_async:
+	return;
+}
+
 #if 0
 void blk_mq_end_request(struct request *rq, int error)
 {
@@ -338,43 +373,47 @@ void blk_mq_end_request(struct request *rq, int error)
 	return;fail_async:
 
 }
+#endif
 
 void blk_mq_free_tag_set(struct blk_mq_tag_set *set)
 {
 	int ret;
 	struct fipc_message *request;
 	struct fipc_message *response;
+	struct blk_mq_tag_set_container *set_container;
+	struct blk_mq_ops_container *ops_container;
+
+	set_container = container_of(set, struct blk_mq_tag_set_container, 
+						blk_mq_tag_set);
+
+	ops_container = container_of(set->ops, struct blk_mq_ops_container, 
+						blk_mq_ops); 
+
 	ret = async_msg_blocking_send_start(blk_async_chl, &request);
 	if (ret) {
 		LIBLCD_ERR("failed to get a send slot");
 		goto fail_async;
 	}
 	async_msg_set_fn_type(request, BLK_MQ_FREE_TAG_SET);
-	fipc_set_reg2(request, set->nr_hw_queues);
-	fipc_set_reg3(request, set->queue_depth);
-	fipc_set_reg4(request, set->reserved_tags);
-	fipc_set_reg5(request, set->cmd_size);
-	fipc_set_reg6(request, set->flags);
-	int sync_ret;
-	unsigned 	long driver_data_mem_sz;
-	unsigned 	long driver_data_offset;
-	cptr_t driver_data_cptr;
-	sync_ret = lcd_virt_to_cptr(__gva(( unsigned  long   )driver_data), &driver_data_cptr, &driver_data_mem_sz, &driver_data_offset);
-	if (sync_ret) {
-		LIBLCD_ERR("virt to cptr failed");
-		lcd_exit(-1);
-	}
-	fipc_set_reg7(request, ops_container->my_ref.cptr);
+	
+	fipc_set_reg0(request, set_container->other_ref.cptr);
+	fipc_set_reg1(request, ops_container->other_ref.cptr);
 	ret = thc_ipc_call(blk_async_chl, request, &response);
 	if (ret) {
 		LIBLCD_ERR("thc_ipc_call");
 		goto fail_ipc;
 	}
 	fipc_recv_msg_end(thc_channel_to_fipc(blk_async_chl), response);
-	return;fail_async:
+	glue_cap_remove(c_cspace, set_container->my_ref);
+	glue_cap_remove(c_cspace, ops_container->my_ref);
+	return;
 
+fail_ipc:
+fail_async:
+	return;
 }
 
+#if 0
 void blk_mq_start_request(struct request *rq)
 {
 	int ret;
@@ -494,152 +533,209 @@ fail_ipc:
 	return;
 }
 
-#if 0
-void add_disk(struct gendisk *disk)
+struct gendisk *alloc_disk_node(int minors, int node_id) 
 {
 	struct gendisk_container *disk_container;
-	void *disk_private_data;
-	int ret;
 	struct fipc_message *request;
-	struct fipc_message *response;
-	disk_container = kzalloc(sizeof( struct gendisk_container   ), GFP_KERNEL);
-	if (!disk_container) {
+	struct fipc_message *response;	
+	int ret;
+
+	disk_container = kzalloc(sizeof(struct gendisk_container), GFP_KERNEL);
+	if(!disk_container) {
 		LIBLCD_ERR("kzalloc");
 		goto fail_alloc;
 	}
-	err = glue_cap_insert_gendisk_type(c_cspace, disk_container, &disk_container->my_ref);
-	if (!err) {
+	
+	ret = glue_cap_insert_gendisk_type(c_cspace, disk_container, &disk_container->my_ref);
+	if (ret) {
 		LIBLCD_ERR("lcd insert");
 		goto fail_insert;
 	}
-	int sync_ret;
-	unsigned 	long mem_order;
-	unsigned 	long disk_private_data_offset;
-	cptr_t disk_private_data_cptr;
-	gva_t disk_private_data_gva;
-	disk_container->gendisk.private_data = disk_private_data;
+
 	ret = async_msg_blocking_send_start(blk_async_chl, &request);
 	if (ret) {
 		LIBLCD_ERR("failed to get a send slot");
 		goto fail_async;
 	}
-	async_msg_set_fn_type(request, ADD_DISK);
-	fipc_set_reg4(request, disk_container->my_ref.cptr);
-	fipc_set_reg1(request, disk->flags);
-	fipc_set_reg2(request, disk->major);
-	fipc_set_reg3(request, disk->first_minor);
-	int sync_ret;
-	unsigned 	long private_data_mem_sz;
-	unsigned 	long private_data_offset;
-	cptr_t private_data_cptr;
-	sync_ret = lcd_virt_to_cptr(__gva(( unsigned  long   )private_data), &private_data_cptr, &private_data_mem_sz, &private_data_offset);
-	if (sync_ret) {
-		LIBLCD_ERR("virt to cptr failed");
-		lcd_exit(-1);
-	}
+	
+	fipc_set_reg0(request, minors);
+	fipc_set_reg1(request, node_id);
+	fipc_set_reg2(request, disk_container->my_ref.cptr);
+
 	ret = thc_ipc_call(blk_async_chl, request, &response);
 	if (ret) {
 		LIBLCD_ERR("thc_ipc_call");
 		goto fail_ipc;
 	}
-	disk_container->other_ref.cptr = fipc_get_reg4(response);
-	fipc_recv_msg_end(thc_channel_to_fipc(blk_async_chl), response);
-	return;fail_async:
 
+	disk_container->other_ref.cptr = fipc_get_reg0(response);
+
+	fipc_recv_msg_end(thc_channel_to_fipc(blk_async_chl), response);
+
+	return &disk_container->gendisk;
+
+fail_ipc:
+fail_async:
+	glue_cap_remove(c_cspace, disk_container->my_ref);
+fail_insert:
+	kfree(disk_container);
+fail_alloc:
+	return NULL;
+}
+
+void device_add_disk(struct device *parent, struct gendisk *disk)
+{
+	struct gendisk_container *disk_container;
+	struct block_device_operations_container *blo_container;
+	struct module_container *module_container;
+	struct request_queue_container *rq_container;
+	int ret;
+	struct fipc_message *request;
+	struct fipc_message *response;
+
+	disk_container = container_of(disk, struct gendisk_container, gendisk);
+
+	blo_container = container_of(disk->fops, 
+			struct block_device_operations_container, block_device_operations);
+
+	module_container = container_of(disk->fops->owner, struct module_container,
+				module);
+
+	rq_container = container_of(disk->queue, struct request_queue_container,
+				request_queue);
+
+	ret = glue_cap_insert_module_type(c_cspace, module_container, &module_container->my_ref);
+	if (ret) {
+		LIBLCD_ERR("lcd insert");
+		goto fail_insert1;
+	}
+	
+	ret = glue_cap_insert_gendisk_type(c_cspace, disk_container, &disk_container->my_ref);
+	if (ret) {
+		 LIBLCD_ERR("lcd insert");
+		 goto fail_insert2;
+	}
+
+	ret = glue_cap_insert_blk_dev_ops_type(c_cspace, blo_container, &blo_container->my_ref);
+	if(ret) {
+		LIBLCD_ERR("lcd insert");
+		goto fail_insert3;
+	}
+	
+	ret = async_msg_blocking_send_start(blk_async_chl, &request);
+	if (ret) {
+		LIBLCD_ERR("failed to get a send slot");
+		goto fail_async;
+	}
+
+	async_msg_set_fn_type(request, ADD_DISK);
+	fipc_set_reg0(request, disk_container->other_ref.cptr);
+	fipc_set_reg1(request, blo_container->my_ref.cptr);
+	fipc_set_reg2(request, module_container->my_ref.cptr);
+	fipc_set_reg3(request, rq_container->other_ref.cptr);
+	fipc_set_reg4(request, disk->flags);
+	fipc_set_reg5(request, disk->major);
+	fipc_set_reg6(request, disk->first_minor);
+
+	/* Ran out of registers to marshall the string, so hardcoding it
+	 * in the klcd */
+
+	ret = thc_ipc_call(blk_async_chl, request, &response);
+	if (ret) {
+		LIBLCD_ERR("thc_ipc_call");
+		goto fail_ipc;
+	}
+	
+	blo_container->other_ref.cptr = fipc_get_reg0(response);
+	module_container->other_ref.cptr = fipc_get_reg0(response);
+	fipc_recv_msg_end(thc_channel_to_fipc(blk_async_chl), response);
+	return;
+fail_ipc:
+fail_async:
+fail_insert3:
+fail_insert2:
+fail_insert1:
+	return;
 }
 
 void put_disk(struct gendisk *disk)
 {
 	int ret;
 	struct fipc_message *request;
+	struct gendisk_container *disk_container;
+	struct module_container *module_container;
+	struct block_device_operations_container *blo_container;
 	struct fipc_message *response;
-	ret = async_msg_blocking_send_start(blk_async_chl, &request);
-	if (ret) {
-		LIBLCD_ERR("failed to get a send slot");
-		goto fail_async;
-	}
-	async_msg_set_fn_type(request, PUT_DISK);
-	fipc_set_reg2(request, disk->flags);
-	fipc_set_reg3(request, disk->major);
-	fipc_set_reg4(request, disk->first_minor);
-	int sync_ret;
-	unsigned 	long private_data_mem_sz;
-	unsigned 	long private_data_offset;
-	cptr_t private_data_cptr;
-	sync_ret = lcd_virt_to_cptr(__gva(( unsigned  long   )private_data), &private_data_cptr, &private_data_mem_sz, &private_data_offset);
-	if (sync_ret) {
-		LIBLCD_ERR("virt to cptr failed");
-		lcd_exit(-1);
-	}
-	ret = thc_ipc_call(blk_async_chl, request, &response);
-	if (ret) {
-		LIBLCD_ERR("thc_ipc_call");
-		goto fail_ipc;
-	}
-	fipc_recv_msg_end(thc_channel_to_fipc(blk_async_chl), response);
-	return;fail_async:
 
-}
+	disk_container = container_of(disk, struct gendisk_container, gendisk);
 
-void del_gendisk(struct gendisk *gp)
-{
-	int ret;
-	struct fipc_message *request;
-	struct fipc_message *response;
+	blo_container = container_of(disk->fops,
+			struct block_device_operations_container, block_device_operations);
+
+	module_container = container_of(disk->fops->owner, struct module_container,
+			 module);
+
 	ret = async_msg_blocking_send_start(blk_async_chl, &request);
 	if (ret) {
 		LIBLCD_ERR("failed to get a send slot");
 		goto fail_async;
 	}
 	async_msg_set_fn_type(request, DEL_GENDISK);
-	fipc_set_reg2(request, gp->flags);
-	fipc_set_reg3(request, gp->major);
-	fipc_set_reg4(request, gp->first_minor);
-	int sync_ret;
-	unsigned 	long private_data_mem_sz;
-	unsigned 	long private_data_offset;
-	cptr_t private_data_cptr;
-	sync_ret = lcd_virt_to_cptr(__gva(( unsigned  long   )private_data), &private_data_cptr, &private_data_mem_sz, &private_data_offset);
-	if (sync_ret) {
-		LIBLCD_ERR("virt to cptr failed");
-		lcd_exit(-1);
-	}
+
+	fipc_set_reg0(request, disk_container->other_ref.cptr);
+	fipc_set_reg1(request, blo_container->other_ref.cptr);
+	fipc_set_reg2(request, module_container->other_ref.cptr);
+	
 	ret = thc_ipc_call(blk_async_chl, request, &response);
 	if (ret) {
 		LIBLCD_ERR("thc_ipc_call");
 		goto fail_ipc;
 	}
 	fipc_recv_msg_end(thc_channel_to_fipc(blk_async_chl), response);
-	return;fail_async:
+	
+	glue_cap_remove(c_cspace, disk_container->my_ref);
+	glue_cap_remove(c_cspace, blo_container->my_ref);
+	glue_cap_remove(c_cspace, module_container->my_ref);
+	kfree(disk_container);
+	return;
 
+fail_async:
+fail_ipc:
+	return;
 }
 
-struct gendisk *disk_node(int minors, int node_id)
+void del_gendisk(struct gendisk *gp)
 {
 	int ret;
 	struct fipc_message *request;
+	struct gendisk_container *disk_container;
 	struct fipc_message *response;
-	struct gendisk *func_ret;
+
+	disk_container = container_of(gp, struct gendisk_container, gendisk);
+
 	ret = async_msg_blocking_send_start(blk_async_chl, &request);
 	if (ret) {
 		LIBLCD_ERR("failed to get a send slot");
 		goto fail_async;
 	}
-	async_msg_set_fn_type(request, DISK_NODE);
-	fipc_set_reg1(request, minors);
-	fipc_set_reg2(request, node_id);
+	async_msg_set_fn_type(request, DEL_GENDISK);
+
+	fipc_set_reg0(request, disk_container->other_ref.cptr);
+	
 	ret = thc_ipc_call(blk_async_chl, request, &response);
 	if (ret) {
 		LIBLCD_ERR("thc_ipc_call");
 		goto fail_ipc;
 	}
-	func_ret = fipc_get_reg1(response);
 	fipc_recv_msg_end(thc_channel_to_fipc(blk_async_chl), response);
-	return func_ret;
-fail_async:
+	
+	glue_cap_remove(c_cspace, disk_container->my_ref);
+	return;
 
+fail_async:
+fail_ipc:
+	return;
 }
-#endif
 
 int register_blkdev(unsigned int devno, const char *name)
 {
@@ -718,30 +814,35 @@ fail1:
 	return ret;
 }
 
-#if 0
-void unregister_blkdev(unsigned int devno, char *name)
+void unregister_blkdev(unsigned int devno, const char *name)
 {
 	int ret;
 	struct fipc_message *request;
 	struct fipc_message *response;
+
 	ret = async_msg_blocking_send_start(blk_async_chl, &request);
 	if (ret) {
 		LIBLCD_ERR("failed to get a send slot");
 		goto fail_async;
 	}
+	
 	async_msg_set_fn_type(request, UNREGISTER_BLKDEV);
-	fipc_set_reg1(request, devno);
-	fipc_set_reg2(request, name);
+	
+	fipc_set_reg0(request, devno);
+	//TODO Not marshalling the string for now! hardcoded in klcd
 	ret = thc_ipc_call(blk_async_chl, request, &response);
 	if (ret) {
 		LIBLCD_ERR("thc_ipc_call");
 		goto fail_ipc;
 	}
 	fipc_recv_msg_end(thc_channel_to_fipc(blk_async_chl), response);
-	return;fail_async:
+	return;
 
+fail_async:
+fail_ipc:
+	return;
 }
-#endif
+
 int queue_rq_fn_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
 {
 #if 0

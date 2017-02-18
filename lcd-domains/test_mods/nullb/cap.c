@@ -26,6 +26,7 @@ enum glue_type {
         GLUE_TYPE_BLK_MQ_OPS,
 	GLUE_TYPE_MODULE,
         GLUE_TYPE_BLK_MQ_TAG_SET,
+	GLUE_TYPE_BLK_DEV_OPS,
 	GLUE_TYPE_GENDISK,
         GLUE_TYPE_BLK_MQ_HW_CTX,
         GLUE_TYPE_BLK_MQ_QUEUE_DATA,
@@ -183,17 +184,23 @@ int glue_cap_insert_module_type(struct glue_cspace *cspace,
                                 c_out);
 }
 
+int glue_cap_insert_blk_dev_ops_type(struct glue_cspace *cspace,
+			struct block_device_operations_container *blo_container,
+			cptr_t *c_out) { 
+
+	 return glue_cspace_insert(cspace, blo_container,
+			 	glue_libcap_type_ops[GLUE_TYPE_BLK_DEV_OPS].libcap_type,
+				c_out);
+
+}
+
 int glue_cap_insert_blk_mq_tag_set_type(struct glue_cspace *cspace,
 			struct blk_mq_tag_set_container *set_container,
 			 cptr_t *c_out) {
-	int ret;
 	
-        ret = glue_cspace_insert(cspace, set_container,  
+       return glue_cspace_insert(cspace, set_container,  
                                 glue_libcap_type_ops[GLUE_TYPE_BLK_MQ_TAG_SET].libcap_type,
                                 c_out);
-
-	printk("ret val %d \n",ret);
-	return ret;
 }
 
 int glue_cap_insert_gendisk_type(struct glue_cspace *cspace,
@@ -255,6 +262,17 @@ int glue_cap_lookup_blk_mq_tag_set_type(struct glue_cspace *cspace,
                 cspace, c,
                 glue_libcap_type_ops[GLUE_TYPE_BLK_MQ_TAG_SET].libcap_type,
                 (void **)set_container);
+
+}
+
+int glue_cap_lookup_blk_dev_ops_type(struct glue_cspace *cspace,
+			cptr_t c,
+			struct block_device_operations_container **blo_container) {
+
+        return glue_cspace_lookup(
+                cspace, c,
+                glue_libcap_type_ops[GLUE_TYPE_BLK_DEV_OPS].libcap_type,
+                (void **)blo_container);
 
 }
 
