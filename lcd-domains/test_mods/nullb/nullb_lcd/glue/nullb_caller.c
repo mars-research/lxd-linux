@@ -557,7 +557,8 @@ struct gendisk *alloc_disk_node(int minors, int node_id)
 		LIBLCD_ERR("failed to get a send slot");
 		goto fail_async;
 	}
-	
+
+	async_msg_set_fn_type(request, ALLOC_DISK);	
 	fipc_set_reg0(request, minors);
 	fipc_set_reg1(request, node_id);
 	fipc_set_reg2(request, disk_container->my_ref.cptr);
