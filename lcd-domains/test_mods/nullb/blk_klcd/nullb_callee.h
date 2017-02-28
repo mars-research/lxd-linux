@@ -3,10 +3,16 @@
 
 #include "../glue_helper.h"
 
+struct fs_info {
+	struct thc_channel *chnl;
+	struct glue_cspace *cspace;
+	cptr_t sync_endpoint;
+	struct list_head list;
+};
 int glue_blk_init(void);
 
 void glue_blk_exit(void);
-
+void blk_exit(struct thc_channel *channel);
 int dispatch_sync_loop (void);
 
 struct fs_info * 
@@ -14,6 +20,8 @@ add_fs(struct thc_channel *chnl, struct glue_cspace *cspace,
         cptr_t sync_endpoint);
 
 void remove_fs(struct fs_info *fs);
+
+struct fs_info* get_fsinfo(void);
 
 int dispatch_async_loop(struct thc_channel *chnl,
                         struct fipc_message *msg,

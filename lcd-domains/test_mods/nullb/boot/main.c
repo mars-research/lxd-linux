@@ -164,11 +164,13 @@ int boot_lcd_thread(void *data)
 		schedule();	
 	}
 	LIBLCD_MSG("Exiting thread");
+
+	//msleep(10000);	
+	lcd_destroy_module_klcd(blk_klcd, "lcd_test_mod_nullb_blk_klcd");
+	msleep(10000);	
 	lcd_cap_delete(nullb_lcd);
 	lcd_destroy_create_ctx(dummy_ctx);
-
-	msleep(10000);	
-	lcd_destroy_module_klcd(blk_klcd, "lcd_test_mod_nullb_blk_klcd");
+	
 	lcd_exit(0);
 	return 0;
 }

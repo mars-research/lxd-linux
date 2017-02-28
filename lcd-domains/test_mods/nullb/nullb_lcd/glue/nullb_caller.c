@@ -821,6 +821,7 @@ void unregister_blkdev(unsigned int devno, const char *name)
 	struct fipc_message *request;
 	struct fipc_message *response;
 
+	LIBLCD_MSG("unreg blkdev caller glue");
 	ret = async_msg_blocking_send_start(blk_async_chl, &request);
 	if (ret) {
 		LIBLCD_ERR("failed to get a send slot");
@@ -843,66 +844,83 @@ fail_async:
 fail_ipc:
 	return;
 }
+int null_exit_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
+{
+	struct fipc_message *response;
+	unsigned int request_cookie;
+	int ret;
+	
+	request_cookie = thc_get_request_cookie(request);
+	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
+	
+	null_exit();
+
+        if (async_msg_blocking_send_start(channel, &response)) {
+                LIBLCD_ERR("error getting response msg");
+                ret = -EIO;
+                goto fail_async;
+        }
+
+        thc_ipc_reply(channel, request_cookie, response);
+
+fail_async:
+	return ret;
+}
 
 int queue_rq_fn_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
 {
-#if 0
-	struct blk_mq_hw_ctx_container *ctx_container;
-	struct blk_mq_queue_data_container *bd_container;
 	struct fipc_message *response;
-	unsigned 	int request_cookie;
-	int func_ret;
+	unsigned int request_cookie;
+	struct blk_mq_hw_ctx_container *ctx_container;	
+	struct blk_mq_ops_container *ops_container;
+	struct blk_mq_queue_data_container *bd_container;
+	int ret;
+
 	request_cookie = thc_get_request_cookie(request);
+	
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
-	err = glue_cap_lookup_blk_mq_hw_ctx_type(cspace, __cptr(fipc_get_reg4(request)), &ctx_container);
-	if (err) {
+	
+	ret = glue_cap_lookup_blk_mq_hw_ctx_type(c_cspace, __cptr(fipc_get_reg1(request)),
+						&ctx_container);
+	if(ret) {
 		LIBLCD_ERR("lookup");
 		goto fail_lookup;
 	}
-	err = glue_cap_lookup_blk_mq_queue_data_type(cspace, __cptr(fipc_get_reg8(request)), &bd_container);
-	if (err) {
-		LIBLCD_ERR("lookup");
-		goto fail_lookup;
-	}
-	int sync_ret;
-	unsigned 	long mem_order;
-	unsigned 	long driver_data_offset;
-	cptr_t driver_data_cptr;
-	gva_t driver_data_gva;
-	bd_container->blk_mq_queue_data.rq = kzalloc(*sizeof( bd_container->blk_mq_queue_data.rq ), GFP_KERNEL);
-	if (!bd_container->blk_mq_queue_data.rq) {
-		LIBLCD_ERR("kzalloc");
+	
+	bd_container = kzalloc(sizeof(*bd_container), GFP_KERNEL);
+	if(!bd_container) {
+		LIBLCD_ERR("bd alloc failed");
 		goto fail_alloc;
 	}
-	sync_ret = lcd_cptr_alloc(&driver_data_cptr);
-	if (sync_ret) {
-		LIBLCD_ERR("failed to get cptr");
-		lcd_exit(-1);
-	}
-	lcd_set_cr0(driver_data_cptr);
-	sync_ret = lcd_sync_recv(sync_ep);
-	lcd_set_cr0(CAP_CPTR_NULL);
-	if (sync_ret) {
-		LIBLCD_ERR("failed to recv");
-		lcd_exit(-1);
-	}
-	mem_order = lcd_r0();
-	driver_data_offset = lcd_r1();
-	sync_ret = lcd_map_virt(driver_data_cptr, mem_order, &driver_data_gva);
-	if (sync_ret) {
-		LIBLCD_ERR("failed to map void *driver_data");
-		lcd_exit(-1);
-	}
-	func_ret = queue_rq_fn(( &ctx_container->blk_mq_hw_ctx ), ( &bd_container->blk_mq_queue_data ));
+	
+	ctx_container->blk_mq_hw_ctx.queue_num = fipc_get_reg0(request);
+
+	ret = glue_cap_lookup_blk_mq_ops_type(c_cspace, __cptr(fipc_get_reg2(request)),
+				&ops_container);
+
+	ret = ops_container->blk_mq_ops.queue_rq(&ctx_container->blk_mq_hw_ctx,
+				&bd_container->blk_mq_queue_data);
+	
 	if (async_msg_blocking_send_start(channel, &response)) {
 		LIBLCD_ERR("error getting response msg");
-		return -EIO;
+		ret = -EIO;
+		goto fail_async;
 	}
-	fipc_set_reg1(response, func_ret);
+
+	/* AB - this doesn't make sense now, but still! */
+	fipc_set_reg0(response, ret);
 	thc_ipc_reply(channel, request_cookie, response);
+	
+	kfree(bd_container);
 	return ret;
-#endif
-	return 0;
+	
+fail_async:
+	if(bd_container)
+		kfree(bd_container);
+fail_alloc:
+fail_lookup:
+
+	return ret;
 }
 
 int map_queue_fn_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)

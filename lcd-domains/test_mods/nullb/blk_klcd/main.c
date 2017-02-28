@@ -21,14 +21,7 @@
  * especially bad with thc/async. */
 #define VFS_REGISTER_FREQ (50)
 
-struct fs_info {
-	struct thc_channel *chnl;
-	struct glue_cspace *cspace;
-	cptr_t sync_endpoint;
-	struct list_head list;
-};
 static LIST_HEAD(fs_infos);
-
 int pmfs_ready;
 
 struct fs_info * 
@@ -37,6 +30,7 @@ add_fs(struct thc_channel *chnl, struct glue_cspace *cspace,
 {
 	struct fs_info *fs_info;
 	
+	printk("inside adfs \n");	
 	fs_info = kmalloc(sizeof(*fs_info), GFP_KERNEL);
 	if (!fs_info)
 		goto fail1;
@@ -46,14 +40,25 @@ add_fs(struct thc_channel *chnl, struct glue_cspace *cspace,
 	INIT_LIST_HEAD(&fs_info->list);
 	list_add(&fs_info->list, &fs_infos);
 
+	printk("chnl %p \n",chnl);	
+	printk("fs_info -> chnl %p \n",fs_info->chnl);	
 	return fs_info;
 
 fail1:
 	return NULL;
 }
 
+/* TODO add a parameter to distinguish various elements */
+struct fs_info * get_fsinfo(void)
+{
+	struct fs_info *info;
+	list_for_each_entry(info, &fs_infos, list);
+	return info;
+}
+
 void remove_fs(struct fs_info *fs)
 {
+	LIBLCD_MSG("remove fs called");
 	list_del_init(&fs->list);
 	kfree(fs);
 }
@@ -73,6 +78,7 @@ static int async_loop(struct fs_info **fs_out, struct fipc_message **msg_out)
 			 * fs channel is dead; free the channel,
 			 * and remove from list
 			 */
+			LIBLCD_MSG("channel dead");
 			kfree(cursor->chnl);
 			remove_fs(cursor);
 		} else if (ret == -EWOULDBLOCK) {
@@ -214,6 +220,7 @@ static void loop(cptr_t register_chnl)
 			if (kthread_should_stop()) {
 				LIBLCD_ERR("kthread should stop");
 				stop = 1;
+				blk_exit(fs->chnl);
 				break;
 			}
 
@@ -225,8 +232,7 @@ static void loop(cptr_t register_chnl)
 #endif
 		}
 
-		LIBLCD_MSG("blk exited loop");
-
+		LIBLCD_MSG("blk exited loop, calling blk_exit");
 		THCStopAllAwes();
 
 		);

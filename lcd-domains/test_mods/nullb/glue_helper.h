@@ -39,7 +39,8 @@ enum dispatch_t {
         MAP_QUEUE_FN,
         INIT_HCTX_FN,
         SOFTIRQ_DONE_FN,
-        OPEN
+        OPEN,
+        DESTROY_LCD
 };
 
 /* CONTAINERS ------------------------------------------------------------ */

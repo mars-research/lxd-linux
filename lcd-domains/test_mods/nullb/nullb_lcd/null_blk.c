@@ -305,7 +305,7 @@ static void end_cmd(struct nullb_cmd *cmd)
 
 	switch (queue_mode)  {
 	case NULL_Q_MQ:
-		blk_mq_end_request(cmd->rq, 0);
+		//blk_mq_end_request(cmd->rq, 0);
 		return;
 	case NULL_Q_RQ:
 #ifndef LCD_ISOLATE
@@ -448,7 +448,16 @@ static void null_request_fn(struct request_queue *q)
 static int null_queue_rq(struct blk_mq_hw_ctx *hctx,
 			 const struct blk_mq_queue_data *bd)
 {
-	struct nullb_cmd *cmd = blk_mq_rq_to_pdu(bd->rq);
+	//struct nullb_cmd *cmd = blk_mq_rq_to_pdu(bd->rq);
+	struct nullb_cmd *cmd; 
+	struct nullb *nullb = driver_data_g;
+	struct nullb_queue *nq = &nullb->queues[hctx->queue_num];
+
+	cmd= kzalloc(sizeof(*cmd), GFP_KERNEL);
+	if(!cmd) {
+		printk("alloc cmd failed in queue_rq \n");
+		return -ENOMEM;
+	}
 
 	if (irqmode == NULL_IRQ_TIMER) {
 #ifndef LCD_ISOLATE
@@ -457,11 +466,15 @@ static int null_queue_rq(struct blk_mq_hw_ctx *hctx,
 #endif
 	}
 	cmd->rq = bd->rq;
-	cmd->nq = hctx->driver_data;
+	//cmd->nq = hctx->driver_data;
+	//AB- handled differently!
+	cmd->nq = nq;
 
-	blk_mq_start_request(bd->rq);
+	//blk_mq_start_request(bd->rq);
 
 	null_handle_cmd(cmd);
+	
+	kfree(cmd);
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 
@@ -533,8 +546,8 @@ static void cleanup_queues(struct nullb *nullb)
 
 static void null_del_dev(struct nullb *nullb)
 {
+	printk("inside null del dev \n");
 	list_del_init(&nullb->list);
-
 	if (use_lightnvm) {
 #ifndef LCD_ISOLATE
 		nvm_unregister(nullb->disk_name);
@@ -542,6 +555,7 @@ static void null_del_dev(struct nullb *nullb)
 	}
 	else
 		del_gendisk(nullb->disk);
+	printk("calling blk_cleanup \n");
 	blk_cleanup_queue(nullb->q);
 	if (queue_mode == NULL_Q_MQ)
 		blk_mq_free_tag_set(&nullb->tag_set_container->set);
@@ -830,6 +844,7 @@ static int null_add_dev(void)
 #ifdef LCD_ISOLATE	
 		nullb->tag_set_container->set.ops = &null_mq_ops_container.mq_ops;
 		nullb->tag_set_container->set.nr_hw_queues = submit_queues;
+		printk("submit_queues %d \n",submit_queues);
 		nullb->tag_set_container->set.queue_depth = hw_queue_depth;
 		nullb->tag_set_container->set.numa_node = home_node;
 		nullb->tag_set_container->set.cmd_size	= sizeof(struct nullb_cmd);
@@ -1068,7 +1083,8 @@ void null_exit(void)
 #endif
 {
 	struct nullb *nullb;
-
+	
+	printk("calling unregister_blkdev \n");
 	unregister_blkdev(null_major, "nullb");
 
 	mutex_lock(&lock);

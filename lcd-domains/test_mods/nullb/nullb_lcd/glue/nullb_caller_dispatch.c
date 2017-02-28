@@ -30,6 +30,10 @@ int dispatch_async_loop(struct thc_channel *channel, struct fipc_message *messag
 			trace(OPEN);
 			return open_callee(message, channel, cspace, sync_ep);
 
+		case DESTROY_LCD:
+			trace(DESTROY_CALL);
+			return null_exit_callee(message, channel, cspace, sync_ep);
+
 		default:
 			LIBLCD_ERR("unexpected function label: %d", fn_type);
 			return -EINVAL;

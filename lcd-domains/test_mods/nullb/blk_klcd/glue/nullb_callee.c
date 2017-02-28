@@ -14,6 +14,12 @@
 
 #include <lcd_config/post_hook.h>
 
+/* hacks for unregistering */
+int null_major;
+struct gendisk *disk_g;
+struct request_queue *rq_g;
+struct blk_mq_tag_set *set_g;
+
 struct trampoline_hidden_args {
 	void *struct_container;
 	struct glue_cspace *cspace;
@@ -51,6 +57,38 @@ void glue_blk_exit(void)
 
 }
 
+/* Send a async message for graceful exit */
+void destroy_lcd(struct thc_channel *chnl)
+{
+	printk("cleanup...\n");
+	unregister_blkdev(null_major, "nullb"); 
+
+	if(disk_g) {
+		printk("calling del_gendisk \n");
+		del_gendisk(disk_g);
+	}
+	
+	if(rq_g) {
+		printk("calling blk_cleanup \n");
+		blk_cleanup_queue(rq_g);
+	}
+	
+	if(set_g) {
+		printk("calling free tag set \n");
+		blk_mq_free_tag_set(set_g);
+	}
+
+	if(disk_g) {
+		printk("calling put_disk \n");
+		put_disk(disk_g);
+	}
+	printk("cleanup done\n");
+}	
+
+void blk_exit(struct thc_channel *channel) 
+{
+	destroy_lcd(channel);
+}
 
 int blk_mq_init_queue_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
 {
@@ -78,6 +116,9 @@ int blk_mq_init_queue_callee(struct fipc_message *request, struct thc_channel *c
 		LIBLCD_ERR("blk layer returned bad address!");
 		goto fail_blk;
 	}
+
+	/* Hack for remove */
+	rq_g = rq;
 
 	if (async_msg_blocking_send_start(channel, &response)) {
 		LIBLCD_ERR("error getting response msg");
@@ -333,8 +374,11 @@ int alloc_disk_node_callee(struct fipc_message *request, struct thc_channel *cha
 		LIBLCD_ERR("call to alloc_disk_node failed");
 		goto fail_alloc;
 	}
-
+	printk("address of disk returned by the kernel %p \n",disk);
 	disk_container = container_of(disk, struct gendisk_container, gendisk);
+
+	/* Hack for remove */
+	disk_g = disk;
 
 	ret = glue_cap_insert_gendisk_type(c_cspace, disk_container, &disk_container->my_ref);
 	if (ret) {
@@ -595,7 +639,8 @@ int register_blkdev_callee(void)
                 LIBLCD_ERR("error setting up ring channel");
                 goto fail1;
         }
-	
+
+	printk("chnl %p \n",chnl);	
         /*
          * Add to dispatch loop
          */
@@ -617,6 +662,7 @@ int register_blkdev_callee(void)
 		 * which can be a large +ve number but the ret value passed
 		 * above if found +ve is treated as an error */
 		major = ret;
+		null_major = major;
 		ret = 0;
 	}
 
@@ -657,6 +703,7 @@ int unregister_blkdev_callee(struct fipc_message *request, struct thc_channel *c
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 	
 	devno = fipc_get_reg0(request);
+	LIBLCD_MSG("calling unregister blk_dev");
 	unregister_blkdev(devno, "nullb");
 	if (async_msg_blocking_send_start(channel, &response)) {
 		LIBLCD_ERR("error getting response msg");
@@ -698,89 +745,134 @@ fail_lookup:
 	return ret;
 }
 
-int _queue_rq_fn(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data *bd, struct trampoline_hidden_args *hidden_args)
+/*queue rq to handle under a different context */
+int _queue_rq_fn_ctx(struct blk_mq_hw_ctx *ctx, const struct blk_mq_queue_data *bd, struct trampoline_hidden_args *hidden_args)
 {
-	struct blk_mq_hw_ctx_container *ctx_container;
-	void *ctx_driver_data;
-	struct blk_mq_queue_data_container *bd_container;
-	struct request *bd_rq;
-	int ret;
-	//int err;
+	int ret = 0;
 	struct fipc_message *request;
 	struct fipc_message *response;
-	int func_ret;
-	//int sync_ret;
-	//unsigned 	long mem_order;
-	//unsigned 	long ctx_driver_data_offset;
-	//cptr_t ctx_driver_data_cptr;
-	//gva_t ctx_driver_data_gva;
-	//unsigned long driver_data_mem_sz;
-	//unsigned long driver_data_offset;
+	struct blk_mq_ops_container *ops_container;
+	struct blk_mq_hw_ctx_container *ctx_container;
+	
+	thc_init();
 
-	ctx_container = kzalloc(sizeof( struct blk_mq_hw_ctx_container   ), GFP_KERNEL);
-	if (!ctx_container) {
-		LIBLCD_ERR("kzalloc");
-		goto fail_alloc;
+	/*XXX Beware!! hwctx can be unique per hw context of the driver, if multiple
+	 * exists, then we need one cspace insert function per hwctx. Should be handled
+	 * in the init_hctx routine */
+	ctx_container = container_of(ctx, struct blk_mq_hw_ctx_container, blk_mq_hw_ctx);
+	ops_container = (struct blk_mq_ops_container *)hidden_args->struct_container;
+	
+	ret = async_msg_blocking_send_start(hidden_args->async_chnl, &request);
+	if (ret) {
+		LIBLCD_ERR("ctx failed to get a send slot");
+		goto fail_async;
 	}
-	/*AB - commented out for compilation. See the first parameter, it should be c_cspace but hidden_args? */
-	//err = glue_cap_insert_blk_mq_hw_ctx_type(hidden_args, ctx_container, &ctx_container->my_ref);
-	//if (!err) {
-	//	LIBLCD_ERR("lcd insert");
-	//	goto fail_insert;
-	//}
-	ctx_container->blk_mq_hw_ctx.driver_data = ctx_driver_data;
-	bd_container = kzalloc(sizeof( struct blk_mq_queue_data_container   ), GFP_KERNEL);
-	if (!bd_container) {
-		LIBLCD_ERR("kzalloc");
-		goto fail_alloc;
+
+	async_msg_set_fn_type(request, QUEUE_RQ_FN);
+
+	fipc_set_reg0(request, ctx->queue_num);
+	fipc_set_reg1(request, ctx_container->other_ref.cptr);
+	fipc_set_reg2(request, ops_container->other_ref.cptr);
+
+        DO_FINISH_(queue_rq_fn, {
+                ASYNC_( {
+                ret = thc_ipc_call(hidden_args->async_chnl, request, &response);
+                }, queue_rq_fn);
+        });  
+
+        if (ret) {
+                LIBLCD_ERR("ctx thc_ipc_call");
+                goto fail_ipc;
+        }
+
+	blk_mq_start_request(bd->rq);	
+	blk_mq_end_request(bd->rq, 0);
+	
+	/* function ret -  makes no sense now but keeping it this way! */
+	ret = fipc_get_reg0(response);
+	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->async_chnl), response);
+
+	lcd_exit(0);
+	return ret;
+
+fail_async:
+fail_ipc:
+	lcd_exit(0);
+	return ret;
+}
+
+int _queue_rq_fn(struct blk_mq_hw_ctx *ctx, const struct blk_mq_queue_data *bd, struct trampoline_hidden_args *hidden_args)
+{
+	int ret;
+	struct fipc_message *request;
+	struct fipc_message *response;
+	struct blk_mq_ops_container *ops_container;
+	struct blk_mq_hw_ctx_container *ctx_container;
+
+	if(!PTS()) {
+		LCD_MAIN({
+			ret = _queue_rq_fn_ctx(ctx, bd, hidden_args);				
+		});
+		return ret;
 	}
-	//err = glue_cap_insert_blk_mq_queue_data_type(hidden_args, bd_container, &bd_container->my_ref);
-	//if (!err) {
-	//	LIBLCD_ERR("lcd insert");
-	//	goto fail_insert;
-	//}
-	bd_rq = kzalloc(sizeof(*bd_rq), GFP_KERNEL);
-	if (!bd_rq) {
-		LIBLCD_ERR("kzalloc");
-		goto fail_alloc;
-	}
-	bd_container->blk_mq_queue_data.rq = bd_rq;
+
+	printk("[Klcd-queue-rq] enter \n");
+	/*XXX Beware!! hwctx can be unique per hw context of the driver, if multiple
+	 * exists, then we need one cspace insert function per hwctx. Should be handled
+	 * in the init_hctx routine */
+	ctx_container = container_of(ctx, struct blk_mq_hw_ctx_container, blk_mq_hw_ctx);
+	ops_container = (struct blk_mq_ops_container *)hidden_args->struct_container;
+	
 	ret = async_msg_blocking_send_start(hidden_args->async_chnl, &request);
 	if (ret) {
 		LIBLCD_ERR("failed to get a send slot");
 		goto fail_async;
 	}
+
 	async_msg_set_fn_type(request, QUEUE_RQ_FN);
-	fipc_set_reg4(request, ctx_container->my_ref.cptr);
-	
-	/* TODO AB - this is totally absurd! Sick of changing this! */
-	//sync_ret = lcd_virt_to_cptr(__gva((unsigned  long)ctx_container->blk_mq_hw_ctx.driver_data), 
-	//					&driver_data_cptr, &driver_data_mem_sz, &driver_data_offset);
-	//if (sync_ret) {
-	//	LIBLCD_ERR("virt to cptr failed");
-	//	lcd_exit(-1);
-	//}
-	/*TODO reg8 wont work! */
-	//fipc_set_reg8(request, bd_container->my_ref.cptr);
+
+	fipc_set_reg0(request, ctx->queue_num);
+	fipc_set_reg1(request, ctx_container->other_ref.cptr);
+	fipc_set_reg2(request, ops_container->other_ref.cptr);
+
 	ret = thc_ipc_call(hidden_args->async_chnl, request, &response);
 	if (ret) {
 		LIBLCD_ERR("thc_ipc_call");
 		goto fail_ipc;
 	}
-	func_ret = fipc_get_reg1(response);
+
+	blk_mq_start_request(bd->rq);	
+	blk_mq_end_request(bd->rq, 0);
+	
+	/* function ret -  makes no sense now but keeping it this way! */
+	ret = fipc_get_reg0(response);
 	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->async_chnl), response);
-	return func_ret;
+
+	printk("[Klcd-queue-rq] done \n");
+	return ret;
+
 fail_async:
-fail_alloc:
 fail_ipc:
-	return func_ret;
+	printk("[Klcd-queue-rq] done with err \n");
+	return ret;
+}	
+
+int _queue_rq(struct blk_mq_hw_ctx *ctx, const struct blk_mq_queue_data *bd)
+{
+	int ret = BLK_MQ_RQ_QUEUE_OK;
+	
+	printk("block layer called queue_rq in klcd \n");
+	blk_mq_start_request(bd->rq);	
+	blk_mq_complete_request(bd->rq, bd->rq->errors);	
+
+	return ret;
 }	
 
 LCD_TRAMPOLINE_DATA(queue_rq_fn_trampoline);
 int LCD_TRAMPOLINE_LINKAGE(queue_rq_fn_trampoline)
-queue_rq_fn_trampoline(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data *bd) 
+queue_rq_fn_trampoline(struct blk_mq_hw_ctx *ctx, const struct blk_mq_queue_data *bd) 
 {
-	int ( *volatile queue_rq_fn_fp )(struct blk_mq_hw_ctx *, struct blk_mq_queue_data *, struct trampoline_hidden_args *);
+	int ( *volatile queue_rq_fn_fp )(struct blk_mq_hw_ctx *, const struct blk_mq_queue_data *, struct trampoline_hidden_args *);
 	struct trampoline_hidden_args *hidden_args;
 	LCD_TRAMPOLINE_PROLOGUE(hidden_args, queue_rq_fn_trampoline);
 	queue_rq_fn_fp = _queue_rq_fn;
@@ -810,6 +902,64 @@ struct blk_mq_hw_ctx *LCD_TRAMPOLINE_LINKAGE(map_queue_fn_trampoline) map_queue_
 
 }
 
+int _init_hctx_fn_ctx(struct blk_mq_hw_ctx *ctx, void *data, unsigned int index, struct trampoline_hidden_args *hidden_args)
+{
+	struct fipc_message *request;
+	struct fipc_message *response;
+	int func_ret;
+	int ret;
+	struct blk_mq_hw_ctx_container *ctx_container;
+	struct blk_mq_ops_container *ops_container;
+	
+	thc_init();
+	ctx_container = container_of(ctx, struct blk_mq_hw_ctx_container, blk_mq_hw_ctx); 
+	ops_container = (struct blk_mq_ops_container *)hidden_args->struct_container;
+
+	ret = glue_cap_insert_blk_mq_hw_ctx_type(c_cspace, ctx_container, &ctx_container->my_ref);
+	if (ret) {
+		LIBLCD_ERR("klcd insert");
+		goto fail_insert;
+	}
+
+	ret = async_msg_blocking_send_start(hidden_args->async_chnl, &request);
+	if (ret) {
+		LIBLCD_ERR("failed to get a send slot");
+		goto fail_async;
+	}
+	
+	async_msg_set_fn_type(request, INIT_HCTX_FN);
+	fipc_set_reg0(request, ctx_container->my_ref.cptr);
+	fipc_set_reg1(request, index);
+	
+	/* ops container is passed to call ops.init_hctx in the LCD glue */
+	fipc_set_reg2(request, ops_container->other_ref.cptr);
+
+        DO_FINISH_(init_hctx_fn, {
+                ASYNC_( {
+                ret = thc_ipc_call(hidden_args->async_chnl, request, &response);
+                }, init_hctx_fn);
+        });  
+
+        if (ret) {
+                LIBLCD_ERR("thc_ipc_call");
+                goto fail_ipc;
+        }
+
+	ctx_container->other_ref.cptr = fipc_get_reg0(response);
+	func_ret = fipc_get_reg1(response);
+	
+	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->async_chnl), response);
+	printk("end of init_hctx procedure \n");
+
+	lcd_exit(0);
+	return func_ret;
+fail_async:
+fail_ipc:
+fail_insert:
+	lcd_exit(0);
+	return func_ret;
+
+}
 
 int _init_hctx_fn(struct blk_mq_hw_ctx *ctx, void *data, unsigned int index, struct trampoline_hidden_args *hidden_args)
 {
@@ -819,6 +969,14 @@ int _init_hctx_fn(struct blk_mq_hw_ctx *ctx, void *data, unsigned int index, str
 	int func_ret;
 	struct blk_mq_hw_ctx_container *ctx_container;
 	struct blk_mq_ops_container *ops_container;
+
+	if(!PTS()) {
+		LIBLCD_MSG("init_hctx from a different context \n");
+		LCD_MAIN({
+			ret = _init_hctx_fn_ctx(ctx, data, index, hidden_args);				
+		});
+		return ret;
+	}
 
 	ctx_container = container_of(ctx, struct blk_mq_hw_ctx_container, blk_mq_hw_ctx); 
 	ops_container = (struct blk_mq_ops_container *)hidden_args->struct_container;
@@ -880,6 +1038,8 @@ void _softirq_done_fn(struct request *request, struct trampoline_hidden_args *hi
 	int ret;
 	struct fipc_message *async_request;
 	struct fipc_message *async_response;
+	
+	printk("why is sirq being called \n");
 	ret = async_msg_blocking_send_start(hidden_args->async_chnl, &async_request);
 	if (ret) {
 		LIBLCD_ERR("failed to get a send slot");
@@ -913,15 +1073,13 @@ void LCD_TRAMPOLINE_LINKAGE(softirq_done_fn_trampoline) softirq_done_fn_trampoli
 
 int open(struct block_device *device, fmode_t mode, struct trampoline_hidden_args *hidden_args)
 {
-	printk("[nullb-open] Null block driver doesn't perform any operations here, so"
-		"returning directly from klcd layer \n");
+	printk("[nullb-open]");
 	return 0;
 }
 
 void release(struct gendisk *disk, fmode_t mode, struct trampoline_hidden_args *hidden_args)
 {
-	printk("[nullb-release] Null block driver doesn't perform any operations here, so"
-		"returning directly from klcd layer \n");
+	printk("[nullb-release]");
 	return;
 }
 
@@ -1021,6 +1179,10 @@ int blk_mq_alloc_tag_set_callee(struct fipc_message *request, struct thc_channel
 	queue_rq_hidden_args->cspace = c_cspace;
 	queue_rq_hidden_args->async_chnl = channel;
 	ops_container->blk_mq_ops.queue_rq = LCD_HANDLE_TO_TRAMPOLINE(queue_rq_hidden_args->t_handle);
+	//ops_container->blk_mq_ops.queue_rq = _queue_rq;
+	printk("queue_rq in setup %p size %ld \n",ops_container->blk_mq_ops.queue_rq, 
+			ALIGN(LCD_TRAMPOLINE_SIZE(queue_rq_fn_trampoline), PAGE_SIZE));
+	printk("cpuid in setup %d \n", raw_smp_processor_id());
 
         err = set_memory_x(((unsigned long)queue_rq_hidden_args->t_handle) & PAGE_MASK,
                         ALIGN(LCD_TRAMPOLINE_SIZE(queue_rq_fn_trampoline),
@@ -1045,8 +1207,9 @@ int blk_mq_alloc_tag_set_callee(struct fipc_message *request, struct thc_channel
 	map_queue_hidden_args->cspace = c_cspace;
 	map_queue_hidden_args->async_chnl = channel;
 	ops_container->blk_mq_ops.map_queue = LCD_HANDLE_TO_TRAMPOLINE(map_queue_hidden_args->t_handle);
+	printk("map_queue in setup %p \n",ops_container->blk_mq_ops.map_queue);
 
-        err = set_memory_x(((unsigned long)map_queue_hidden_args->t_handle) & PAGE_MASK,
+	err = set_memory_x(((unsigned long)map_queue_hidden_args->t_handle) & PAGE_MASK,
                         ALIGN(LCD_TRAMPOLINE_SIZE(map_queue_fn_trampoline),
                                 PAGE_SIZE) >> PAGE_SHIFT);
         if (err) {
@@ -1070,6 +1233,7 @@ int blk_mq_alloc_tag_set_callee(struct fipc_message *request, struct thc_channel
 	init_hctx_hidden_args->async_chnl = channel;
 	ops_container->blk_mq_ops.init_hctx = LCD_HANDLE_TO_TRAMPOLINE(init_hctx_hidden_args->t_handle);
 
+	printk("init_hctx in setup %p \n",ops_container->blk_mq_ops.init_hctx);
         err = set_memory_x(((unsigned long)init_hctx_hidden_args->t_handle) & PAGE_MASK,
                         ALIGN(LCD_TRAMPOLINE_SIZE(init_hctx_fn_trampoline),
                                 PAGE_SIZE) >> PAGE_SHIFT);
@@ -1134,6 +1298,9 @@ int blk_mq_alloc_tag_set_callee(struct fipc_message *request, struct thc_channel
 		LIBLCD_ERR("error getting response msg");
 		goto fail_recv;
 	}
+
+	/* Hack for remove */
+	set_g = &set_container->blk_mq_tag_set;
 	fipc_set_reg0(response, set_container->my_ref.cptr);
 	fipc_set_reg1(response, ops_container->my_ref.cptr);
 	fipc_set_reg3(response, func_ret);
@@ -1192,7 +1359,6 @@ int add_disk_callee(struct fipc_message *request, struct thc_channel *channel, s
 	sector_t size;
 
 	request_cookie = thc_get_request_cookie(request);
-	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 
 	ret = glue_cap_lookup_gendisk_type(c_cspace, __cptr(fipc_get_reg0(request)),
 					&disk_container);
@@ -1251,6 +1417,10 @@ int add_disk_callee(struct fipc_message *request, struct thc_channel *channel, s
         //}
 
         module_container->module.state = MODULE_STATE_LIVE;
+	
+	/* without this add_disk will fail */
+	atomic_inc(&module_container->module.refcnt);
+
         strcpy(module_container->module.name, "nullb");
 
         ret = glue_cap_insert_module_type(
@@ -1318,12 +1488,14 @@ int add_disk_callee(struct fipc_message *request, struct thc_channel *channel, s
         }
 
 	disk = &disk_container->gendisk;
+	printk("address of disk before calling add_diks %p \n",disk);
 
 	disk->flags = fipc_get_reg4(request);
 	disk->major = fipc_get_reg5(request);
 	disk->first_minor = fipc_get_reg6(request);
 	disk->queue = &rq_container->request_queue;
 	
+	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 	size = 250 * 1024 * 1024 * 1024ULL;
 	set_capacity(disk, size >> 9);
 	
@@ -1331,6 +1503,7 @@ int add_disk_callee(struct fipc_message *request, struct thc_channel *channel, s
 	sprintf(disk_name, "nullb%d", disk->first_minor);
 	strncpy(disk->disk_name, disk_name, DISK_NAME_LEN);
 
+	printk("cpuid in call to add_disk %d \n", raw_smp_processor_id());
 	add_disk(disk);
 	if (async_msg_blocking_send_start(channel, &response)) {
 		LIBLCD_ERR("error getting response msg");

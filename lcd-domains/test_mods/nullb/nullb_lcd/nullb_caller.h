@@ -12,5 +12,9 @@ int map_queue_fn_callee(struct fipc_message *request, struct thc_channel *channe
 int init_hctx_fn_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep);
 int softirq_done_fn_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep);
 int open_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep);
+int null_exit_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep);
+
+int null_init(void);
+void null_exit(void);
 
 #endif /* __NULLB_CALLER_H__ */

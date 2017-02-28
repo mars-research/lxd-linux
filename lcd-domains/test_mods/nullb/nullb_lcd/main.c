@@ -18,8 +18,6 @@ struct thc_channel *blk_async_chl;
 struct glue_cspace *blk_cspace;
 cptr_t blk_sync_ep;
 int nullb_done = 0;
-int null_init(void);
-void null_exit(void);
 
 /* LOOP ---------------------------------------- */
 
@@ -36,7 +34,7 @@ static void main_and_loop(void)
 				LIBLCD_ERR("nullb init failed");
 				stop = 1;
 			} else {
-				LIBLCD_MSG("SUCCESSFULLY REGISTERED DUMMY!");
+				LIBLCD_MSG("SUCCESSFULLY REGISTERED NULLB!");
 			}
 
 			);
@@ -45,6 +43,7 @@ static void main_and_loop(void)
 		 * will be set up (the awe running init_dummy_fs above
 		 * will not yield until it tries to use the async
 		 * channel). */
+		LIBLCD_MSG("what is stop %d and nullb_done %d", stop, nullb_done);
 		while (!stop && !nullb_done) {
 			/*
 			 * Do one async receive
@@ -89,12 +88,12 @@ static void main_and_loop(void)
 			null_exit();
 
 			
-				LIBLCD_MSG("SUCCESSFULLY UNREGISTERED NULLNET!");
+				LIBLCD_MSG("SUCCESSFULLY UNREGISTERED NULL BLOCK!");
 
 			);
 		);
 
-	LIBLCD_MSG("EXITED PMFS DO_FINISH");
+	LIBLCD_MSG("EXITED NULLB_LCD DO_FINISH");
 
 	return;
 }
