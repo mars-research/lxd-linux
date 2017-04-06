@@ -30,6 +30,9 @@
 #include "blk-mq.h"
 #include "blk-mq-tag.h"
 #include <linux/blk-lcd.h>
+//#include <linux/blk-bench.h>
+
+//INIT_BENCHMARK_DATA(queue_rq);
 
 static DEFINE_MUTEX(all_q_mutex);
 static LIST_HEAD(all_q_list);
@@ -490,7 +493,9 @@ void blk_mq_start_request(struct request *rq)
 }
 EXPORT_SYMBOL(blk_mq_start_request);
 
-static void __blk_mq_requeue_request(struct request *rq)
+/* AB - calling this function inside blk_klcd, losing the static! */
+//static void __blk_mq_requeue_request(struct request *rq)
+void __blk_mq_requeue_request(struct request *rq)
 {
 	struct request_queue *q = rq->q;
 
@@ -501,6 +506,7 @@ static void __blk_mq_requeue_request(struct request *rq)
 			rq->nr_phys_segments--;
 	}
 }
+EXPORT_SYMBOL(__blk_mq_requeue_request);
 
 void blk_mq_requeue_request(struct request *rq)
 {
@@ -805,6 +811,7 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	LIST_HEAD(driver_list);
 	struct list_head *dptr;
 	int queued;
+	struct blk_mq_queue_data_async bd_async;
 
 	if (unlikely(test_bit(BLK_MQ_S_STOPPED, &hctx->state)))
 		return;
@@ -839,44 +846,57 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	/*
 	 * Now process all the entries, sending them to the driver.
 	 */
-	queued = 0;
-	while (!list_empty(&rq_list)) {
-		struct blk_mq_queue_data bd;
-		int ret;
+	if (q->mq_ops->queue_rq_async) {
+		queued = 0;
+		bd_async.rq_list = &rq_list;
+		bd_async.list = dptr;
+		bd_async.drv_list = &driver_list;
+		bd_async.queued = &queued;
+		q->mq_ops->queue_rq_async(hctx, &bd_async);
+	}
+	else {
+		queued = 0;
+		//BENCH_BEGIN(queue_rq);	
+		while (!list_empty(&rq_list)) {
+			struct blk_mq_queue_data bd;
+			int ret;
 
-		rq = list_first_entry(&rq_list, struct request, queuelist);
-		list_del_init(&rq->queuelist);
+			rq = list_first_entry(&rq_list, struct request, queuelist);
+			list_del_init(&rq->queuelist);
 
-		bd.rq = rq;
-		bd.list = dptr;
-		bd.last = list_empty(&rq_list);
+			bd.rq = rq;
+			bd.list = dptr;
+			bd.last = list_empty(&rq_list);
+		
+			ret = q->mq_ops->queue_rq(hctx, &bd);
 
-		ret = q->mq_ops->queue_rq(hctx, &bd);
-		switch (ret) {
-		case BLK_MQ_RQ_QUEUE_OK:
-			queued++;
-			break;
-		case BLK_MQ_RQ_QUEUE_BUSY:
-			list_add(&rq->queuelist, &rq_list);
-			__blk_mq_requeue_request(rq);
-			break;
-		default:
-			pr_err("blk-mq: bad return on queue: %d\n", ret);
-		case BLK_MQ_RQ_QUEUE_ERROR:
-			rq->errors = -EIO;
-			blk_mq_end_request(rq, rq->errors);
-			break;
+			switch (ret) {
+			case BLK_MQ_RQ_QUEUE_OK:
+				queued++;
+				break;
+			case BLK_MQ_RQ_QUEUE_BUSY:
+				list_add(&rq->queuelist, &rq_list);
+				__blk_mq_requeue_request(rq);
+				break;
+			default:
+				pr_err("blk-mq: bad return on queue: %d\n", ret);
+			case BLK_MQ_RQ_QUEUE_ERROR:
+				rq->errors = -EIO;
+				blk_mq_end_request(rq, rq->errors);
+				break;
+			}
+
+			if (ret == BLK_MQ_RQ_QUEUE_BUSY)
+				break;
+
+			/*
+			 * We've done the first request. If we have more than 1
+			 * left in the list, set dptr to defer issue.
+			 */
+			if (!dptr && rq_list.next != rq_list.prev)
+				dptr = &driver_list;
 		}
-
-		if (ret == BLK_MQ_RQ_QUEUE_BUSY)
-			break;
-
-		/*
-		 * We've done the first request. If we have more than 1
-		 * left in the list, set dptr to defer issue.
-		 */
-		if (!dptr && rq_list.next != rq_list.prev)
-			dptr = &driver_list;
+		//BENCH_END(queue_rq);
 	}
 
 	if (!queued)
@@ -903,6 +923,7 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 		 **/
 		blk_mq_run_hw_queue(hctx, true);
 	}
+
 }
 
 /*
@@ -928,7 +949,7 @@ static int blk_mq_hctx_next_cpu(struct blk_mq_hw_ctx *hctx)
 
 		return cpu;
 	}
-
+	
 	return hctx->next_cpu;
 }
 
@@ -940,6 +961,7 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx, bool async)
 
 	if (!async) {
 		int cpu = get_cpu();
+		printk("[blk-sync] current: %p name: %s \n", current, current->comm);
 		if (cpumask_test_cpu(cpu, hctx->cpumask)) {
 			__blk_mq_run_hw_queue(hctx);
 			put_cpu();
@@ -949,6 +971,7 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx, bool async)
 		put_cpu();
 	}
 
+	printk("[blk-async] current: %p name: %s \n", current, current->comm);
 	kblockd_schedule_delayed_work_on(blk_mq_hctx_next_cpu(hctx),
 			&hctx->run_work, 0);
 }
@@ -1894,6 +1917,7 @@ static void blk_mq_map_swqueue(struct request_queue *q,
 		 * Initialize batch roundrobin counts
 		 */
 		hctx->next_cpu = cpumask_first(hctx->cpumask);
+		printk("[swqueue] i %d hctx %p hctx->next_cpu %d \n", i, hctx, hctx->next_cpu);
 		hctx->next_cpu_batch = BLK_MQ_CPU_WORK_BATCH;
 	}
 }
@@ -2025,17 +2049,19 @@ static void blk_mq_realloc_hw_ctxs(struct blk_mq_tag_set *set,
 //		if (!hctxs[i])
 //			break;
 //		AB - allocation needs to be modified to hw_ctx_container
-		hwcnt = kzalloc_node(sizeof(struct blk_mq_hw_ctx),
+		hwcnt = kzalloc_node(sizeof(struct blk_mq_hw_ctx_container),
 					GFP_KERNEL, node);
 
 		if (!hwcnt)
 			break;
 
 		hctxs[i] = &hwcnt->blk_mq_hw_ctx;
-
 		if (!zalloc_cpumask_var_node(&hctxs[i]->cpumask, GFP_KERNEL,
 						node)) {
-			kfree(hctxs[i]);
+			
+			kfree(container_of(hctxs[i], struct blk_mq_hw_ctx_container,
+					blk_mq_hw_ctx));
+			//kfree(hctxs[i]);
 			hctxs[i] = NULL;
 			break;
 		}
@@ -2386,7 +2412,7 @@ EXPORT_SYMBOL(blk_mq_alloc_tag_set);
 void blk_mq_free_tag_set(struct blk_mq_tag_set *set)
 {
 	int i;
-
+	//BENCH_COMPUTE_STAT(queue_rq);
 	for (i = 0; i < nr_cpu_ids; i++) {
 		if (set->tags[i])
 			blk_mq_free_rq_map(set, set->tags[i], i);
