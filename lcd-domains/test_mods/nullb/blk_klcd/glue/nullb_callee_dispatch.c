@@ -36,7 +36,7 @@ int dispatch_async_loop(struct thc_channel *channel, struct fipc_message *messag
 			return blk_mq_init_queue_callee(message, channel, cspace, sync_ep);
 
 		case BLK_MQ_END_REQUEST:
-			trace(BLK_MQ_END_REQUEST);
+			//trace(BLK_MQ_END_REQUEST);
 			return blk_mq_end_request_callee(message, channel, cspace, sync_ep);
 
 		case BLK_MQ_FREE_TAG_SET:
@@ -44,7 +44,7 @@ int dispatch_async_loop(struct thc_channel *channel, struct fipc_message *messag
 			return blk_mq_free_tag_set_callee(message, channel, cspace, sync_ep);
 
 		case BLK_MQ_START_REQUEST:
-			trace(BLK_MQ_START_REQUEST);
+			//trace(BLK_MQ_START_REQUEST);
 			return blk_mq_start_request_callee(message, channel, cspace, sync_ep);
 
 		case BLK_MQ_MAP_QUEUE:

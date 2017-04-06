@@ -298,14 +298,16 @@ static struct nullb_cmd *alloc_cmd(struct nullb_queue *nq, int can_wait)
 
 static void end_cmd(struct nullb_cmd *cmd)
 {
-	struct request_queue *q = NULL;
+	//struct request_queue *q = NULL;
 
-	if (cmd->rq)
-		q = cmd->rq->q;
+	//if (cmd->rq)
+	//	q = cmd->rq->q;
 
 	switch (queue_mode)  {
 	case NULL_Q_MQ:
-		//blk_mq_end_request(cmd->rq, 0);
+		//printk("drv: calling end \n");
+		blk_mq_end_request(cmd->rq, 0);
+		//printk("drv: calling end done \n");
 		return;
 	case NULL_Q_RQ:
 #ifndef LCD_ISOLATE
@@ -469,12 +471,17 @@ static int null_queue_rq(struct blk_mq_hw_ctx *hctx,
 	//cmd->nq = hctx->driver_data;
 	//AB- handled differently!
 	cmd->nq = nq;
-
-	//blk_mq_start_request(bd->rq);
+	
+	
+	//printk("drv: calling start \n");
+	blk_mq_start_request(bd->rq);
+	//printk("drv: calling start done \n");
 
 	null_handle_cmd(cmd);
 	
 	kfree(cmd);
+	
+	//printk("queue_rq returing from driver \n");
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 
@@ -1082,17 +1089,17 @@ static void __exit null_exit(void)
 void null_exit(void)
 #endif
 {
-	struct nullb *nullb;
+	//struct nullb *nullb;
 	
-	printk("calling unregister_blkdev \n");
-	unregister_blkdev(null_major, "nullb");
+	//printk("calling unregister_blkdev \n");
+	//unregister_blkdev(null_major, "nullb");
 
-	mutex_lock(&lock);
-	while (!list_empty(&nullb_list)) {
-		nullb = list_entry(nullb_list.next, struct nullb, list);
-		null_del_dev(nullb);
-	}
-	mutex_unlock(&lock);
+	//mutex_lock(&lock);
+	//while (!list_empty(&nullb_list)) {
+	//	nullb = list_entry(nullb_list.next, struct nullb, list);
+	//	null_del_dev(nullb);
+	//}
+	//mutex_unlock(&lock);
 
 #ifndef LCD_ISOLATE
 	kmem_cache_destroy(ppa_cache);

@@ -8,10 +8,11 @@
 int dispatch_async_loop(struct thc_channel *channel, struct fipc_message *message, struct glue_cspace *cspace, cptr_t sync_ep)
 {
 	int fn_type;
+	int i;
 	fn_type = async_msg_get_fn_type(message);
 	switch (fn_type) {
 		case QUEUE_RQ_FN:
-			trace(QUEUE_RQ_FN);
+			//trace(QUEUE_RQ_FN);
 			return queue_rq_fn_callee(message, channel, cspace, sync_ep);
 
 		case MAP_QUEUE_FN:
@@ -36,6 +37,11 @@ int dispatch_async_loop(struct thc_channel *channel, struct fipc_message *messag
 
 		default:
 			LIBLCD_ERR("unexpected function label: %d", fn_type);
+			dump_stack();
+			printk("[LCD] fipc-status: %x fipc-flags: %x \n", message->msg_status, message->flags);
+			for (i = 0; i < 7; i++) {
+				printk("reg:%d - %ld",i, message->regs[i]);
+			}
 			return -EINVAL;
 
 	}

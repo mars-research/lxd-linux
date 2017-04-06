@@ -7,7 +7,6 @@
 /*Block layer deps */
 #include <linux/blkdev.h>
 #include <linux/blk-mq.h>
-
 #include <libcap.h>
 #include <libfipc.h>
 #include <thc_ipc.h>
@@ -16,7 +15,7 @@
 #include <liblcd/sync_ipc_poll.h>
 
 
-#define PMFS_ASYNC_RPC_BUFFER_ORDER 12
+#define PMFS_ASYNC_RPC_BUFFER_ORDER 20
 
 enum dispatch_t {
         BLK_MQ_ALLOC_TAG_SET,
