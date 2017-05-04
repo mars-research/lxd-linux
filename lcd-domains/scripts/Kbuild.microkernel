@@ -49,6 +49,7 @@ lcd_domains-y += $(addprefix kliblcd/, \
 	      sync_ipc.o \
 	      trace.o \
 	      irq.o \
+	      user_interface.o \
 	      )
 
 # code shared by kliblcd and isolated liblcd
