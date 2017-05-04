@@ -130,6 +130,34 @@ static void do_destroy_cptr_cache(struct cptr_cache *c)
 	cptr_cache_free(c);
 }
 
+void lcd_exit_info(struct task_struct *info)
+{
+	if(!info) {
+		LCD_ERR("invalid task struct");
+		return;
+	}
+	if (info->lcd) {
+		do_destroy_lcd(info->lcd);
+	}
+	if (info->cptr_cache) {
+		do_destroy_cptr_cache(info->cptr_cache);
+	}
+	if (info->lcd_resource_trees[0]) {
+		lcd_destroy_free_resource_tree(info->lcd_resource_trees[0]);
+	}
+	if (info->lcd_resource_trees[1]) {
+		lcd_destroy_free_resource_tree(info->lcd_resource_trees[1]);
+	}
+	if (info->ptstate) {
+		thc_done_with_pts(info->ptstate);
+	}
+
+	info->lcd = NULL;
+	info->cptr_cache = NULL;
+	info->lcd_resource_trees[0] = NULL;
+	info->lcd_resource_trees[1] = NULL;
+}
+
 void lcd_exit(int retval)
 {
 	/*
@@ -165,4 +193,5 @@ void lcd_abort(void)
 
 EXPORT_SYMBOL(lcd_enter);
 EXPORT_SYMBOL(lcd_exit);
+EXPORT_SYMBOL(lcd_exit_info);
 EXPORT_SYMBOL(lcd_abort);
