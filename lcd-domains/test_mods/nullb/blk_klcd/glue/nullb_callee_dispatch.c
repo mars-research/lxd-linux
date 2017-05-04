@@ -86,6 +86,10 @@ int dispatch_async_loop(struct thc_channel *channel, struct fipc_message *messag
 		case UNREGISTER_BLKDEV:
 			trace(UNREGISTER_BLKDEV);
 			return unregister_blkdev_callee(message, channel, cspace, sync_ep);
+		
+		case REGISTER_CHARDEV:
+			trace(REGISTER_CHARDEV);
+			return lcd_register_chardev_callee(message, channel, cspace, sync_ep);
 
 		default:
 			LIBLCD_ERR("unexpected function label: %d", fn_type);

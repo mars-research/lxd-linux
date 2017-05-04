@@ -3,9 +3,10 @@
 
 #include "../glue_helper.h"
 
-struct fs_info {
+struct drv_info {
 	struct thc_channel *chnl;
 	struct glue_cspace *cspace;
+	struct thc_channel_group *ch_grp;
 	cptr_t sync_endpoint;
 	struct list_head list;
 };
@@ -15,19 +16,23 @@ void glue_blk_exit(void);
 void blk_exit(struct thc_channel *channel);
 int dispatch_sync_loop (void);
 
-struct fs_info * 
-add_fs(struct thc_channel *chnl, struct glue_cspace *cspace,
+struct drv_info * 
+add_drv(struct thc_channel_group_item *curr_item, struct glue_cspace *cspace,
         cptr_t sync_endpoint);
 
-void remove_fs(struct fs_info *fs);
+void remove_drv(struct drv_info *fs);
 
-struct fs_info* get_fsinfo(void);
+struct drv_info* get_drvinfo(void);
 
 int dispatch_async_loop(struct thc_channel *chnl,
                         struct fipc_message *msg,
                         struct glue_cspace *cspace,
                         cptr_t sync_endpoint);
 
+void init_chnl_group(struct thc_channel_group *ch_grp);
+void add_chnl_group_item(struct thc_channel_group_item *item, struct thc_channel_group *ch_grp);
+void del_chnl_group_list(int chnl_id, struct thc_channel_group *ch_grp);
+void remove_chnl_group_item(struct thc_channel_group_item *item);
 
 int blk_mq_alloc_tag_set_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep);
 int blk_mq_init_queue_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep);
@@ -47,6 +52,9 @@ int register_blkdev_callee(void);
 int unregister_blkdev_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep);
 int dispatch_async_loop(struct thc_channel *channel, struct fipc_message *message, struct glue_cspace *cspace, cptr_t sync_ep);
 int blk_cleanup_queue_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep);
+int lcd_register_chardev_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep);
+
+
 int glue_nullb_init(void);
 void glue_nullb_exit(void);
 

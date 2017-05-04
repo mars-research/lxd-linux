@@ -19,6 +19,63 @@ struct glue_cspace *blk_cspace;
 cptr_t blk_sync_ep;
 int nullb_done = 0;
 
+/* for handling multiple channels */
+struct thc_channel_group ch_grp;
+
+/* Routines for channel group manipulation */
+void init_chnl_group(struct thc_channel_group *ch_grp)
+{
+	INIT_LIST_HEAD(&ch_grp->head);
+	ch_grp->size = 0;
+}
+
+void add_chnl_group_item(struct thc_channel_group_item *item, 
+                        struct thc_channel_group *ch_grp)
+{
+	INIT_LIST_HEAD(&item->list);
+        list_add_tail(&item->list, &ch_grp->head);
+	ch_grp->size++;
+}
+
+void remove_chnl_group_item(int channel_id, struct thc_channel_group *ch_grp)
+{
+	struct thc_channel_group_item *item, *next;
+	
+	list_for_each_entry_safe(item, next, &ch_grp->head, list) {
+		if(item && (item->channel_id == channel_id)) {
+			list_del_init(&item->list);
+			kfree(item);
+			return;
+		}
+	}
+}
+
+struct thc_channel* get_chnl_from_id(int channel_id, struct thc_channel_group *ch_grp)
+{
+        struct thc_channel_group_item *item, *next;
+	
+	list_for_each_entry_safe(item, next, &ch_grp->head, list) {
+		if(item && (item->channel_id == channel_id)) {
+			return item->channel;
+		}
+	}
+	return NULL;
+}
+
+void del_chnl_group_list(int chnl_id, struct thc_channel_group *ch_grp)
+{
+        struct thc_channel_group_item *item, *next;
+
+        list_for_each_entry_safe(item, next, &ch_grp->head, list) {
+
+                if(item) {
+                        kfree(item);
+                }    
+        }
+
+        kfree(ch_grp);
+}
+
 /* LOOP ---------------------------------------- */
 
 static void main_and_loop(void)
@@ -26,6 +83,11 @@ static void main_and_loop(void)
 	int ret;
 	int stop = 0;
 	struct fipc_message *msg;
+	struct thc_channel_group_item *curr_item;
+
+	/* initialize channel group list head */
+	init_chnl_group(&ch_grp);
+
 	DO_FINISH(
 
 		ASYNC(
@@ -48,7 +110,9 @@ static void main_and_loop(void)
 			/*
 			 * Do one async receive
 			 */
-			ret = thc_ipc_poll_recv(blk_async_chl, &msg);
+			//ret = thc_ipc_poll_recv(blk_async_chl, &msg);
+			//TODO cleanup curr_item's memory!
+			ret = thc_poll_recv_group(&ch_grp, &curr_item, &msg);
 			if (ret) {
 				if (ret == -EWOULDBLOCK) {
 					continue;
@@ -62,9 +126,9 @@ static void main_and_loop(void)
 			 */
 			ASYNC(
 
-				ret = dispatch_async_loop(blk_async_chl, msg,
+				ret = dispatch_async_loop(curr_item->channel, msg,
 							blk_cspace, 
-							blk_sync_ep);
+							blk_sync_endpoint);
 				if (ret) {
 					LIBLCD_ERR("async dispatch failed");
 					stop = 1;

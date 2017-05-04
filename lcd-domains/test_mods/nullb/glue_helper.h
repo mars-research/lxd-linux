@@ -34,11 +34,16 @@ enum dispatch_t {
         DISK_NODE,
         REGISTER_BLKDEV,
         UNREGISTER_BLKDEV,
-        QUEUE_RQ_FN,
+        REGISTER_CHARDEV,
+	QUEUE_RQ_FN,
         MAP_QUEUE_FN,
         INIT_HCTX_FN,
         SOFTIRQ_DONE_FN,
         OPEN,
+	RELEASE,
+	OPEN_CHARDEV,
+	RELEASE_CHARDEV,
+	MMAP_CHARDEV,
         DESTROY_LCD
 };
 

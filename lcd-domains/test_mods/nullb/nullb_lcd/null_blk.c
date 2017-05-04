@@ -1047,7 +1047,7 @@ int null_init(void)
 	if (null_major < 0)
 		return null_major;
 
-#ifndef LCD_ISOLATE
+	#ifndef LCD_ISOLATE
 	if (use_lightnvm) {
 		ppa_cache = kmem_cache_create("ppa_cache", 64 * sizeof(u64),
 								0, 0, NULL);

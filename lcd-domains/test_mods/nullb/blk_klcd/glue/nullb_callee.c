@@ -11,6 +11,8 @@
 #include <asm/cacheflush.h>
 #include <linux/atomic.h>
 
+#include <lcd_domains/user_interface.h>
+
 #include <lcd_config/post_hook.h>
 
 /* hacks for unregistering */
@@ -19,20 +21,36 @@ struct gendisk *disk_g;
 struct request_queue *rq_g;
 struct blk_mq_tag_set *set_g;
 
-/* hack for queue_rq_async */
-struct blk_mq_ops_container *ops_container_g;
-struct thc_channel *async_chnl_g;
-
 /* hack for init_request */
 int hw_depth;
 struct request **rq_map;
+
+//static DEFINE_SPINLOCK(lock);
+/* list for async worker threads cleanup */
+
+struct async_item {
+	int pid;
+	struct task_struct *task;
+	struct list_head list;
+};
+
+static LIST_HEAD(async_list);
+
+/* file operations for setting up data memory from user space*/
+struct file_operations nullb_user_fops;
+
+/* info as private_data field for user communication */
+struct lcd_user_info {
+	struct page *p;
+	unsigned int order;
+};
 
 /* to handle null ptstate */
 bool init_ptstate = false;
 
 DEFINE_MUTEX(async_ctx_lock);
 /* benchmarking */
-INIT_BENCHMARK_DATA(async_reply);
+//INIT_BENCHMARK_DATA(async_reply);
 
 struct trampoline_hidden_args {
 	void *struct_container;
@@ -43,6 +61,16 @@ struct trampoline_hidden_args {
 };
 
 static struct glue_cspace *c_cspace;
+extern struct cspace *klcd_cspace;
+
+static int setup_new_channel(struct thc_channel *async_channel, cptr_t sync_ep);
+
+static void add_async_item(struct async_item *item)
+{
+	INIT_LIST_HEAD(&item->list);
+	list_add_tail(&item->list, &async_list);
+}
+
 int glue_blk_init(void)
 {
 	int ret;
@@ -66,7 +94,7 @@ fail1:
 
 void glue_blk_exit(void)
 {
-	BENCH_COMPUTE_STAT(async_reply);
+	//BENCH_COMPUTE_STAT(async_reply);
 	//BENCH_DUMP_DATA(ipc_call);
 	glue_cap_destroy(c_cspace);
 	glue_cap_exit();
@@ -98,6 +126,8 @@ void destroy_lcd(struct thc_channel *chnl)
 		printk("calling put_disk \n");
 		put_disk(disk_g);
 	}
+
+	lcd_teardown_chardev();
 	printk("cleanup done\n");
 }	
 
@@ -661,19 +691,195 @@ fail1:
         return;
 }
 
+static int nullbu_open(struct inode *inode, struct file *filp)
+{
+	struct lcd_user_info *info;
+
+	printk("dev opened \n");
+
+	info = kzalloc(sizeof(*info), GFP_KERNEL);
+	if(!info) {
+		printk("cannot create user info \n");
+		return -ENOMEM;
+	}
+
+	filp->private_data = info;
+
+	return 0;
+}
+
+static int nullbu_close (struct inode *inode, struct file *filp)
+{
+	struct lcd_user_info *info;
+	info = (struct lcd_user_info *)filp->private_data;
+
+	printk("dev closed \n");
+
+	free_pages((unsigned long)page_address(info->p), info->order);
+	return 0;
+
+}
+
+int grant_sync_ep(cptr_t *sync_end, cptr_t ha_sync_ep)
+{
+        int ret;
+        struct cspace *curr_cspace = get_current_cspace(current);
+
+        lcd_cptr_alloc(sync_end);
+        ret = cap_grant(klcd_cspace, ha_sync_ep, curr_cspace, *sync_end);
+
+        return ret;
+}
+
+static int nullbu_mmap(struct file *filp, struct vm_area_struct *vma, struct trampoline_hidden_args *hidden_args)
+{
+	int ret = 0;
+	struct fipc_message *async_request;
+	struct fipc_message *async_response;
+	unsigned int request_cookie;
+	struct lcd_user_info *info;
+      	struct page *p;
+	cptr_t pg;
+	cptr_t sync_end;
+  	unsigned long size = vma->vm_end - vma->vm_start;
+	unsigned long order = ilog2(roundup_pow_of_two(size >> PAGE_SHIFT));
+	
+	info = (struct lcd_user_info *)filp->private_data;	
+        printk("[MMAP_DEV] begin: %lx end: %lx mmap_size: %ld pgoff: %ld order: %ld\n", vma->vm_start, vma->vm_end, size, vma->vm_pgoff, order);
+
+	lcd_enter();
+	ret = grant_sync_ep(&sync_end, hidden_args->sync_ep);
+	
+	/*
+	 * Allocate physical pages for the requested size
+	 */
+	p = alloc_pages(GFP_KERNEL | __GFP_ZERO, order);
+	if(!p) {
+		printk("alloc_page failed \n");
+		ret = -ENOMEM;
+		goto fail_alloc;
+	}
+	
+	info->p = p;
+	info->order = order;
+	/*
+	 * Volunteer memory
+	 */
+        ret = lcd_volunteer_pages(p, order, &pg);
+        if (ret) {
+                LIBLCD_ERR("failed to volunteer memory");
+		ret = -ENOMEM;
+                goto fail_volunteer;
+	}
+
+	ret = async_msg_blocking_send_start(hidden_args->async_chnl, &async_request);
+	if (ret) {
+		LIBLCD_ERR("failed to get a send slot");
+		ret = -EIO;
+		goto fail_async;
+	}
+	
+	async_msg_set_fn_type(async_request, MMAP_CHARDEV);
+	fipc_set_reg1(async_request, order);
+
+	ret = thc_ipc_send_request(hidden_args->async_chnl, async_request, &request_cookie);
+	if (ret) {
+		LIBLCD_ERR("thc_ipc_call");
+		ret = -EIO;
+		goto fail_ipc;
+	}
+       	
+	lcd_set_cr0(pg);
+	ret = lcd_sync_send(sync_end);
+	lcd_set_cr0(CAP_CPTR_NULL);
+       	if (ret) {
+                LIBLCD_ERR("failed to send");
+		ret = -EIO;
+                goto fail_sync;
+        }
+
+	/* recieve a confirmation from LCD that remap successfully finished,
+	 * then map the memory to user process */
+
+        DO_FINISH_(mmap_user, {
+          ASYNC_({
+            ret = thc_ipc_recv_response(hidden_args->async_chnl, request_cookie, &async_response);
+          }, mmap_user);
+        });  
+
+        if (ret) {
+                LIBLCD_ERR("thc_ipc_call");
+		ret = -EIO;
+                goto fail_reply;
+        }    
+	
+	ret = fipc_get_reg1(async_response);
+	if(ret) {
+		LIBLCD_ERR("LCD failed to map memory");
+		ret = -EIO;
+		goto fail_mmap;
+	}
+	lcd_cap_delete(sync_end);
+
+        vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+
+        if(remap_pfn_range(vma, vma->vm_start, page_to_pfn(p), size,
+                                  vma->vm_page_prot)) {
+                return -EAGAIN; 
+        }
+
+	//vma->vm_ops = &drv_vm_ops;
+        printk("mapping done! \n");
+
+	lcd_exit(0);
+	
+	return 0;
+
+fail_mmap:
+fail_reply:
+fail_alloc:
+fail_volunteer:
+	free_pages((unsigned long)page_address(p), order);
+fail_async:
+fail_ipc:
+fail_sync:
+	lcd_exit(0);
+	return ret;
+}
+
+LCD_TRAMPOLINE_DATA(mmap_fops_trampoline);
+int LCD_TRAMPOLINE_LINKAGE(mmap_fops_trampoline) mmap_fops_trampoline(struct file *filp, struct vm_area_struct *vma)
+
+{
+	int ( *volatile mmap_fp )(struct file *filp, struct vm_area_struct *vma, struct trampoline_hidden_args *);
+	struct trampoline_hidden_args *hidden_args;
+	LCD_TRAMPOLINE_PROLOGUE(hidden_args, mmap_fops_trampoline);
+	mmap_fp = nullbu_mmap;
+	return mmap_fp(filp, vma, hidden_args);
+
+}
+
+//const struct file_operations nullb_user_fops = {
+//        .owner  = THIS_MODULE,
+//        .open   = nullbu_open,
+//        .release = nullbu_close,
+//        .mmap = nullbu_mmap,
+//};
+
 int register_blkdev_callee(void)
 {
         cptr_t tx, rx;
         struct thc_channel *chnl;
         cptr_t sync_endpoint;
-        int ret;
+        int ret = 0;
         int major;
-        struct fs_info *fs_info;
+        struct drv_info *drv_info;
+	struct thc_channel_group_item *disp_item;
 
         sync_endpoint = lcd_cr0();
         tx = lcd_cr1(); rx = lcd_cr2();
 
-        /*
+	/*
          * Set up async ring channel
          */
         ret = setup_async_fs_ring_channel(tx, rx, &chnl);
@@ -682,23 +888,34 @@ int register_blkdev_callee(void)
                 goto fail1;
         }
 
-	printk("chnl %p \n",chnl);	
-        /*
+       	disp_item = kzalloc(sizeof(*disp_item), GFP_KERNEL);
+       	if(!disp_item) {
+		 LIBLCD_ERR("no mem for disp_item");
+		 goto fail2;
+	}
+	
+	/* Store the pointer to thc_channel */
+	disp_item->channel = chnl;
+
+	/*
          * Add to dispatch loop
          */
-        fs_info = add_fs(chnl, c_cspace, sync_endpoint);
-        if (!fs_info) {
+        drv_info = add_drv(disp_item, c_cspace, sync_endpoint);
+        if (!drv_info) {
                 LIBLCD_ERR("error adding to dispatch loop");
-                goto fail2;
+                goto fail3;
         }
 	
+	/* add disp_item to the channel group */
+	add_chnl_group_item(disp_item, drv_info->ch_grp);
+
 	/* Hardcoded string for now! */
 	LIBLCD_MSG("Calling register_blkdev");
 	ret = register_blkdev(lcd_r1(), "nullb");
 	LIBLCD_MSG("register_blkdev returns %d", ret);
 	if(ret < 0) {
 		LIBLCD_ERR("Real call to register_blkdev failed!");
-		goto fail3;
+		goto fail4;
 	} else {
 		/* register_blkdev can return the major number of the device,
 		 * which can be a large +ve number but the ret value passed
@@ -710,14 +927,15 @@ int register_blkdev_callee(void)
 
 	goto out;
 
+fail4:
+	remove_drv(drv_info);
 fail3:
-	remove_fs(fs_info);
+	kfree(disp_item);
 fail2:
 	destroy_async_fs_ring_channel(chnl);
 	//TODO AB - I see a kfree(chnl) in pmfs right after this call,
 	//but chnl is already freed inside this function?
 fail1:
-	
 out:
         /*
          * Flush capability registers
@@ -914,31 +1132,22 @@ int _queue_rq(struct blk_mq_hw_ctx *ctx, const struct blk_mq_queue_data *bd)
 
 /* Async variant of queue_rq which does DO_FINISH of
  * passing requests to LCD */
-void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_async *bd_async, struct thc_channel *channel, bool init, bool use_lock)
+void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_async *bd_async, 
+		struct trampoline_hidden_args *hidden_args, struct thc_channel *chnl)
 {
 	int func_ret;
 	struct blk_mq_hw_ctx_container *ctx_container;
-	static int init_once = 0;
+	struct blk_mq_ops_container *ops_container;
 	int count = 0;
 	
-	if(!init_once && (strcmp(current->comm,"fio") == 0)) {
-		dump_stack();
-		init_once = 1;
-	}
-
-	//printk("[klcd] ^^async_ctx current: %p name: %s pid %d ptstate: %p \n", current, current->comm, current->pid, current->ptstate);
-
-	if(use_lock) {
-		mutex_lock(&async_ctx_lock);
-	}
-	if(init) {
-
-		//printk("[KLCD] ^^calling thc_init %p \n", current);	
-		//thc_init();
-	}
+	//if(!init_once && (strcmp(current->comm,"fio") == 0)) {
+	//	dump_stack();
+	//	init_once = 1;
+	//}
 
 	ctx_container = container_of(ctx, struct blk_mq_hw_ctx_container, blk_mq_hw_ctx);
-	
+	ops_container = (struct blk_mq_ops_container *)hidden_args->struct_container;
+
 	DO_FINISH(	
 		while(!list_empty(bd_async->rq_list)) {
 			struct request *rq;
@@ -955,29 +1164,29 @@ void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_asyn
 			bd.list = bd_async->list;
 			bd.last = list_empty(bd_async->rq_list);
 		
-			BENCH_BEGIN(async_reply);
+			//BENCH_BEGIN(async_reply);
 			//printk("[KLCD] ^^async get async slot for rq->tag %d ??? \n", rq->tag);
 			//printk("[KLCD] QUEUE_RQ_ASYNC_B4 slot: %ld \n", atomic64_read(&thc_channel_to_fipc(channel)->tx.slot));
-			ret = async_msg_blocking_send_start(channel, &request);
+			ret = async_msg_blocking_send_start(chnl, &request);
 			if (ret) {
 				LIBLCD_ERR("ctx failed to get a send slot");
 				goto fail_async;
 			}
-			BENCH_END(async_reply);
+			//BENCH_END(async_reply);
 			
 			//printk("[KLCD] ^^async got async slot for rq->tag %d \n", rq->tag);
 			async_msg_set_fn_type(request, QUEUE_RQ_FN);
 
 			fipc_set_reg0(request, ctx->queue_num);
 			fipc_set_reg1(request, ctx_container->other_ref.cptr);
-			fipc_set_reg2(request, ops_container_g->other_ref.cptr);
+			fipc_set_reg2(request, ops_container->other_ref.cptr);
 			fipc_set_reg3(request, rq->tag);
 
 			ASYNC_( {
 				
 				//printk("[KLCD] ^^async ipc call -> tag:%d tx_slot: %ld \n",rq->tag, atomic64_read(&thc_channel_to_fipc(channel)->tx.slot));
 				
-				ret = thc_ipc_call(channel, request, &response);
+				ret = thc_ipc_call(chnl, request, &response);
 				
 				if (ret) {
 					LIBLCD_ERR("***************async_ctx thc_ipc_call*****************");
@@ -987,7 +1196,7 @@ void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_asyn
 				//printk("[KLCD] ^^async ipc call unblockss! \n");
 				/* This should not execute when ipc_call is blocked on reply */
 				func_ret = fipc_get_reg0(response);
-				fipc_recv_msg_end(thc_channel_to_fipc(channel), response);
+				fipc_recv_msg_end(thc_channel_to_fipc(chnl), response);
 			
 				switch (func_ret) {
 				case BLK_MQ_RQ_QUEUE_OK:
@@ -1027,70 +1236,79 @@ void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_asyn
 	//printk("[KLCD] ^^async out of do fin \n");
 	//printk("count %d \n", count);
 
-	if(use_lock) {
-		mutex_unlock(&async_ctx_lock);
-	}
-	
-	if(init) {
-		//preempt_disable();
-		//if(current->ptstate && current->ptstate->awe_map) {
-		//	if (current->ptstate->awe_map->used_slots <= 0) {
-		//		printk("^^^^^^^^^^^^^^^^ lcd_exit() called **************** \n");
-		//		lcd_exit(0);
-		//	}
-		//	else {
-		//		printk("^^^^^^ used slots %d \n",current->ptstate->awe_map->used_slots);
-		//	}
-		//} else {
-		//	printk("^^^^^^^^^^^^^^^^ lcd_exit() never called **************** \n");
-		//}
-		//preempt_enable();
-	}
 	return;
 
 fail_async:
 //fail_ipc:
-	if(use_lock) {
-		mutex_unlock(&async_ctx_lock);
-	}
-	if(init) {
-		//if(PTS() && PTS()->awe_map &&
-		//	(PTS()->awe_map->used_slots <= 0)) {
-		//		printk("^^^^^^^^^^^^^^^^^^^ lcd_exit() called ***************** \n");
-		//		lcd_exit(0);
-		//}
-	}
 	printk("**** this is dangerous **** \n");
 	return;
 }
 
-void queue_rq_async(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_async *bd_async)
+static void create_async_item(struct task_struct *task)
 {
-	bool to_init;
-	bool use_lock = false;
+	struct async_item *item;
+
+	item = kzalloc(sizeof(*item), GFP_KERNEL);
+	if(!item) {
+		printk(KERN_WARNING "alloc failed for async item, release won't release resources \n");
+		return;
+	}
+
+	//item->info = kzalloc(sizeof(struct lcd_info), GFP_KERNEL);
+	//if(!item->info) {
+	//	printk(KERN_WARNING "alloc failed for lcdinfo, release won't release resources \n");
+//		goto exit;
+//	}
+
+//	item->info->lcd = current->lcd;
+//	item->info->t[0] = current->lcd_resource_trees[0];
+//	item->info->t[1] = current->lcd_resource_trees[1];
+//	item->info->ptstate = PTS();
+	item->task = current;
+	item->pid = current->pid;
+
+	//printk("adding item: %p pid: %d task: %p \n", item, item->pid, item->task);
+	//printk("lcd: %p, cptr_cache: %p, t0: %p, t1: %p, ptstate: %p", 
+	//		item->task->lcd, item->task->cptr_cache, item->task->lcd_resource_trees[0],
+	//		item->task->lcd_resource_trees[1], item->task->ptstate);
+	add_async_item(item);
+
+	return;
+//exit:
+//	kfree(item);
+}
+
+void queue_rq_async(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_async *bd_async, struct trampoline_hidden_args *hidden_args)
+{
 	struct blk_mq_hw_ctx_container *ctx_container;
+	struct thc_channel *chnl;
+	
 	ctx_container = container_of(ctx, struct blk_mq_hw_ctx_container, blk_mq_hw_ctx);
        	
 	if(!PTS()) {
-		printk("################################### SHOULD NOT HAPPEN!! ############################# \n");
-       	      LCD_MAIN({
-			to_init = true;
-			//use_lock = true;
-                      queue_rq_async_ctx(ctx, bd_async, async_chnl_g, to_init, use_lock);                           
-              });
+		printk("async thread --> current: %p pid: %d name: %s \n",current, current->pid, current->comm);	
+		if(setup_new_channel(hidden_args->async_chnl, hidden_args->sync_ep)) {
+			BUG_ON("channel setup failed");
+		}
+		create_async_item(current);
+		//hidden_args->async_chnl = thc_pts_get_chnl();
+		chnl = thc_pts_get_chnl();
+
+       	      	LCD_MAIN({
+			queue_rq_async_ctx(ctx, bd_async, hidden_args, chnl);                           
+              	});
         }
         else {
-		if(init_ptstate) {
+		if(thc_pts_get_state() == true) {
 		 	LCD_MAIN({
-				to_init = false;
-				//use_lock = true;
-                      		queue_rq_async_ctx(ctx, bd_async, async_chnl_g, to_init, use_lock);                           
+				//hidden_args->async_chnl = thc_pts_get_chnl();
+				chnl = thc_pts_get_chnl();
+                      		queue_rq_async_ctx(ctx, bd_async, hidden_args, chnl);                           
               		});
 		} else {
-			to_init = false;
-			use_lock = false;
-                	//queue_rq_async_ctx_kernel(ctx, bd_async, async_chnl_g, to_init, use_lock);                           
-                	queue_rq_async_ctx(ctx, bd_async, async_chnl_g, to_init, use_lock);
+                	/* TODO fix klcd's async_channel. Value has got modified above */
+			chnl = hidden_args->async_chnl;
+			queue_rq_async_ctx(ctx, bd_async, hidden_args, chnl);
 		}
 	}
 }
@@ -1124,6 +1342,18 @@ queue_rq_fn_trampoline(struct blk_mq_hw_ctx *ctx, const struct blk_mq_queue_data
 	LCD_TRAMPOLINE_PROLOGUE(hidden_args, queue_rq_fn_trampoline);
 	queue_rq_fn_fp = _queue_rq_fn;
 	return queue_rq_fn_fp(ctx, bd, hidden_args);
+
+}
+
+LCD_TRAMPOLINE_DATA(queue_rq_async_fn_trampoline);
+void LCD_TRAMPOLINE_LINKAGE(queue_rq_async_fn_trampoline)
+queue_rq_async_fn_trampoline(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_async *bd_async) 
+{
+	void ( *volatile queue_rq_async_fn_fp )(struct blk_mq_hw_ctx *, struct blk_mq_queue_data_async *, struct trampoline_hidden_args *);
+	struct trampoline_hidden_args *hidden_args;
+	LCD_TRAMPOLINE_PROLOGUE(hidden_args, queue_rq_async_fn_trampoline);
+	queue_rq_async_fn_fp = queue_rq_async;
+	return queue_rq_async_fn_fp(ctx, bd_async, hidden_args);
 
 }
 
@@ -1320,28 +1550,230 @@ void LCD_TRAMPOLINE_LINKAGE(softirq_done_fn_trampoline) softirq_done_fn_trampoli
 
 }
 
+
+static int handle_sync(cptr_t sync_ep, cptr_t *tx, cptr_t *rx)
+{
+	int ret = 0;
+	cptr_t sync_end;
+	
+        ret = grant_sync_ep(&sync_end, sync_ep);
+
+	ret = lcd_cptr_alloc(tx);
+	if (ret) {
+		LIBLCD_ERR("cptr alloc failed");
+		goto fail1;
+	}
+	
+	ret = lcd_cptr_alloc(rx);
+	if (ret) {
+		LIBLCD_ERR("cptr alloc failed");
+		goto fail2;
+	}
+	/*
+	 * Set up regs and poll
+	 */
+	lcd_set_cr0(*tx);
+	lcd_set_cr1(*rx);
+
+	ret = lcd_sync_recv(sync_end);
+	
+	lcd_set_cr0(CAP_CPTR_NULL); /* flush cr0 */
+	lcd_set_cr1(CAP_CPTR_NULL); /* flush cr0 */
+
+	lcd_cap_delete(sync_end);	
+
+	if (ret) {
+		LIBLCD_ERR("sync recv failed");
+		goto fail3;
+	}
+
+	return ret;
+
+fail3:
+	lcd_cptr_free(*rx);
+fail2:
+	lcd_cptr_free(*tx);
+fail1:
+	return -1;
+}
+
+/* setsup new async channel between lcd and klcd for every thread
+ * that lacks ptstate */
+static int setup_new_channel(struct thc_channel *async_chnl, cptr_t sync_ep)
+{	
+	cptr_t tx, rx;
+	struct thc_channel *chnl;
+	struct fipc_message *request;
+	struct fipc_message *response;
+	int ret = 0;
+	uint32_t request_cookie;
+
+	//spin_lock(&lock);
+	/* Init thc context, setup cspace */
+	lcd_enter();
+
+	/* call into LCD so that LCD prepares ring buffers */
+	ret = async_msg_blocking_send_start(async_chnl, &request);
+	if (ret) {
+		LIBLCD_ERR("failed to get a send slot");
+		goto fail_async;
+	}
+
+	async_msg_set_fn_type(request, OPEN);
+	fipc_set_reg0(request, current->pid);
+
+	ret = thc_ipc_send_request(async_chnl, request, &request_cookie);
+	if (ret) {
+		LIBLCD_ERR("thc_ipc_send");
+		goto fail_send;
+	}
+	
+	/* Do a sync receive to obtain cap to tx and rx channels */
+	ret = handle_sync(sync_ep, &tx, &rx);
+	if (ret) {
+		LIBLCD_ERR("cptr alloc failed");
+		goto fail_sync;
+	}
+	
+	/*
+	 * Set up async ring channel
+	 */
+	ret = setup_async_fs_ring_channel(tx, rx, &chnl);
+	if (ret) {
+		LIBLCD_ERR("error setting up ring channel");
+		goto fail1;
+	}
+
+	thc_pts_set_chnl(chnl);
+	thc_pts_set_state(true);
+
+	LCD_MAIN(	
+		DO_FINISH_(open, {
+			ASYNC_({
+				ret = thc_ipc_recv_response(async_chnl, 
+						request_cookie, 
+						&response);
+			}, open);
+		});
+	);
+	
+	if (ret) {
+		LIBLCD_ERR("thc_ipc_call");
+		goto fail_ipc;
+	}
+
+	fipc_recv_msg_end(thc_channel_to_fipc(async_chnl), response);
+	//spin_unlock(&lock);
+	return ret;
+
+fail1:
+fail_ipc:
+fail_sync:
+fail_send:
+fail_async:
+	//spin_unlock(&lock);
+	lcd_exit(0);
+	return ret;
+}
+
 int open(struct block_device *device, fmode_t mode, struct trampoline_hidden_args *hidden_args)
 {
+	int ret = 0;
+
 	if(strcmp(current->comm,"systemd-udevd") == 0) {
 		return -ENODEV;
 	}
+
 	printk("***** [nullb-open] current: %p name: %s pid: %d ptstate: %p \n", current, current->comm, current->pid, current->ptstate);
+
 	if(!PTS()) {
-		thc_init();
-		init_ptstate = true;
-		printk("***** [nullb-open] thc_init current: %p name: %s pid: %d ptstate: %p \n", current, current->comm, current->pid, current->ptstate);
+		ret = setup_new_channel(hidden_args->async_chnl, hidden_args->sync_ep);
+		if (ret) {
+			goto fail;
+		}
 	}
-	return 0;
+
+	return ret;
+
+fail:
+	return -ENODEV;
+}
+
+static int cleanup_channel(struct thc_channel *channel, int pid)
+{
+	struct fipc_message *request;
+	struct fipc_message *response;
+	int ret = 0;
+
+	ret = async_msg_blocking_send_start(channel, &request);
+	if (ret) {
+		LIBLCD_ERR("failed to get a send slot");
+		goto fail_async;
+	}
+
+	async_msg_set_fn_type(request, RELEASE);
+	fipc_set_reg0(request, pid);
+
+	LCD_MAIN(
+		DO_FINISH_(release, {
+			ASYNC_({
+				ret = thc_ipc_call(channel, request, &response);
+			}, release);
+		});
+	);
+
+	if (ret) {
+		LIBLCD_ERR("thc_ipc_call");
+		goto fail_ipc;
+	}
+
+	fipc_recv_msg_end(thc_channel_to_fipc(channel), response);
+	
+	return ret;
+	/* TODO cleanup already handled by the LCD! so unmap complains that resource doesnt exist */
+	//destroy_async_fs_ring_channel(thc_pts_get_chnl());
+fail_ipc:
+fail_async:
+	return ret;
 }
 
 void release(struct gendisk *disk, fmode_t mode, struct trampoline_hidden_args *hidden_args)
 {
+	struct async_item *item, *next;
+	
 	printk("[nullb-release] current: %p name: %s ptstate: %p \n", current, current->comm, current->ptstate);
-	if(init_ptstate) {
+
+	if(thc_pts_get_state() == true) {
+		
+		if(cleanup_channel(hidden_args->async_chnl, current->pid)) {
+			return;
+		}
+		/* TODO cleanup already handled by the LCD! so unmap complains that resource doesnt exist */
+		//destroy_async_fs_ring_channel(thc_pts_get_chnl());
+		thc_pts_set_state(false);
+	
+		if(!list_empty(&async_list)) {
+
+			list_for_each_entry_safe(item, next, &async_list, list) {
+
+
+				if(cleanup_channel(hidden_args->async_chnl, item->pid)) {
+					printk("cleaning list entries----------> error!!! \n");
+					lcd_exit(0);
+					return;
+				}
+				lcd_exit_info(item->task);
+				kfree(item->task->ptstate);
+				item->task->ptstate = NULL;
+				list_del_init(&item->list);
+				kfree(item);
+				item = NULL;
+			}
+		}
 		lcd_exit(0);
-		init_ptstate = false;
-		printk("[nullb-release] cleaning-up current: %p name: %s pid: %d ptstate: %p \n", current, current->comm, current->pid, current->ptstate);
 	}
+	
+	printk("[nullb-release] cleaning-up current: %p name: %s pid: %d ptstate: %p \n", current, current->comm, current->pid, current->ptstate);
 	return;
 }
 
@@ -1369,6 +1801,83 @@ void LCD_TRAMPOLINE_LINKAGE(release_trampoline) release_trampoline(struct gendis
 
 }
 
+/* This is the only lcd internal function that needs trampoline to be setup */
+int lcd_register_chardev_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
+{
+	int ret = 0;
+	int err = 0;
+	struct trampoline_hidden_args *fops_mmap_args;
+	struct fipc_message *response;
+	unsigned int request_cookie;
+
+	request_cookie = thc_get_request_cookie(request);
+
+	nullb_user_fops.owner = THIS_MODULE;
+	nullb_user_fops.open = nullbu_open;
+	nullb_user_fops.release = nullbu_close;
+
+	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
+
+	/* setting up trampoline for mmap, other handlers are dummy */
+	fops_mmap_args = kzalloc(sizeof(*fops_mmap_args), GFP_KERNEL);
+	if (!fops_mmap_args) {
+		LIBLCD_ERR("kzalloc hidden args");
+		ret = -ENOMEM;
+		goto fail_alloc1;
+	}
+	
+	fops_mmap_args->t_handle = LCD_DUP_TRAMPOLINE(mmap_fops_trampoline);
+	if (!fops_mmap_args->t_handle) {
+		LIBLCD_ERR("duplicate trampoline");
+		ret = -ENOMEM;
+		goto fail_dup1;
+	}
+
+	fops_mmap_args->t_handle->hidden_args = fops_mmap_args;
+	fops_mmap_args->struct_container = NULL;
+	fops_mmap_args->cspace = c_cspace;
+	fops_mmap_args->async_chnl = channel;
+	fops_mmap_args->sync_ep = sync_ep;
+
+	nullb_user_fops.mmap = LCD_HANDLE_TO_TRAMPOLINE(fops_mmap_args->t_handle);
+
+	err = set_memory_x(((unsigned long)fops_mmap_args->t_handle) & PAGE_MASK,
+                        ALIGN(LCD_TRAMPOLINE_SIZE(mmap_fops_trampoline),
+                                PAGE_SIZE) >> PAGE_SHIFT);
+        if (err) {
+                LIBLCD_ERR("set mem nx");
+		ret = -ENOMEM;
+                goto fail_x1;
+        }
+
+	/* setup char dev region */
+	ret = lcd_setup_chardev("nullb_user", &nullb_user_fops);
+	if(ret) {
+		printk("setting up chardev failed \n");
+		ret = -ENODEV;
+		goto fail_setup;
+	}
+	
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		goto fail_recv;
+	}
+
+	thc_ipc_reply(channel, request_cookie, response);
+
+	return ret;
+
+fail_recv:
+	lcd_teardown_chardev();
+fail_setup:
+fail_x1:
+	kfree(fops_mmap_args->t_handle);
+fail_dup1:
+	kfree(fops_mmap_args);
+fail_alloc1:
+	return ret;
+}
+
 int blk_mq_alloc_tag_set_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
 {
 	struct blk_mq_tag_set_container *set_container;
@@ -1376,6 +1885,7 @@ int blk_mq_alloc_tag_set_callee(struct fipc_message *request, struct thc_channel
 	struct fipc_message *response;
 	unsigned	int request_cookie;
 	struct trampoline_hidden_args *queue_rq_hidden_args;
+	struct trampoline_hidden_args *queue_rq_async_hidden_args;
 	struct trampoline_hidden_args *map_queue_hidden_args;
 	struct trampoline_hidden_args *init_hctx_hidden_args;
 	struct trampoline_hidden_args *sirq_done_hidden_args;
@@ -1420,9 +1930,6 @@ int blk_mq_alloc_tag_set_callee(struct fipc_message *request, struct thc_channel
 		goto fail_insert2;
 	}
 
-	ops_container_g = ops_container;
-	async_chnl_g = channel;
-
 	ops_container->other_ref.cptr = fipc_get_reg6(request);
 	printk("ops_other_ref %ld \n",ops_container->other_ref.cptr);
 	
@@ -1446,19 +1953,42 @@ int blk_mq_alloc_tag_set_callee(struct fipc_message *request, struct thc_channel
 	queue_rq_hidden_args->async_chnl = channel;
 	ops_container->blk_mq_ops.queue_rq = LCD_HANDLE_TO_TRAMPOLINE(queue_rq_hidden_args->t_handle);
 
-	/* for async processing! */
-	ops_container->blk_mq_ops.queue_rq_async = queue_rq_async;
-	
-	/* init request */
-	ops_container->blk_mq_ops.init_request = init_request;
-	
-        err = set_memory_x(((unsigned long)queue_rq_hidden_args->t_handle) & PAGE_MASK,
+	err = set_memory_x(((unsigned long)queue_rq_hidden_args->t_handle) & PAGE_MASK,
                         ALIGN(LCD_TRAMPOLINE_SIZE(queue_rq_fn_trampoline),
                                 PAGE_SIZE) >> PAGE_SHIFT);
         if (err) {
                 LIBLCD_ERR("set mem nx");
                 goto fail_x1;
         }
+
+	/* Introduce new function pointer interface to batch requests to lcd */
+	queue_rq_async_hidden_args = kzalloc(sizeof(*queue_rq_async_hidden_args), GFP_KERNEL);
+	if (!queue_rq_async_hidden_args) {
+		LIBLCD_ERR("kzalloc hidden args");
+		goto fail_alloc_async;
+	}
+	queue_rq_async_hidden_args->t_handle = LCD_DUP_TRAMPOLINE(queue_rq_async_fn_trampoline);
+	if (!queue_rq_async_hidden_args->t_handle) {
+		LIBLCD_ERR("duplicate trampoline");
+		goto fail_dup_async;
+	}
+	queue_rq_async_hidden_args->t_handle->hidden_args = queue_rq_async_hidden_args;
+	queue_rq_async_hidden_args->struct_container = ops_container;
+	queue_rq_async_hidden_args->cspace = c_cspace;
+	queue_rq_async_hidden_args->async_chnl = channel;
+	queue_rq_async_hidden_args->sync_ep = sync_ep;
+	ops_container->blk_mq_ops.queue_rq_async = LCD_HANDLE_TO_TRAMPOLINE(queue_rq_async_hidden_args->t_handle);
+	
+	err = set_memory_x(((unsigned long)queue_rq_async_hidden_args->t_handle) & PAGE_MASK,
+                        ALIGN(LCD_TRAMPOLINE_SIZE(queue_rq_async_fn_trampoline),
+                                PAGE_SIZE) >> PAGE_SHIFT);
+        if (err) {
+                LIBLCD_ERR("set mem nx");
+                goto fail_x_async;
+        }
+
+	/* init request */
+	ops_container->blk_mq_ops.init_request = init_request;
 	
 	map_queue_hidden_args = kzalloc(sizeof( *map_queue_hidden_args ), GFP_KERNEL);
 	if (!map_queue_hidden_args) {
@@ -1593,6 +2123,11 @@ fail_x2:
 fail_dup2:
 	kfree(map_queue_hidden_args);
 fail_alloc4:
+	kfree(queue_rq_async_hidden_args->t_handle);
+fail_x_async:
+fail_dup_async:
+	kfree(queue_rq_async_hidden_args);
+fail_alloc_async:
 	kfree(queue_rq_hidden_args->t_handle);
 fail_x1:
 fail_dup1:
@@ -1721,6 +2256,7 @@ int add_disk_callee(struct fipc_message *request, struct thc_channel *channel, s
         open_hargs->struct_container = blo_container;
         open_hargs->cspace = c_cspace;
         open_hargs->async_chnl = channel;
+	open_hargs->sync_ep = sync_ep;
         blo_container->block_device_operations.open = LCD_HANDLE_TO_TRAMPOLINE(open_hargs->t_handle);
 
         ret = set_memory_x(((unsigned long)open_hargs->t_handle) & PAGE_MASK,
@@ -1747,6 +2283,7 @@ int add_disk_callee(struct fipc_message *request, struct thc_channel *channel, s
         rel_hargs->struct_container = blo_container;
         rel_hargs->cspace = c_cspace;
         rel_hargs->async_chnl = channel;
+	rel_hargs->sync_ep = sync_ep;
         blo_container->block_device_operations.release = LCD_HANDLE_TO_TRAMPOLINE(rel_hargs->t_handle);
 
         ret = set_memory_x(((unsigned long)rel_hargs->t_handle) & PAGE_MASK,

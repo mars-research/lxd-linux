@@ -21,66 +21,114 @@
  * especially bad with thc/async. */
 #define VFS_REGISTER_FREQ (50)
 
-static LIST_HEAD(fs_infos);
+static LIST_HEAD(drv_infos);
 int pmfs_ready;
+struct cspace *klcd_cspace;
 
-struct fs_info * 
-add_fs(struct thc_channel *chnl, struct glue_cspace *cspace,
+struct drv_info * 
+add_drv(struct thc_channel_group_item *curr_item, struct glue_cspace *cspace,
 	cptr_t sync_endpoint)
 {
-	struct fs_info *fs_info;
+	struct thc_channel_group *ch_grp;
+	struct drv_info *drv_info;
 	
-	printk("inside adfs \n");	
-	fs_info = kmalloc(sizeof(*fs_info), GFP_KERNEL);
-	if (!fs_info)
+	drv_info = kmalloc(sizeof(*drv_info), GFP_KERNEL);
+	if (!drv_info)
 		goto fail1;
-	fs_info->chnl = chnl;
-	fs_info->cspace = cspace;
-	fs_info->sync_endpoint = sync_endpoint;
-	INIT_LIST_HEAD(&fs_info->list);
-	list_add(&fs_info->list, &fs_infos);
 
-	printk("chnl %p \n",chnl);	
-	printk("fs_info -> chnl %p \n",fs_info->chnl);	
-	return fs_info;
+	/* TODO Move this out of this func */
+	ch_grp = kzalloc(sizeof(*ch_grp), GFP_KERNEL);
+	if(!ch_grp) {
+		goto fail2;
+	}
 
+	init_chnl_group(ch_grp);
+	
+	drv_info->chnl = NULL;
+	drv_info->cspace = cspace;
+	drv_info->ch_grp = ch_grp;
+	drv_info->sync_endpoint = sync_endpoint;
+	INIT_LIST_HEAD(&drv_info->list);
+	list_add(&drv_info->list, &drv_infos);
+
+	return drv_info;
+
+fail2:
+	kfree(drv_info);
 fail1:
 	return NULL;
 }
 
 /* TODO add a parameter to distinguish various elements */
-struct fs_info * get_fsinfo(void)
+struct drv_info * get_drvinfo(void)
 {
-	struct fs_info *info;
-	list_for_each_entry(info, &fs_infos, list);
+	struct drv_info *info;
+	list_for_each_entry(info, &drv_infos, list);
 	return info;
 }
 
-void remove_fs(struct fs_info *fs)
+void remove_drv(struct drv_info *drv)
 {
-	LIBLCD_MSG("remove fs called");
-	list_del_init(&fs->list);
-	kfree(fs);
+	LIBLCD_MSG("remove drv called");
+	list_del_init(&drv->list);
+	kfree(drv);
+}
+
+/* Routines for channel group manipulation */
+void init_chnl_group(struct thc_channel_group *ch_grp)
+{
+        INIT_LIST_HEAD(&ch_grp->head);
+        ch_grp->size = 0;
+}
+
+void add_chnl_group_item(struct thc_channel_group_item *item, 
+			struct thc_channel_group *ch_grp)
+{
+	list_add(&item->list, &ch_grp->head);
+	ch_grp->size++;
+}
+
+void remove_chnl_group_item(struct thc_channel_group_item *item)
+{
+	list_del_init(&item->list);
+	kfree(item);
+}
+
+void del_chnl_group_list(int chnl_id, struct thc_channel_group *ch_grp)
+{
+	struct thc_channel_group_item *item, *next;
+
+	list_for_each_entry_safe(item, next, &ch_grp->head, list) {
+
+		if(item) {
+			kfree(item);
+		}	
+	}
+
+	kfree(ch_grp);
 }
 
 /* LOOP ------------------------------------------------------------ */
 
-static int async_loop(struct fs_info **fs_out, struct fipc_message **msg_out)
+static int async_loop(struct drv_info **drv_out, struct thc_channel_group_item **curr_item,
+			struct fipc_message **msg_out)
 {
-	struct fs_info *cursor, *next;
+	struct drv_info *cursor, *next;
 	int ret;
 
-	list_for_each_entry_safe(cursor, next, &fs_infos, list) {
+	list_for_each_entry_safe(cursor, next, &drv_infos, list) {
 
-		ret = thc_ipc_poll_recv(cursor->chnl, msg_out);
+		//ret = thc_ipc_poll_recv(cursor->chnl, msg_out);
+		ret = thc_poll_recv_group(cursor->ch_grp, curr_item, msg_out);
 		if (ret == -EPIPE) {
 			/*
-			 * fs channel is dead; free the channel,
+			 * drv channel is dead; free the channel,
 			 * and remove from list
 			 */
 			LIBLCD_MSG("channel dead");
-			kfree(cursor->chnl);
-			remove_fs(cursor);
+			kfree((*curr_item)->channel);
+			remove_chnl_group_item(*curr_item);
+			remove_drv(cursor);
 		} else if (ret == -EWOULDBLOCK) {
 			/*
 			 * Skip over empty channels
@@ -96,7 +144,7 @@ static int async_loop(struct fs_info **fs_out, struct fipc_message **msg_out)
 			/*
 			 * Got a msg
 			 */
-			*fs_out = cursor;
+			*drv_out = cursor;
 			return 0;
 		}
 
@@ -129,6 +177,7 @@ static int do_one_register(cptr_t register_chnl)
 		LIBLCD_ERR("cptr alloc failed");
 		goto fail3;
 	}
+	
 	/*
 	 * Set up regs and poll
 	 */
@@ -154,11 +203,11 @@ free_cptrs:
 	lcd_set_cr0(CAP_CPTR_NULL);
 	lcd_set_cr1(CAP_CPTR_NULL);
 	lcd_set_cr2(CAP_CPTR_NULL);
-	lcd_cptr_free(sync_endpoint);
+	lcd_cptr_free(rx);
 fail3:
 	lcd_cptr_free(tx);
 fail2:
-	lcd_cptr_free(rx);
+	lcd_cptr_free(sync_endpoint);
 fail1:
 	return ret;
 }
@@ -167,7 +216,8 @@ static void loop(cptr_t register_chnl)
 {
 	unsigned long tics = jiffies + VFS_REGISTER_FREQ;
 	struct fipc_message *msg;
-	struct fs_info *fs;
+	struct thc_channel_group_item *curr_item;
+	struct drv_info *drv;
 	int stop = 0;
 	int ret;
 
@@ -197,16 +247,16 @@ static void loop(cptr_t register_chnl)
 
 			if (stop)
 				break;
-			ret = async_loop(&fs, &msg);
+			ret = async_loop(&drv, &curr_item, &msg);
 			if (!ret) {
 				ASYNC(
 					ret = dispatch_async_loop(
-						fs->chnl, 
+						curr_item->channel, 
 						msg,
-						fs->cspace,
-						fs->sync_endpoint);
+						drv->cspace,
+						drv->sync_endpoint);
 					if (ret) {
-						LIBLCD_ERR("fs dispatch err");
+						LIBLCD_ERR("drv dispatch err");
 						/* (break won't work here) */
 						stop = 1;
 					}
@@ -220,7 +270,7 @@ static void loop(cptr_t register_chnl)
 			if (kthread_should_stop()) {
 				LIBLCD_ERR("kthread should stop");
 				stop = 1;
-				blk_exit(fs->chnl);
+				blk_exit(curr_item->channel);
 				break;
 			}
 
@@ -272,6 +322,8 @@ static int blk_klcd_init(void)
 		LIBLCD_ERR("alloc cptr");
 		goto fail2;
 	}
+
+	klcd_cspace = get_current_cspace(current);
 	/*
 	 * Init blk glue
 	 */
