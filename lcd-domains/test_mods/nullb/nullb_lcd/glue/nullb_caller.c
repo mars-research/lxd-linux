@@ -225,6 +225,7 @@ int nullbu_mmap_user(struct fipc_message *request, struct thc_channel *channel, 
 	gva_t page_gva;
 	unsigned long *page_virt;
 	
+	printk("mmap lcd begins \n");
 	request_cookie = thc_get_request_cookie(request);
 	order = fipc_get_reg1(request);
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
@@ -245,6 +246,7 @@ int nullbu_mmap_user(struct fipc_message *request, struct thc_channel *channel, 
 		goto fail_recv;
 	}
 	
+	printk("map virt \n");
 	/* map the page into ram map area for now */
 	ret = lcd_map_virt(page, order, &page_gva);
 	if (ret) { 
@@ -253,8 +255,9 @@ int nullbu_mmap_user(struct fipc_message *request, struct thc_channel *channel, 
 		goto fail_map;
 	}
 
+	printk("map virt done \n");
 	page_virt = (void *)gva_val(page_gva);
-	*(page_virt) = 0xAA11BBCCDD;
+	//*(page_virt) = 0xAA11BBCCDD;
 
 fail_map:
 fail_recv:
@@ -266,7 +269,7 @@ fail_sync:
 	fipc_set_reg1(response, func_ret);
 	thc_ipc_reply(channel, request_cookie, response);
 
-
+	printk("mmap lcd ends \n");
 	return ret;
 }
 

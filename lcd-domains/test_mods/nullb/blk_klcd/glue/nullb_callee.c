@@ -41,8 +41,8 @@ struct file_operations nullb_user_fops;
 
 /* info as private_data field for user communication */
 struct lcd_user_info {
-	struct page *p;
-	unsigned int order;
+	struct page *p[10];
+	unsigned int order[10];
 };
 
 /* to handle null ptstate */
@@ -711,13 +711,21 @@ static int nullbu_open(struct inode *inode, struct file *filp)
 static int nullbu_close (struct inode *inode, struct file *filp)
 {
 	struct lcd_user_info *info;
+	int i = 0;
+
 	info = (struct lcd_user_info *)filp->private_data;
-
+	
 	printk("dev closed \n");
+	
+	for (i = 0; i < 10; i++) {
+		if (info->p[i]) {
+			free_pages((unsigned long)page_address(info->p[i]), info->order[i]);
+		}
+	}
 
-	free_pages((unsigned long)page_address(info->p), info->order);
+	kfree(info);
+
 	return 0;
-
 }
 
 int grant_sync_ep(cptr_t *sync_end, cptr_t ha_sync_ep)
@@ -734,103 +742,134 @@ int grant_sync_ep(cptr_t *sync_end, cptr_t ha_sync_ep)
 static int nullbu_mmap(struct file *filp, struct vm_area_struct *vma, struct trampoline_hidden_args *hidden_args)
 {
 	int ret = 0;
-	struct fipc_message *async_request;
-	struct fipc_message *async_response;
-	unsigned int request_cookie;
 	struct lcd_user_info *info;
       	struct page *p;
 	cptr_t pg;
 	cptr_t sync_end;
-  	unsigned long size = vma->vm_end - vma->vm_start;
-	unsigned long order = ilog2(roundup_pow_of_two(size >> PAGE_SHIFT));
+  	unsigned long size = PAGE_ALIGN(vma->vm_end - vma->vm_start);
+	//unsigned long order = ilog2(roundup_pow_of_two(size >> PAGE_SHIFT));
+	unsigned long order = get_order(size);
+	unsigned long new_order = 0;
+	unsigned long rem_order = 0;
+	unsigned long vma_start = vma->vm_start;
+	void *addr;
+	int i = 0;
 	
-	info = (struct lcd_user_info *)filp->private_data;	
+	info = (struct lcd_user_info *)filp->private_data;
         printk("[MMAP_DEV] begin: %lx end: %lx mmap_size: %ld pgoff: %ld order: %ld\n", vma->vm_start, vma->vm_end, size, vma->vm_pgoff, order);
 
 	lcd_enter();
 	ret = grant_sync_ep(&sync_end, hidden_args->sync_ep);
-	
-	/*
-	 * Allocate physical pages for the requested size
-	 */
-	p = alloc_pages(GFP_KERNEL | __GFP_ZERO, order);
-	if(!p) {
-		printk("alloc_page failed \n");
-		ret = -ENOMEM;
-		goto fail_alloc;
-	}
-	
-	info->p = p;
-	info->order = order;
-	/*
-	 * Volunteer memory
-	 */
-        ret = lcd_volunteer_pages(p, order, &pg);
-        if (ret) {
-                LIBLCD_ERR("failed to volunteer memory");
-		ret = -ENOMEM;
-                goto fail_volunteer;
+
+	if(order >= MAX_ORDER) {
+		new_order = MAX_ORDER - 1;
+		rem_order = order - new_order;	
+	} else {
+		new_order = order;
+		rem_order = 0;
 	}
 
-	ret = async_msg_blocking_send_start(hidden_args->async_chnl, &async_request);
-	if (ret) {
-		LIBLCD_ERR("failed to get a send slot");
-		ret = -EIO;
-		goto fail_async;
+	for (i = 0; i < (1 << rem_order); i++) {
+		
+		struct fipc_message *async_request;
+		struct fipc_message *async_response;
+		unsigned int request_cookie;
+		
+		/*
+		 * Allocate physical pages for the requested size
+		 */
+		printk("alloc_pages \n");
+		p = alloc_pages(GFP_KERNEL | __GFP_ZERO, new_order);
+		if(!p) {
+			printk("alloc_page failed \n");
+			ret = -ENOMEM;
+			goto fail_alloc;
+		}
+			
+		info->p[i] = p;
+		info->order[i] = new_order;
+		addr = page_address(p);
+			
+		vma->vm_end = vma->vm_start + (1 << new_order) * PAGE_SIZE;
+		/*
+		 * Volunteer memory
+		 */
+		ret = lcd_volunteer_pages(p, new_order, &pg);
+		if (ret) {
+			LIBLCD_ERR("failed to volunteer memory");
+			ret = -ENOMEM;
+			goto fail_volunteer;
+		}
+
+		printk("volunteer pages done \n");
+		ret = async_msg_blocking_send_start(hidden_args->async_chnl, &async_request);
+		if (ret) {
+			LIBLCD_ERR("failed to get a send slot");
+			ret = -EIO;
+			goto fail_async;
+		}
+		
+		async_msg_set_fn_type(async_request, MMAP_CHARDEV);
+		fipc_set_reg1(async_request, new_order);
+
+		ret = thc_ipc_send_request(hidden_args->async_chnl, async_request, &request_cookie);
+		if (ret) {
+			LIBLCD_ERR("thc_ipc_call");
+			ret = -EIO;
+			goto fail_ipc;
+		}
+		
+		lcd_set_cr0(pg);
+		ret = lcd_sync_send(sync_end);
+		lcd_set_cr0(CAP_CPTR_NULL);
+		if (ret) {
+			LIBLCD_ERR("failed to send");
+			ret = -EIO;
+			goto fail_sync;
+		}
+
+		/* recieve a confirmation from LCD that remap successfully finished,
+		 * then map the memory to user process */
+		LCD_MAIN(
+			DO_FINISH_(mmap_user, {
+			  ASYNC_({
+			    ret = thc_ipc_recv_response(hidden_args->async_chnl, request_cookie, &async_response);
+			  }, mmap_user);
+			});  
+		);
+		if (ret) {
+			LIBLCD_ERR("thc_ipc_call");
+			ret = -EIO;
+			goto fail_reply;
+		}    
+		
+		ret = fipc_get_reg1(async_response);
+		if(ret) {
+			LIBLCD_ERR("LCD failed to map memory");
+			ret = -EIO;
+			goto fail_mmap;
+		}
+
+		//printk("setting protection \n");
+		vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+		//printk("setting protection done \n");
+
+		printk("remapping range \n");
+		if(remap_pfn_range(vma, vma->vm_start, page_to_pfn(p), ((1 << new_order) * PAGE_SIZE),
+					  vma->vm_page_prot)) {
+			printk("mmap has to EAGAIN \n");
+			return -EAGAIN; 
+		}
+		printk("remapping range done \n");
+		vma->vm_start += (1 << new_order) * PAGE_SIZE;
+		printk("start: %lx size: %lx \n",vma->vm_start, ((1 << new_order) * PAGE_SIZE));
+		
+		printk("mapping done! \n");
 	}
-	
-	async_msg_set_fn_type(async_request, MMAP_CHARDEV);
-	fipc_set_reg1(async_request, order);
 
-	ret = thc_ipc_send_request(hidden_args->async_chnl, async_request, &request_cookie);
-	if (ret) {
-		LIBLCD_ERR("thc_ipc_call");
-		ret = -EIO;
-		goto fail_ipc;
-	}
-       	
-	lcd_set_cr0(pg);
-	ret = lcd_sync_send(sync_end);
-	lcd_set_cr0(CAP_CPTR_NULL);
-       	if (ret) {
-                LIBLCD_ERR("failed to send");
-		ret = -EIO;
-                goto fail_sync;
-        }
-
-	/* recieve a confirmation from LCD that remap successfully finished,
-	 * then map the memory to user process */
-
-        DO_FINISH_(mmap_user, {
-          ASYNC_({
-            ret = thc_ipc_recv_response(hidden_args->async_chnl, request_cookie, &async_response);
-          }, mmap_user);
-        });  
-
-        if (ret) {
-                LIBLCD_ERR("thc_ipc_call");
-		ret = -EIO;
-                goto fail_reply;
-        }    
-	
-	ret = fipc_get_reg1(async_response);
-	if(ret) {
-		LIBLCD_ERR("LCD failed to map memory");
-		ret = -EIO;
-		goto fail_mmap;
-	}
+	vma->vm_start = vma_start;
+	printk("[MMAP_DONE] start: %lx end: %lx \n",vma->vm_start, vma->vm_end);
 	lcd_cap_delete(sync_end);
-
-        vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
-
-        if(remap_pfn_range(vma, vma->vm_start, page_to_pfn(p), size,
-                                  vma->vm_page_prot)) {
-                return -EAGAIN; 
-        }
-
-	//vma->vm_ops = &drv_vm_ops;
-        printk("mapping done! \n");
-
 	lcd_exit(0);
 	
 	return 0;
@@ -839,7 +878,9 @@ fail_mmap:
 fail_reply:
 fail_alloc:
 fail_volunteer:
-	free_pages((unsigned long)page_address(p), order);
+	if(p) {
+		free_pages((unsigned long)page_address(p), order);
+	}
 fail_async:
 fail_ipc:
 fail_sync:
