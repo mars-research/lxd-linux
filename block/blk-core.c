@@ -33,6 +33,8 @@
 #include <linux/ratelimit.h>
 #include <linux/pm_runtime.h>
 #include <linux/blk-cgroup.h>
+//#include <linux/blk-bench.h>
+#include <linux/bdump.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/block.h>
@@ -40,6 +42,10 @@
 #include "blk.h"
 #include "blk-mq.h"
 #include <linux/blk-lcd.h>
+
+//INIT_BENCHMARK_DATA(io_complete);
+struct request_queue *queue_nullb = NULL;
+EXPORT_SYMBOL(queue_nullb);
 
 EXPORT_TRACEPOINT_SYMBOL_GPL(block_bio_remap);
 EXPORT_TRACEPOINT_SYMBOL_GPL(block_rq_remap);
@@ -149,11 +155,17 @@ static void req_bio_endio(struct request *rq, struct bio *bio,
 	if (unlikely(rq->cmd_flags & REQ_QUIET))
 		bio_set_flag(bio, BIO_QUIET);
 
+	//queue_nullb ? printk("bio_advance: %d \n",nbytes) : queue_nullb = NULL;
 	bio_advance(bio, nbytes);
 
 	/* don't actually finish bio if it's part of flush sequence */
-	if (bio->bi_iter.bi_size == 0 && !(rq->cmd_flags & REQ_FLUSH_SEQ))
+	if (bio->bi_iter.bi_size == 0 && !(rq->cmd_flags & REQ_FLUSH_SEQ)) {
+		//queue_nullb ? printk("calling bio_endio \n") : queue_nullb = NULL;
+		//BENCH_BEGIN(io_complete);
 		bio_endio(bio);
+		//BENCH_END(io_complete);
+
+	}
 }
 
 void blk_dump_rq_flags(struct request *rq, char *msg)
@@ -545,6 +557,12 @@ EXPORT_SYMBOL_GPL(blk_set_queue_dying);
 void blk_cleanup_queue(struct request_queue *q)
 {
 	spinlock_t *lock = q->queue_lock;
+
+	//if(queue_nullb) {
+	//	BENCH_COMPUTE_STAT(io_complete);
+	//	bdump_data();
+	//}
+	
 
 	/* mark @q DYING, no new request or merges will be allowed afterwards */
 	mutex_lock(&q->sysfs_lock);
@@ -2599,22 +2617,34 @@ bool blk_update_request(struct request *req, int error, unsigned int nr_bytes)
 
 	blk_account_io_completion(req, nr_bytes);
 
+	//if(queue_nullb) {
+		//BENCH_BEGIN(io_complete);
+		//printk("----> into while \n");
+	//}
 	total_bytes = 0;
 	while (req->bio) {
 		struct bio *bio = req->bio;
 		unsigned bio_bytes = min(bio->bi_iter.bi_size, nr_bytes);
-
-		if (bio_bytes == bio->bi_iter.bi_size)
+		
+		if (bio_bytes == bio->bi_iter.bi_size) {
+		//	queue_nullb ? printk("hitting here \n") : queue_nullb = NULL;
 			req->bio = bio->bi_next;
-
+		}
+		
+		//queue_nullb ? printk("calling req_bio_endio: %d \n", bio_bytes) : queue_nullb= NULL;
 		req_bio_endio(req, bio, bio_bytes, error);
 
 		total_bytes += bio_bytes;
 		nr_bytes -= bio_bytes;
+		//queue_nullb ? printk("nr_bytes: %d, total_bytes: %d \n", nr_bytes, total_bytes) : queue_nullb = NULL;
 
 		if (!nr_bytes)
 			break;
 	}
+	//if(queue_nullb) {
+		//printk("<--- out of while \n");
+		//BENCH_END(io_complete);
+	//}
 
 	/*
 	 * completely done
