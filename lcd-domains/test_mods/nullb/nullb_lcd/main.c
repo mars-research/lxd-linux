@@ -9,7 +9,7 @@
 #include <liblcd/liblcd.h>
 #include <liblcd/sync_ipc_poll.h>
 #include "./nullb_caller.h"
-
+#include "../benchmark.h"
 #include <lcd_config/post_hook.h>
 
 cptr_t blk_register_chnl;
@@ -19,6 +19,7 @@ struct glue_cspace *blk_cspace;
 cptr_t blk_sync_ep;
 int nullb_done = 0;
 
+INIT_BENCHMARK_DATA_LCD(disp_loop);
 /* for handling multiple channels */
 struct thc_channel_group ch_grp;
 
@@ -40,14 +41,16 @@ void add_chnl_group_item(struct thc_channel_group_item *item,
 void remove_chnl_group_item(int channel_id, struct thc_channel_group *ch_grp)
 {
 	struct thc_channel_group_item *item, *next;
-	
+	printk("calling remove chnl group item \n");
 	list_for_each_entry_safe(item, next, &ch_grp->head, list) {
 		if(item && (item->channel_id == channel_id)) {
 			list_del_init(&item->list);
 			kfree(item);
+			printk("kfreed item! \n");
 			return;
 		}
 	}
+	printk("****************** no item removed **********************  \n");
 }
 
 struct thc_channel* get_chnl_from_id(int channel_id, struct thc_channel_group *ch_grp)
@@ -77,6 +80,9 @@ void del_chnl_group_list(int chnl_id, struct thc_channel_group *ch_grp)
 }
 
 /* LOOP ---------------------------------------- */
+static __always_inline void bench_end(void) {
+	BENCH_END_LCD(disp_loop);
+}
 
 static void main_and_loop(void)
 {
@@ -112,6 +118,7 @@ static void main_and_loop(void)
 			 */
 			//ret = thc_ipc_poll_recv(blk_async_chl, &msg);
 			//TODO cleanup curr_item's memory!
+			//BENCH_BEGIN_LCD(disp_loop);
 			ret = thc_poll_recv_group(&ch_grp, &curr_item, &msg);
 			if (ret) {
 				if (ret == -EWOULDBLOCK) {
@@ -121,6 +128,8 @@ static void main_and_loop(void)
 					stop = 1; /* stop */
 				}
 			}
+			
+			//(async_msg_get_fn_type(msg) == QUEUE_RQ_FN) ? bench_end() : -1;
 			/*
 			 * Got a message. Dispatch.
 			 */
@@ -160,6 +169,10 @@ static void main_and_loop(void)
 	LIBLCD_MSG("EXITED NULLB_LCD DO_FINISH");
 
 	return;
+}
+
+void dump_data(void) {
+	BENCH_COMPUTE_STAT(disp_loop);
 }
 
 static int __noreturn nullb_lcd_init(void) 

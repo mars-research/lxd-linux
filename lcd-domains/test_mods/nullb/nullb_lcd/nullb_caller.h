@@ -3,6 +3,7 @@
 
 #include "../glue_helper.h"
 
+void dump_data(void);
 void init_chnl_group(struct thc_channel_group *ch_grp);
 void add_chnl_group_item(struct thc_channel_group_item *item,
 		struct thc_channel_group *ch_grp);

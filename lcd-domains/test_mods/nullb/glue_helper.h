@@ -218,7 +218,7 @@ async_msg_blocking_send_start(struct thc_channel *chnl,
                 ret = fipc_send_msg_start(thc_channel_to_fipc(chnl), out);
                 if (!ret || ret != -EWOULDBLOCK)
                         return ret;
-                cpu_relax();
+                //cpu_relax();
                 if (kthread_should_stop())
                         return -EIO;
         }

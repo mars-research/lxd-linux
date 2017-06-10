@@ -6,15 +6,20 @@
 #include <liblcd/liblcd.h>
 #include <liblcd/sync_ipc_poll.h>
 #include <liblcd/glue_cspace.h>
-
 #include "../nullb_caller.h"
 #include <lcd_config/post_hook.h>
 
+#include "../../benchmark.h"
 extern cptr_t blk_sync_endpoint;
 extern cptr_t blk_register_chnl;
 static struct glue_cspace *c_cspace;
 extern struct thc_channel *blk_async_chl;
 extern struct thc_channel_group ch_grp;
+
+struct blk_mq_hw_ctx_container *ctx_container_g; 
+struct blk_mq_ops_container *ops_container_g;
+
+//INIT_BENCHMARK_DATA_LCD(queue_rq);
 
 int glue_nullb_init(void)
 {
@@ -329,6 +334,7 @@ int blk_mq_alloc_tag_set(struct blk_mq_tag_set *set)
 
 	set_container = container_of(set, struct blk_mq_tag_set_container, blk_mq_tag_set);
 	ops_container = container_of(set->ops, struct blk_mq_ops_container, blk_mq_ops);
+	ops_container_g = ops_container;
 
 	ret = glue_cap_insert_blk_mq_ops_type(c_cspace, ops_container, &ops_container->my_ref);
 	if (ret) {
@@ -475,8 +481,10 @@ void blk_mq_end_request(struct request *rq, int error)
 	int ret;
 	struct fipc_message *request;
 	struct fipc_message *response;
+	//uint32_t request_cookie;
 
 	//printk("[LCD_GLUE] END_REQ glue begins \n");
+	//BENCH_BEGIN_LCD(queue_rq);
 	ret = async_msg_blocking_send_start(blk_async_chl, &request);
 	if (ret) {
 		LIBLCD_ERR("failed to get a send slot");
@@ -495,8 +503,17 @@ void blk_mq_end_request(struct request *rq, int error)
 		LIBLCD_ERR("thc_ipc_call");
 		goto fail_ipc;
 	}
+	
 	fipc_recv_msg_end(thc_channel_to_fipc(blk_async_chl), response);
 
+	//BENCH_END_LCD(queue_rq);
+//	ret = thc_ipc_send_request(blk_async_chl, request, &request_cookie);
+//	if (ret) {
+//		LIBLCD_ERR("thc_ipc_call");
+//		goto fail_ipc;
+//	}
+	//thc_set_msg_type(request, msg_type_request);
+	//fipc_send_msg_end (thc_channel_to_fipc(blk_async_chl), request);
 	//printk("[LCD_GLUE] END_REQ glue ends -> ra->tag: %d\n", rq->tag);
 	return;
 
@@ -549,7 +566,8 @@ void blk_mq_start_request(struct request *rq)
 {
 	int ret;
 	struct fipc_message *request;
-	struct fipc_message *response;
+	//struct fipc_message *response;
+	//uint32_t request_cookie;
 
 	//printk("[LCD_GLUE] START_REQ glue begins \n");
 	ret = async_msg_blocking_send_start(blk_async_chl, &request);
@@ -563,19 +581,27 @@ void blk_mq_start_request(struct request *rq)
 	fipc_set_reg0(request, rq->tag);
 
 	//printk("[LCD_GLUE] START_REQ ipc_call-> rq->tag: %d \n",rq->tag);
-	ret = thc_ipc_call(blk_async_chl, request, &response);
-	if (ret) {
-		LIBLCD_ERR("thc_ipc_call");
-		goto fail_ipc;
-	}
+	//ret = thc_ipc_call(blk_async_chl, request, &response);
+	//if (ret) {
+	//	LIBLCD_ERR("thc_ipc_call");
+	//	goto fail_ipc;
+	//}
 
-	fipc_recv_msg_end(thc_channel_to_fipc(blk_async_chl), response);
+	//fipc_recv_msg_end(thc_channel_to_fipc(blk_async_chl), response);
 
 	//printk("[LCD_GLUE] START_REQ glue ends-> rq->tag: %d \n", rq->tag);
+	//ret = thc_ipc_send_request(blk_async_chl, request, &request_cookie);
+	//if (ret) {
+	//	LIBLCD_ERR("thc_ipc_call");
+	//	goto fail_ipc;
+	//}
+	
+	thc_set_msg_type(request, msg_type_request);
+	fipc_send_msg_end (thc_channel_to_fipc(blk_async_chl), request);
 	return;
 
 fail_async:
-fail_ipc:
+//fail_ipc:
 	return;
 }
 
@@ -1036,38 +1062,38 @@ int queue_rq_fn_callee(struct fipc_message *request, struct thc_channel *channel
 {
 	struct fipc_message *response;
 	unsigned int request_cookie;
-	struct blk_mq_hw_ctx_container *ctx_container;	
-	struct blk_mq_ops_container *ops_container;
+	struct blk_mq_hw_ctx_container *ctx_container = ctx_container_g;	
+	struct blk_mq_ops_container *ops_container = ops_container_g;
 	struct blk_mq_queue_data bd;
 	struct request rq;
 	int ret;
 	int func_ret;
-
+	
 	request_cookie = thc_get_request_cookie(request);
 	
-	ret = glue_cap_lookup_blk_mq_hw_ctx_type(c_cspace, __cptr(fipc_get_reg1(request)),
-						&ctx_container);
-	if(ret) {
-		LIBLCD_ERR("lookup");
-		goto fail_lookup;
-	}
+//	ret = glue_cap_lookup_blk_mq_hw_ctx_type(c_cspace, __cptr(fipc_get_reg1(request)),
+//						&ctx_container);
+//	if(ret) {
+//		LIBLCD_ERR("lookup");
+//		goto fail_lookup;
+//	}
 	
 	ctx_container->blk_mq_hw_ctx.queue_num = fipc_get_reg0(request);
 
-	ret = glue_cap_lookup_blk_mq_ops_type(c_cspace, __cptr(fipc_get_reg2(request)),
-				&ops_container);
-	if(ret) {
-		LIBLCD_ERR("lookup");
-		goto fail_lookup;
-	}
+//	ret = glue_cap_lookup_blk_mq_ops_type(c_cspace, __cptr(fipc_get_reg2(request)),
+//				&ops_container);
+//	if(ret) {
+//		LIBLCD_ERR("lookup");
+//		goto fail_lookup;
+//	}
 
 	rq.tag = fipc_get_reg3(request);
 	bd.rq = &rq;
 
+	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 	func_ret = ops_container->blk_mq_ops.queue_rq(&ctx_container->blk_mq_hw_ctx,
 				&bd);
 	
-	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 
 	if (async_msg_blocking_send_start(channel, &response)) {
 		LIBLCD_ERR("error getting response msg");
@@ -1087,7 +1113,7 @@ int queue_rq_fn_callee(struct fipc_message *request, struct thc_channel *channel
 
 fail_reply:
 fail_async:
-fail_lookup:
+//fail_lookup:
 
 	return ret;
 }
@@ -1149,7 +1175,8 @@ int init_hctx_fn_callee(struct fipc_message *request, struct thc_channel *channe
 		LIBLCD_ERR("kzalloc");
 		goto fail_alloc;
 	}
-	
+
+	ctx_container_g = ctx_container;	
 	ret = glue_cap_insert_blk_mq_hw_ctx_type(c_cspace, ctx_container, &ctx_container->my_ref);
 	if (ret) {
 		LIBLCD_ERR("lcd insert");
@@ -1315,6 +1342,9 @@ int release_callee(struct fipc_message *request, struct thc_channel *channel, st
 	struct thc_channel *chnl = NULL;
 	int channel_id = 0;
 	
+	//BENCH_COMPUTE_STAT(queue_rq);
+	dump_data();
+
 	request_cookie = thc_get_request_cookie(request);
 	channel_id = fipc_get_reg0(request);
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);

@@ -344,6 +344,9 @@ static int vmx_handle_other_exits(struct lcd_arch *lcd_arch)
 	exit_reason = lcd_arch->exit_reason;
 
 	switch (exit_reason) {
+	case EXIT_REASON_EXCEPTION_NMI:
+		ret = vmx_handle_nmi(lcd_arch);
+		break;
 	case EXIT_REASON_VMCALL:
 		ret = vmx_handle_vmcall(lcd_arch);
 		break;

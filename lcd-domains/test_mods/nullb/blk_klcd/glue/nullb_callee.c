@@ -21,12 +21,11 @@ struct gendisk *disk_g;
 struct request_queue *rq_g;
 struct blk_mq_tag_set *set_g;
 
+extern struct request_queue *queue_nullb;
+
 /* hack for init_request */
 int hw_depth;
 struct request **rq_map;
-
-//static DEFINE_SPINLOCK(lock);
-/* list for async worker threads cleanup */
 
 struct async_item {
 	int pid;
@@ -40,17 +39,22 @@ static LIST_HEAD(async_list);
 struct file_operations nullb_user_fops;
 
 /* info as private_data field for user communication */
+#define MAX_INFO_ENTRIES 100
 struct lcd_user_info {
-	struct page *p[10];
-	unsigned int order[10];
+	struct page *p[MAX_INFO_ENTRIES];
+	unsigned int order[MAX_INFO_ENTRIES];
 };
+
+//static DEFINE_SPINLOCK(lock);
 
 /* to handle null ptstate */
 bool init_ptstate = false;
 
 DEFINE_MUTEX(async_ctx_lock);
 /* benchmarking */
-//INIT_BENCHMARK_DATA(async_reply);
+INIT_BENCHMARK_DATA(async_reply);
+
+//INIT_MARKER(blk_mq_end_req);
 
 struct trampoline_hidden_args {
 	void *struct_container;
@@ -94,8 +98,9 @@ fail1:
 
 void glue_blk_exit(void)
 {
-	//BENCH_COMPUTE_STAT(async_reply);
+	BENCH_COMPUTE_STAT(async_reply);
 	//BENCH_DUMP_DATA(ipc_call);
+	//MARKER_DUMP(blk_mq_end_req);
 	glue_cap_destroy(c_cspace);
 	glue_cap_exit();
 
@@ -165,6 +170,8 @@ int blk_mq_init_queue_callee(struct fipc_message *request, struct thc_channel *c
 
 	/* Hack for remove */
 	rq_g = rq;
+	//queue_nullb = rq;
+	queue_nullb = NULL;
 
 	if (async_msg_blocking_send_start(channel, &response)) {
 		LIBLCD_ERR("error getting response msg");
@@ -209,11 +216,14 @@ int blk_mq_end_request_callee(struct fipc_message *request, struct thc_channel *
 
 	error = fipc_get_reg1(request);
 	//printk("[KLCD] END_REQ for rq_map_tag %ld rq->tag %d \n", fipc_get_reg0(request), rq->tag);	
-	blk_mq_end_request(rq, error);
-	
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
+
+	//BENCH_BEGIN(async_reply);
+	blk_mq_end_request(rq, error);
+	//BENCH_END(async_reply);
 	
 	//printk("[KLCD] END_REQ_B4_SND_START slot: %ld \n", atomic64_read(&thc_channel_to_fipc(channel)->tx.slot));
+	//BENCH_BEGIN(async_reply);
 	if (async_msg_blocking_send_start(channel, &response)) {
 		LIBLCD_ERR("error getting response msg");
 		ret = -EIO;
@@ -228,6 +238,7 @@ int blk_mq_end_request_callee(struct fipc_message *request, struct thc_channel *
 		goto async_reply;
 	}
 
+	//BENCH_END(async_reply);
 	//printk("[KLCD] END_REQ done \n");
 
 async_reply:	
@@ -283,37 +294,49 @@ int blk_mq_start_request_callee(struct fipc_message *request, struct thc_channel
 {
 
 	struct request *rq;
-	struct fipc_message *response;
-	unsigned int request_cookie;
+	//struct fipc_message *response;
+	//unsigned int request_cookie;
 	int ret = 0;
-	
-	request_cookie = thc_get_request_cookie(request);
-	
-	rq = rq_map[fipc_get_reg0(request)];
+	int tag = fipc_get_reg0(request);
+
+	//MARKER_BEGIN(blk_mq_end_req);	
+	//BENCH_BEGIN(async_reply);
+	//request_cookie = thc_get_request_cookie(request);
+
+	WARN_ON(tag >= hw_depth);
+
+	rq = rq_map[tag];
 	
 	//printk("[KLCD] START_REQ for rq_map_tag %ld rq->tag %d \n", fipc_get_reg0(request), rq->tag);
-	blk_mq_start_request(rq);
-
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
+	//BENCH_END(async_reply);
+	blk_mq_start_request(rq);
+	
+	//BENCH_BEGIN(async_reply);
+	//blk_mq_end_request(rq, 0);
+	//BENCH_END(async_reply);
+	
 
 	//printk("[KLCD] START_REQ_B4_SND_START slot: %ld \n", atomic64_read(&thc_channel_to_fipc(channel)->tx.slot));
-	if (async_msg_blocking_send_start(channel, &response)) {
-		LIBLCD_ERR("error getting response msg");
-		ret = -EIO;
-		goto async_exit;
-	}
+	//if (async_msg_blocking_send_start(channel, &response)) {
+	//	LIBLCD_ERR("error getting response msg");
+	//	ret = -EIO;
+	//	goto async_exit;
+	//}
 	
 	//printk("[KLCD] START_REQ_A4_SND_START slot: %ld \n", atomic64_read(&thc_channel_to_fipc(channel)->tx.slot));
-	ret = thc_ipc_reply(channel, request_cookie, response);
-	if(ret) {
-		LIBLCD_ERR("error thc_ipc_reply");
-		goto async_reply;
-	}
+	//ret = thc_ipc_reply(channel, request_cookie, response);
+	//if(ret) {
+	//	LIBLCD_ERR("error thc_ipc_reply");
+	//	goto async_reply;
+	//}
 	
 	//printk("[KLCD] START_REQ done\n");
 
-async_reply:
-async_exit:
+//async_reply:
+//async_exit:
+
+	//BENCH_END(async_reply);
 	return ret;
 }
 
@@ -717,7 +740,7 @@ static int nullbu_close (struct inode *inode, struct file *filp)
 	
 	printk("dev closed \n");
 	
-	for (i = 0; i < 10; i++) {
+	for (i = 0; i < MAX_INFO_ENTRIES; i++) {
 		if (info->p[i]) {
 			free_pages((unsigned long)page_address(info->p[i]), info->order[i]);
 		}
@@ -744,56 +767,74 @@ static int nullbu_mmap(struct file *filp, struct vm_area_struct *vma, struct tra
 	int ret = 0;
 	struct lcd_user_info *info;
       	struct page *p;
-	cptr_t pg;
 	cptr_t sync_end;
   	unsigned long size = PAGE_ALIGN(vma->vm_end - vma->vm_start);
-	//unsigned long order = ilog2(roundup_pow_of_two(size >> PAGE_SHIFT));
 	unsigned long order = get_order(size);
-	unsigned long new_order = 0;
-	unsigned long rem_order = 0;
+        unsigned long new_order = 0;
+        unsigned long rem_order = 0;
 	unsigned long vma_start = vma->vm_start;
-	void *addr;
 	int i = 0;
-	
+	int j = 0;
+
+	//spin_lock(&lock);	
 	info = (struct lcd_user_info *)filp->private_data;
         printk("[MMAP_DEV] begin: %lx end: %lx mmap_size: %ld pgoff: %ld order: %ld\n", vma->vm_start, vma->vm_end, size, vma->vm_pgoff, order);
 
 	lcd_enter();
 	ret = grant_sync_ep(&sync_end, hidden_args->sync_ep);
 
-	if(order >= MAX_ORDER) {
-		new_order = MAX_ORDER - 1;
-		rem_order = order - new_order;	
-	} else {
-		new_order = order;
-		rem_order = 0;
-	}
+        if(order >= MAX_ORDER) {
+                new_order = MAX_ORDER - 1;
+                rem_order = order - new_order;
+        } else {
+                new_order = order;
+                rem_order = 0;
+        }
 
-	for (i = 0; i < (1 << rem_order); i++) {
-		
+
+        for (i = 0; i < (1 << rem_order); i++) {
+
+                //unsigned long va = 0;
 		struct fipc_message *async_request;
 		struct fipc_message *async_response;
+		cptr_t pg;
 		unsigned int request_cookie;
-		
-		/*
-		 * Allocate physical pages for the requested size
-		 */
-		printk("alloc_pages \n");
-		p = alloc_pages(GFP_KERNEL | __GFP_ZERO, new_order);
-		if(!p) {
-			printk("alloc_page failed \n");
-			ret = -ENOMEM;
-			goto fail_alloc;
-		}
-			
-		info->p[i] = p;
-		info->order[i] = new_order;
-		addr = page_address(p);
-			
-		vma->vm_end = vma->vm_start + (1 << new_order) * PAGE_SIZE;
-		/*
-		 * Volunteer memory
-		 */
+
+                //Allocate physical pages for the requested size
+                printk("alloc_pages \n");
+                p = alloc_pages(GFP_KERNEL | __GFP_ZERO, new_order);
+                if(!p) {
+                        printk("alloc_page failed \n");
+                        ret = -ENOMEM;
+                        goto fail_alloc;
+                }
+
+                info->p[i] = p;
+                info->order[i] = new_order;
+                //va = (unsigned long) page_to_virt(p);
+
+                printk("remapping range \n");
+                for(j = 0; j < (1 << new_order); j++) {
+
+                        printk("vma->flags before: %lx \n", vma->vm_flags);
+
+                        //va += PAGE_SIZE * j;
+                        page_ref_inc(p+j);
+
+                        ret = vm_insert_page(vma, vma->vm_start, p+j);
+                        //ret = vm_insert_page(vma, vma->vm_start, virt_to_page(va));
+                        if (ret < 0) {
+                                printk("insert page failed ***************************** %d \n", ret);
+                                goto fail_alloc;
+                        }
+                        vma->vm_flags &= ~(VM_IO | VM_PFNMAP);
+                        vma->vm_start += PAGE_SIZE;
+                        printk("vma->flags cleared: %lx \n", vma->vm_flags);
+                        printk("mapping done! \n");
+                }
+
+		//Volunteer memory
+		printk("volunteer pages \n");
 		ret = lcd_volunteer_pages(p, new_order, &pg);
 		if (ret) {
 			LIBLCD_ERR("failed to volunteer memory");
@@ -851,40 +892,133 @@ static int nullbu_mmap(struct file *filp, struct vm_area_struct *vma, struct tra
 		}
 
 		//printk("setting protection \n");
-		vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+		//vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 		//printk("setting protection done \n");
+		fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->async_chnl), async_response);
 
-		printk("remapping range \n");
-		if(remap_pfn_range(vma, vma->vm_start, page_to_pfn(p), ((1 << new_order) * PAGE_SIZE),
-					  vma->vm_page_prot)) {
-			printk("mmap has to EAGAIN \n");
-			return -EAGAIN; 
-		}
-		printk("remapping range done \n");
-		vma->vm_start += (1 << new_order) * PAGE_SIZE;
-		printk("start: %lx size: %lx \n",vma->vm_start, ((1 << new_order) * PAGE_SIZE));
+                printk("mapping done! \n");
+        }
+
+        vma->vm_start = vma_start;
+        printk("[MMAP_DONE] start: %lx end: %lx \n",vma->vm_start, vma->vm_end);
+
+/*
+	for (i = 0; i < (1 << order); i++) {
 		
-		printk("mapping done! \n");
+		struct fipc_message *async_request;
+		struct fipc_message *async_response;
+		cptr_t pg;
+		unsigned int request_cookie;
+		
+		//Allocate physical pages for the requested size
+		printk("alloc_pages \n");
+		p = alloc_pages(GFP_KERNEL | __GFP_ZERO, 0);
+		if(!p) {
+			printk("alloc_page failed \n");
+			ret = -ENOMEM;
+			goto fail_alloc;
+		}
+			
+		info->p[i] = p;
+		info->order[i] = 0;
+		
+		printk("vma->flags before: %lx \n", vma->vm_flags);
+                ret = vm_insert_page(vma, vma->vm_start, p);
+                if (ret < 0) { 
+                        printk("insert page failed ***************************** \n");
+                        goto fail_alloc;
+                }
+                vma->vm_flags &= ~(VM_IO | VM_PFNMAP);
+                vma->vm_start += PAGE_SIZE;
+                printk("vma->flags cleared: %lx \n", vma->vm_flags);
+		
+		//Volunteer memory
+		printk("volunteer pages \n");
+		ret = lcd_volunteer_pages(p, 0, &pg);
+		if (ret) {
+			LIBLCD_ERR("failed to volunteer memory");
+			ret = -ENOMEM;
+			goto fail_volunteer;
+		}
+
+		printk("volunteer pages done \n");
+		ret = async_msg_blocking_send_start(hidden_args->async_chnl, &async_request);
+		if (ret) {
+			LIBLCD_ERR("failed to get a send slot");
+			ret = -EIO;
+			goto fail_async;
+		}
+		
+		async_msg_set_fn_type(async_request, MMAP_CHARDEV);
+		fipc_set_reg1(async_request, 0);
+
+		ret = thc_ipc_send_request(hidden_args->async_chnl, async_request, &request_cookie);
+		if (ret) {
+			LIBLCD_ERR("thc_ipc_call");
+			ret = -EIO;
+			goto fail_ipc;
+		}
+		
+		lcd_set_cr0(pg);
+		ret = lcd_sync_send(sync_end);
+		lcd_set_cr0(CAP_CPTR_NULL);
+		if (ret) {
+			LIBLCD_ERR("failed to send");
+			ret = -EIO;
+			goto fail_sync;
+		}
+
+		//recieve a confirmation from LCD that remap successfully finished,
+		//then map the memory to user process
+		LCD_MAIN(
+			DO_FINISH_(mmap_user, {
+			  ASYNC_({
+			    ret = thc_ipc_recv_response(hidden_args->async_chnl, request_cookie, &async_response);
+			  }, mmap_user);
+			});  
+		);
+		if (ret) {
+			LIBLCD_ERR("thc_ipc_call");
+			ret = -EIO;
+			goto fail_reply;
+		}    
+		
+		ret = fipc_get_reg1(async_response);
+		if(ret) {
+			LIBLCD_ERR("LCD failed to map memory");
+			ret = -EIO;
+			goto fail_mmap;
+		}
+
+		//printk("setting protection \n");
+		//vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+		//printk("setting protection done \n");
+		fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->async_chnl), async_response);
+                printk("mapping done! \n");
 	}
 
 	vma->vm_start = vma_start;
 	printk("[MMAP_DONE] start: %lx end: %lx \n",vma->vm_start, vma->vm_end);
+*/
 	lcd_cap_delete(sync_end);
 	lcd_exit(0);
-	
+	//spin_unlock(&lock);	
 	return 0;
 
 fail_mmap:
 fail_reply:
 fail_alloc:
 fail_volunteer:
-	if(p) {
-		free_pages((unsigned long)page_address(p), order);
+	for(i = 0; i < MAX_INFO_ENTRIES; i++) {
+		if(p) {
+			free_pages((unsigned long)page_address(p), order);
+		}
 	}
 fail_async:
 fail_ipc:
 fail_sync:
 	lcd_exit(0);
+	//spin_unlock(&lock);
 	return ret;
 }
 
@@ -1049,128 +1183,232 @@ fail_lookup:
 /*queue rq to handle under a different context */
 int _queue_rq_fn_ctx(struct blk_mq_hw_ctx *ctx, const struct blk_mq_queue_data *bd, struct trampoline_hidden_args *hidden_args)
 {
-	int ret = 0;
-	struct fipc_message *request;
-	struct fipc_message *response;
-	struct blk_mq_ops_container *ops_container;
-	struct blk_mq_hw_ctx_container *ctx_container;
-	
+        int ret = 0;
+        struct fipc_message *request;
+        struct fipc_message *response;
+        struct blk_mq_ops_container *ops_container;
+        struct blk_mq_hw_ctx_container *ctx_container;
 
-	thc_init();
 
-	/*XXX Beware!! hwctx can be unique per hw context of the driver, if multiple
-	 * exists, then we need one cspace insert function per hwctx. Should be handled
-	 * in the init_hctx routine */
-	ctx_container = container_of(ctx, struct blk_mq_hw_ctx_container, blk_mq_hw_ctx);
-	ops_container = (struct blk_mq_ops_container *)hidden_args->struct_container;
-	
-	printk("hctx %p | cptr %lu\n",ctx, ctx_container->other_ref.cptr);
-	ret = async_msg_blocking_send_start(hidden_args->async_chnl, &request);
-	if (ret) {
-		LIBLCD_ERR("ctx failed to get a send slot");
-		goto fail_async;
-	}
+        thc_init();
 
-	async_msg_set_fn_type(request, QUEUE_RQ_FN);
+        /*XXX Beware!! hwctx can be unique per hw context of the driver, if multiple
+         * exists, then we need one cspace insert function per hwctx. Should be handled
+         * in the init_hctx routine */
+        ctx_container = container_of(ctx, struct blk_mq_hw_ctx_container, blk_mq_hw_ctx);
+        ops_container = (struct blk_mq_ops_container *)hidden_args->struct_container;
 
-	fipc_set_reg0(request, ctx->queue_num);
-	fipc_set_reg1(request, ctx_container->other_ref.cptr);
-	fipc_set_reg2(request, ops_container->other_ref.cptr);
+        printk("hctx %p | cptr %lu\n",ctx, ctx_container->other_ref.cptr);
+        ret = async_msg_blocking_send_start(hidden_args->async_chnl, &request);
+        if (ret) {
+                LIBLCD_ERR("ctx failed to get a send slot");
+                goto fail_async;
+        }
+
+        async_msg_set_fn_type(request, QUEUE_RQ_FN);
+
+        fipc_set_reg0(request, ctx->queue_num);
+        fipc_set_reg1(request, ctx_container->other_ref.cptr);
+        fipc_set_reg2(request, ops_container->other_ref.cptr);
 
         DO_FINISH_(queue_rq_fn, {
                 ASYNC_( {
                 ret = thc_ipc_call(hidden_args->async_chnl, request, &response);
                 }, queue_rq_fn);
-        });  
+        });
 
         if (ret) {
                 LIBLCD_ERR("ctx thc_ipc_call");
                 goto fail_ipc;
         }
 
-	blk_mq_start_request(bd->rq);	
-	blk_mq_end_request(bd->rq, 0);
-	
-	/* function ret -  makes no sense now but keeping it this way! */
-	ret = fipc_get_reg0(response);
-	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->async_chnl), response);
+        blk_mq_start_request(bd->rq);
+        blk_mq_end_request(bd->rq, 0);
 
-	lcd_exit(0);
-	return ret;
+        /* function ret -  makes no sense now but keeping it this way! */
+        ret = fipc_get_reg0(response);
+        fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->async_chnl), response);
+
+        lcd_exit(0);
+        return ret;
 
 fail_async:
 fail_ipc:
-	lcd_exit(0);
-	return ret;
+        lcd_exit(0);
+        return ret;
 }
 
 int _queue_rq_fn(struct blk_mq_hw_ctx *ctx, const struct blk_mq_queue_data *bd, struct trampoline_hidden_args *hidden_args)
 {
-	int ret;
-	struct fipc_message *request;
-	struct fipc_message *response;
-	struct blk_mq_ops_container *ops_container;
-	struct blk_mq_hw_ctx_container *ctx_container;
+        int ret;
+        struct fipc_message *request;
+        struct fipc_message *response;
+        struct blk_mq_ops_container *ops_container;
+        struct blk_mq_hw_ctx_container *ctx_container;
 
-	if(!PTS()) {
-		LCD_MAIN({
-		ret = _queue_rq_fn_ctx(ctx, bd, hidden_args);				
-		});
-		return ret;
-	}
+        if(!PTS()) {
+                LCD_MAIN({
+                ret = _queue_rq_fn_ctx(ctx, bd, hidden_args);
+                });
+                return ret;
+        }
 
-	printk("^^^^^^^^^^ [Klcd-queue-rq] enter ^^^^^^^^^^^ \n");
-	/*XXX Beware!! hwctx can be unique per hw context of the driver, if multiple
-	 * exists, then we need one cspace insert function per hwctx. Should be handled
-	 * in the init_hctx routine */
-	ctx_container = container_of(ctx, struct blk_mq_hw_ctx_container, blk_mq_hw_ctx);
-	ops_container = (struct blk_mq_ops_container *)hidden_args->struct_container;
-	printk("hctx %p | cptr %lu\n",ctx, ctx_container->other_ref.cptr);
-	ret = async_msg_blocking_send_start(hidden_args->async_chnl, &request);
-	if (ret) {
-		LIBLCD_ERR("failed to get a send slot");
-		goto fail_async;
-	}
+        printk("^^^^^^^^^^ [Klcd-queue-rq] enter ^^^^^^^^^^^ \n");
+        /*XXX Beware!! hwctx can be unique per hw context of the driver, if multiple
+         * exists, then we need one cspace insert function per hwctx. Should be handled
+         * in the init_hctx routine */
 
-	async_msg_set_fn_type(request, QUEUE_RQ_FN);
+        ctx_container = container_of(ctx, struct blk_mq_hw_ctx_container, blk_mq_hw_ctx);
+        ops_container = (struct blk_mq_ops_container *)hidden_args->struct_container;
 
-	fipc_set_reg0(request, ctx->queue_num);
-	fipc_set_reg1(request, ctx_container->other_ref.cptr);
-	fipc_set_reg2(request, ops_container->other_ref.cptr);
+        printk("hctx %p | cptr %lu\n",ctx, ctx_container->other_ref.cptr);
 
-	ret = thc_ipc_call(hidden_args->async_chnl, request, &response);
-	if (ret) {
-		LIBLCD_ERR("thc_ipc_call");
-		goto fail_ipc;
-	}
-	blk_mq_start_request(bd->rq);	
-	blk_mq_end_request(bd->rq, 0);
-	
-	/* function ret -  makes no sense now but keeping it this way! */
-	ret = fipc_get_reg0(response);
-	fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->async_chnl), response);
+        ret = async_msg_blocking_send_start(hidden_args->async_chnl, &request);
+        if (ret) {
+                LIBLCD_ERR("failed to get a send slot");
+                goto fail_async;
+        }
 
-	printk("^^^^^ [Klcd-queue-rq] done ^^^^^^ \n");
-	return BLK_MQ_RQ_QUEUE_OK;
-	//return ret;
+        async_msg_set_fn_type(request, QUEUE_RQ_FN);
+
+        fipc_set_reg0(request, ctx->queue_num);
+        fipc_set_reg1(request, ctx_container->other_ref.cptr);
+        fipc_set_reg2(request, ops_container->other_ref.cptr);
+
+        ret = thc_ipc_call(hidden_args->async_chnl, request, &response);
+        if (ret) {
+                LIBLCD_ERR("thc_ipc_call");
+                goto fail_ipc;
+        }
+
+        blk_mq_start_request(bd->rq);
+        blk_mq_end_request(bd->rq, 0);
+
+        /* function ret -  makes no sense now but keeping it this way! */
+        ret = fipc_get_reg0(response);
+        fipc_recv_msg_end(thc_channel_to_fipc(hidden_args->async_chnl), response);
+
+        printk("^^^^^ [Klcd-queue-rq] done ^^^^^^ \n");
+        return BLK_MQ_RQ_QUEUE_OK;
+        //return ret;
 
 fail_async:
 fail_ipc:
-	printk("[Klcd-queue-rq] done with err \n");
-	return ret;
-}	
+        printk("[Klcd-queue-rq] done with err \n");
+        return ret;
+}
 
-int _queue_rq(struct blk_mq_hw_ctx *ctx, const struct blk_mq_queue_data *bd)
+//#if 0
+static void queue_rq_async_noyield(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_async *bd_async, 
+		struct trampoline_hidden_args *hidden_args, struct thc_channel *chnl)
 {
-	int ret = BLK_MQ_RQ_QUEUE_OK;
+	int func_ret;
+	struct blk_mq_hw_ctx_container *ctx_container;
+	struct blk_mq_ops_container *ops_container;
+	int count = 0;
+
+	ctx_container = container_of(ctx, struct blk_mq_hw_ctx_container, blk_mq_hw_ctx);
+	ops_container = (struct blk_mq_ops_container *)hidden_args->struct_container;
+
+	//BENCH_BEGIN(async_reply);
+	while(!list_empty(bd_async->rq_list)) {
+		struct request *rq;
+		struct blk_mq_queue_data bd;
+		struct fipc_message *request;
+		struct fipc_message *response;
+		int ret; 
 	
-	printk("block layer called queue_rq in klcd \n");
-	blk_mq_start_request(bd->rq);	
-	blk_mq_complete_request(bd->rq, bd->rq->errors);	
+		//printk("[KLCD] ^^async inside do_fin \n");
+		rq = list_first_entry(bd_async->rq_list, struct request, queuelist);
+		list_del_init(&rq->queuelist);
 
-	return ret;
-}	
+		bd.rq = rq;
+		bd.list = bd_async->list;
+		bd.last = list_empty(bd_async->rq_list);
+	
+		WARN_ON(rq_map[rq->tag] != rq);
+		
+		//printk("[KLCD] ^^async get async slot for rq->tag %d ??? \n", rq->tag);
+		//printk("[KLCD] QUEUE_RQ_ASYNC_B4 slot: %ld \n", atomic64_read(&thc_channel_to_fipc(channel)->tx.slot));
+		BENCH_BEGIN(async_reply);
+		ret = async_msg_blocking_send_start(chnl, &request);
+		if (ret) {
+			LIBLCD_ERR("ctx failed to get a send slot");
+			goto fail_async;
+		}
+		
+		//printk("[KLCD] ^^async got async slot for rq->tag %d \n", rq->tag);
+		async_msg_set_fn_type(request, QUEUE_RQ_FN);
 
+		fipc_set_reg0(request, ctx->queue_num);
+		fipc_set_reg1(request, ctx_container->other_ref.cptr);
+		fipc_set_reg2(request, ops_container->other_ref.cptr);
+		fipc_set_reg3(request, rq->tag);
+
+		/* send message */
+		thc_set_msg_type(request, msg_type_request);
+    		fipc_send_msg_end(thc_channel_to_fipc(chnl), request);
+
+		/* receive message */
+    		ret = thc_ipc_recv_resp_noyield(chnl, &response);
+	    	if (ret) {
+			printk(KERN_ERR "thc_ipc_call: error receiving response\n");
+			goto fail_async;
+	    	}
+
+		/* This should not execute when ipc_call is blocked on reply */
+		func_ret = fipc_get_reg0(response);
+		fipc_recv_msg_end(thc_channel_to_fipc(chnl), response);
+	
+		BENCH_END(async_reply);
+		//BENCH_END(async_reply);
+		switch (func_ret) {
+		case BLK_MQ_RQ_QUEUE_OK:
+			bd_async->queued++;
+			break;
+		case BLK_MQ_RQ_QUEUE_BUSY:
+			list_add(&rq->queuelist, bd_async->rq_list);
+			__blk_mq_requeue_request(rq);
+			break;
+		default:
+			pr_err("blk-mq: bad return on queue: %d\n", ret);
+		case BLK_MQ_RQ_QUEUE_ERROR:
+			if(rq) {
+				rq->errors = -EIO;
+				blk_mq_end_request(rq, rq->errors);
+			}
+			break;
+		}
+
+		if (func_ret == BLK_MQ_RQ_QUEUE_BUSY)
+			break;
+
+		/*
+		 * We've done the first request. If we have more than 1
+		 * left in the list, set dptr to defer issue.
+		 */
+		if (!bd_async->list && bd_async->rq_list->next != bd_async->rq_list->prev)
+			bd_async->list = bd_async->drv_list;
+
+				
+				//printk("[KLCD] ^^async out of async \n");
+			count++;
+	}
+	//printk("[KLCD] ^^async out of do fin \n");
+	//printk("count %d \n", count);
+	//BENCH_END(async_reply);
+	
+	//BENCH_BEGIN(async_reply);
+	//BENCH_END(async_reply);
+	return;
+
+fail_async:
+//fail_ipc:
+	printk("**** this is dangerous **** \n");
+	return;
+
+}
+//#endif
 /* Async variant of queue_rq which does DO_FINISH of
  * passing requests to LCD */
 void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_async *bd_async, 
@@ -1179,16 +1417,20 @@ void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_asyn
 	int func_ret;
 	struct blk_mq_hw_ctx_container *ctx_container;
 	struct blk_mq_ops_container *ops_container;
+	struct list_head *item;
 	int count = 0;
-	
-	//if(!init_once && (strcmp(current->comm,"fio") == 0)) {
-	//	dump_stack();
-	//	init_once = 1;
-	//}
+	int items = 0;
 
 	ctx_container = container_of(ctx, struct blk_mq_hw_ctx_container, blk_mq_hw_ctx);
 	ops_container = (struct blk_mq_ops_container *)hidden_args->struct_container;
 
+	list_for_each(item, bd_async->rq_list) {
+		items++;
+		if(items >= 2) {
+			break;
+		}
+	}
+	
 	DO_FINISH(	
 		while(!list_empty(bd_async->rq_list)) {
 			struct request *rq;
@@ -1204,8 +1446,9 @@ void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_asyn
 			bd.rq = rq;
 			bd.list = bd_async->list;
 			bd.last = list_empty(bd_async->rq_list);
-		
-			//BENCH_BEGIN(async_reply);
+			
+			WARN_ON(rq_map[rq->tag] != rq);
+
 			//printk("[KLCD] ^^async get async slot for rq->tag %d ??? \n", rq->tag);
 			//printk("[KLCD] QUEUE_RQ_ASYNC_B4 slot: %ld \n", atomic64_read(&thc_channel_to_fipc(channel)->tx.slot));
 			ret = async_msg_blocking_send_start(chnl, &request);
@@ -1213,7 +1456,6 @@ void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_asyn
 				LIBLCD_ERR("ctx failed to get a send slot");
 				goto fail_async;
 			}
-			//BENCH_END(async_reply);
 			
 			//printk("[KLCD] ^^async got async slot for rq->tag %d \n", rq->tag);
 			async_msg_set_fn_type(request, QUEUE_RQ_FN);
@@ -1223,18 +1465,23 @@ void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_asyn
 			fipc_set_reg2(request, ops_container->other_ref.cptr);
 			fipc_set_reg3(request, rq->tag);
 
+
 			ASYNC_( {
 				
-				//printk("[KLCD] ^^async ipc call -> tag:%d tx_slot: %ld \n",rq->tag, atomic64_read(&thc_channel_to_fipc(channel)->tx.slot));
-				
-				ret = thc_ipc_call(chnl, request, &response);
-				
+				//printk("[KLCD] ^^async ipc call -> tag:%d \n",rq->tag);
+				/* If KLCD or more than 1 items in list - take the ipc_call route */
+				if(chnl == hidden_args->async_chnl || items > 1) {
+					ret = thc_ipc_call(chnl, request, &response);
+				} else {
+					//BENCH_BEGIN(async_reply);
+					ret = thc_ipc_call_noyield_single_chnl(chnl, request, &response);
+					//BENCH_END(async_reply);
+				}
 				if (ret) {
 					LIBLCD_ERR("***************async_ctx thc_ipc_call*****************");
 					//goto fail_ipc;
 				}
-	
-				//printk("[KLCD] ^^async ipc call unblockss! \n");
+				
 				/* This should not execute when ipc_call is blocked on reply */
 				func_ret = fipc_get_reg0(response);
 				fipc_recv_msg_end(thc_channel_to_fipc(chnl), response);
@@ -1267,9 +1514,9 @@ void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_asyn
 				if (!bd_async->list && bd_async->rq_list->next != bd_async->rq_list->prev)
 					bd_async->list = bd_async->drv_list;
 
-
 			}, queue_rq_fn_async);
-				
+		
+	
 			//printk("[KLCD] ^^async out of async \n");
 			count++;
 		}
@@ -1341,9 +1588,26 @@ void queue_rq_async(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_async *b
         }
         else {
 		if(thc_pts_get_state() == true) {
+		
+			struct list_head *item;
+			int items = 0;
+
+			chnl = thc_pts_get_chnl();
+			
+			list_for_each(item, bd_async->rq_list) {
+				items++;
+				if(items >= 2) {
+					break;
+				}	
+			}
+			
+			if (items == 1) {
+				queue_rq_async_noyield(ctx, bd_async, hidden_args, chnl);
+				return;
+			}
+
 		 	LCD_MAIN({
 				//hidden_args->async_chnl = thc_pts_get_chnl();
-				chnl = thc_pts_get_chnl();
                       		queue_rq_async_ctx(ctx, bd_async, hidden_args, chnl);                           
               		});
 		} else {
@@ -1727,6 +1991,7 @@ int open(struct block_device *device, fmode_t mode, struct trampoline_hidden_arg
 
 	printk("***** [nullb-open] current: %p name: %s pid: %d ptstate: %p \n", current, current->comm, current->pid, current->ptstate);
 
+	//spin_lock(&lock);
 	if(!PTS()) {
 		ret = setup_new_channel(hidden_args->async_chnl, hidden_args->sync_ep);
 		if (ret) {
@@ -1734,9 +1999,12 @@ int open(struct block_device *device, fmode_t mode, struct trampoline_hidden_arg
 		}
 	}
 
+	//spin_unlock(&lock);
+	printk("***** [nullb-open] done \n");
 	return ret;
 
 fail:
+	//spin_unlock(&lock);
 	return -ENODEV;
 }
 

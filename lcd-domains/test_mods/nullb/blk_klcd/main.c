@@ -16,10 +16,13 @@
 
 #include <lcd_config/post_hook.h>
 
+#include "../benchmark.h"
 /* Don't use e.g. 0.5 * HZ. This will use floating point instructions.
  * I thik floating point in general is bad in the kernel. But it's
  * especially bad with thc/async. */
 #define VFS_REGISTER_FREQ (50)
+
+//INIT_BENCHMARK_DATA(disp_loop);
 
 static LIST_HEAD(drv_infos);
 int pmfs_ready;
@@ -212,6 +215,11 @@ fail1:
 	return ret;
 }
 
+//static __always_inline void bench_end(void) {
+//	BENCH_END(disp_loop);
+//	return;
+//}
+
 static void loop(cptr_t register_chnl)
 {
 	unsigned long tics = jiffies + VFS_REGISTER_FREQ;
@@ -247,8 +255,10 @@ static void loop(cptr_t register_chnl)
 
 			if (stop)
 				break;
+			//BENCH_BEGIN(disp_loop);
 			ret = async_loop(&drv, &curr_item, &msg);
 			if (!ret) {
+				//(async_msg_get_fn_type(msg) == BLK_MQ_END_REQUEST) ? bench_end() : -1;
 				ASYNC(
 					ret = dispatch_async_loop(
 						curr_item->channel, 
@@ -281,7 +291,8 @@ static void loop(cptr_t register_chnl)
 			cond_resched();
 #endif
 		}
-
+		
+		//BENCH_COMPUTE_STAT(disp_loop);
 		LIBLCD_MSG("blk exited loop, calling blk_exit");
 		THCStopAllAwes();
 

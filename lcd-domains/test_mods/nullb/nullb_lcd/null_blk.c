@@ -451,15 +451,16 @@ static int null_queue_rq(struct blk_mq_hw_ctx *hctx,
 			 const struct blk_mq_queue_data *bd)
 {
 	//struct nullb_cmd *cmd = blk_mq_rq_to_pdu(bd->rq);
-	struct nullb_cmd *cmd; 
+	struct nullb_cmd cmd_l; 
+	struct nullb_cmd *cmd = &cmd_l; 
 	struct nullb *nullb = driver_data_g;
 	struct nullb_queue *nq = &nullb->queues[hctx->queue_num];
 
-	cmd= kzalloc(sizeof(*cmd), GFP_KERNEL);
-	if(!cmd) {
-		printk("alloc cmd failed in queue_rq \n");
-		return -ENOMEM;
-	}
+	//cmd= kzalloc(sizeof(*cmd), GFP_KERNEL);
+	//if(!cmd) {
+	//	printk("alloc cmd failed in queue_rq \n");
+	//	return -ENOMEM;
+	//}
 
 	if (irqmode == NULL_IRQ_TIMER) {
 #ifndef LCD_ISOLATE
@@ -479,7 +480,7 @@ static int null_queue_rq(struct blk_mq_hw_ctx *hctx,
 
 	null_handle_cmd(cmd);
 	
-	kfree(cmd);
+	//kfree(cmd);
 	
 	//printk("queue_rq returing from driver \n");
 	return BLK_MQ_RQ_QUEUE_OK;
