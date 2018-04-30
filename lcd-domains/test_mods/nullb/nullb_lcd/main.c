@@ -41,12 +41,12 @@ void add_chnl_group_item(struct thc_channel_group_item *item,
 void remove_chnl_group_item(int channel_id, struct thc_channel_group *ch_grp)
 {
 	struct thc_channel_group_item *item, *next;
-	printk("calling remove chnl group item \n");
+	//printk("calling remove chnl group item \n");
 	list_for_each_entry_safe(item, next, &ch_grp->head, list) {
 		if(item && (item->channel_id == channel_id)) {
 			list_del_init(&item->list);
 			kfree(item);
-			printk("kfreed item! \n");
+			//printk("kfreed item! \n");
 			return;
 		}
 	}
@@ -119,7 +119,7 @@ static void main_and_loop(void)
 			//ret = thc_ipc_poll_recv(blk_async_chl, &msg);
 			//TODO cleanup curr_item's memory!
 			//BENCH_BEGIN_LCD(disp_loop);
-			ret = thc_poll_recv_group(&ch_grp, &curr_item, &msg);
+			ret = thc_poll_recv_group_lcd(&ch_grp, &curr_item, &msg);
 			if (ret) {
 				if (ret == -EWOULDBLOCK) {
 					continue;

@@ -19,6 +19,29 @@
 #include "blk-mq.h"
 #include "blk-mq-tag.h"
 
+#include <linux/blk-bench.h>
+#include <linux/bdump.h>
+
+//INIT_BENCHMARK_DATA(gettag);
+//static bool __always_inline check_fio(void) {
+//	if(strcmp(current->comm, "fio") == 0) {
+//		return true;
+//	}
+//	return false;
+//}
+
+//static void __always_inline bench_start(void) {
+//	BENCH_BEGIN(gettag);
+//}
+
+//static void __always_inline bench_end(void) {
+//	BENCH_END(gettag);
+//}
+
+//void bdump_data(void) {
+//	BENCH_COMPUTE_STAT(gettag);
+//}
+
 static bool bt_has_free_tags(struct blk_mq_bitmap_tags *bt)
 {
 	int i;
@@ -264,7 +287,9 @@ static int bt_get(struct blk_mq_alloc_data *data,
 	DEFINE_WAIT(wait);
 	int tag;
 
+	//(check_fio() == true) ? bench_start() : -1;
 	tag = __bt_get(hctx, bt, last_tag, tags);
+	//(check_fio() == true) ? bench_end() : -1;
 	if (tag != -1)
 		return tag;
 
@@ -278,7 +303,6 @@ static int bt_get(struct blk_mq_alloc_data *data,
 		tag = __bt_get(hctx, bt, last_tag, tags);
 		if (tag != -1)
 			break;
-
 		/*
 		 * We're out of tags on this hardware queue, kick any
 		 * pending IO submits before going to sleep waiting for
@@ -310,6 +334,7 @@ static int bt_get(struct blk_mq_alloc_data *data,
 			hctx = data->hctx;
 			bt = &hctx->tags->bitmap_tags;
 		}
+
 		finish_wait(&bs->wait, &wait);
 		bs = bt_wait_ptr(bt, hctx);
 	} while (1);
@@ -322,8 +347,10 @@ static unsigned int __blk_mq_get_tag(struct blk_mq_alloc_data *data)
 {
 	int tag;
 
+	//(check_fio() == true) ? bench_start() : -1;
 	tag = bt_get(data, &data->hctx->tags->bitmap_tags, data->hctx,
 			&data->ctx->last_tag, data->hctx->tags);
+	//(check_fio() == true) ? bench_end() : -1;
 	if (tag >= 0)
 		return tag + data->hctx->tags->nr_reserved_tags;
 
@@ -349,8 +376,9 @@ static unsigned int __blk_mq_get_reserved_tag(struct blk_mq_alloc_data *data)
 
 unsigned int blk_mq_get_tag(struct blk_mq_alloc_data *data)
 {
-	if (data->flags & BLK_MQ_REQ_RESERVED)
+	if (data->flags & BLK_MQ_REQ_RESERVED) {
 		return __blk_mq_get_reserved_tag(data);
+	}
 	return __blk_mq_get_tag(data);
 }
 

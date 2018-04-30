@@ -183,6 +183,14 @@ unsigned long blk_rq_timeout(unsigned long timeout)
 	return timeout;
 }
 
+static bool __always_inline check_fio_klcd(void) {
+      if(strcmp(current->comm, "fio") == 0 || strcmp(current->comm, "klcd") == 0) {
+              return true;
+      }
+      return false;
+}
+
+
 /**
  * blk_add_timer - Start timeout timer for a single request
  * @req:	request that is about to start running.
@@ -207,8 +215,10 @@ void blk_add_timer(struct request *req)
 	 * Some LLDs, like scsi, peek at the timeout to prevent a
 	 * command from being retried forever.
 	 */
-	if (!req->timeout)
+	if (!req->timeout) {
+		//check_fio_klcd() ? printk("[timeout_null] name: %s req: %p, timeout: %d,\n",current->comm, req, req->timeout) : -1;
 		req->timeout = q->rq_timeout;
+	}
 
 	req->deadline = jiffies + req->timeout;
 
@@ -225,6 +235,7 @@ void blk_add_timer(struct request *req)
 	 * second.
 	 */
 	expiry = blk_rq_timeout(round_jiffies_up(req->deadline));
+	//check_fio_klcd() ? printk("[expiry_check] name: %s req: %p, timeout: %d, expiry: %d\n",current->comm, req, req->timeout, expiry) : -1;
 
 	if (!timer_pending(&q->timeout) ||
 	    time_before(expiry, q->timeout.expires)) {
@@ -238,6 +249,7 @@ void blk_add_timer(struct request *req)
 		 * will be X + something.
 		 */
 		if (!timer_pending(&q->timeout) || (diff >= HZ / 2))
+			//check_fio_klcd() ? printk("[calling mod-timer] name: %s req: %p, timeout: %d, expiry: %d\n",current->comm, req, q->timeout, expiry) : -1;
 			mod_timer(&q->timeout, expiry);
 	}
 

@@ -40,7 +40,7 @@ int dispatch_async_loop(struct thc_channel *channel, struct fipc_message *messag
 			return null_exit_callee(message, channel, cspace, sync_ep);
 
 		case MMAP_CHARDEV:
-			trace(MMAP_CHARDEV);
+			//trace(MMAP_CHARDEV);
 			return nullbu_mmap_user(message, channel, cspace, sync_ep);
 
 		default:

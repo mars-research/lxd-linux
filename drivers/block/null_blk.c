@@ -16,7 +16,9 @@
 #include <linux/mm.h>
 
 #include <linux/blk-bench.h>
-//INIT_BENCHMARK_DATA(queue_rq);
+
+INIT_BENCHMARK_DATA(queue_rq);
+
 extern struct request_queue *queue_nullb;
 struct nullb_cmd {
 	struct list_head list;
@@ -374,7 +376,7 @@ static inline void null_handle_cmd(struct nullb_cmd *cmd)
 	case NULL_IRQ_SOFTIRQ:
 		switch (queue_mode)  {
 		case NULL_Q_MQ:
-			printk("calling complete request \n");
+			//printk("calling complete request \n");
 			blk_mq_complete_request(cmd->rq, cmd->rq->errors);
 			break;
 		case NULL_Q_RQ:
@@ -470,12 +472,69 @@ static int null_queue_rq(struct blk_mq_hw_ctx *hctx,
 	cmd->rq = bd->rq;
 	cmd->nq = hctx->driver_data;
 
+	//BENCH_BEGIN(queue_rq);
+	//printk("**** start_req -> name:%p req:%p \n",current->comm, bd->rq);
 	blk_mq_start_request(bd->rq);
-
+	//BENCH_END(queue_rq);
+	
 	null_handle_cmd(cmd);
 	//BENCH_END(queue_rq);
 	return BLK_MQ_RQ_QUEUE_OK;
 }
+
+void queue_rq_async(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_async *bd_async)
+{
+
+	//BENCH_BEGIN(queue_rq);
+	while(!list_empty(bd_async->rq_list)) {
+		struct request *rq;
+		struct blk_mq_queue_data bd;
+		int ret; 
+	
+		rq = list_first_entry(bd_async->rq_list, struct request, queuelist);
+		list_del_init(&rq->queuelist);
+
+		bd.rq = rq;
+		bd.list = bd_async->list;
+		bd.last = list_empty(bd_async->rq_list);
+	
+		//call queue_rq handler
+		ret = null_queue_rq(ctx, &bd);
+
+		switch (ret) {
+		case BLK_MQ_RQ_QUEUE_OK:
+			bd_async->queued++;
+			break;
+		case BLK_MQ_RQ_QUEUE_BUSY:
+			list_add(&rq->queuelist, bd_async->rq_list);
+			__blk_mq_requeue_request(rq);
+			break;
+		default:
+			pr_err("blk-mq: bad return on queue: %d\n", ret);
+		case BLK_MQ_RQ_QUEUE_ERROR:
+			if(rq) {
+				rq->errors = -EIO;
+				blk_mq_end_request(rq, rq->errors);
+			}
+			break;
+		}
+
+		if (ret == BLK_MQ_RQ_QUEUE_BUSY)
+			break;
+
+		/*
+		 * We've done the first request. If we have more than 1
+		 * left in the list, set dptr to defer issue.
+		 */
+		if (!bd_async->list && bd_async->rq_list->next != bd_async->rq_list->prev)
+			bd_async->list = bd_async->drv_list;
+
+	}
+	//BENCH_END(queue_rq);
+
+	return;
+}
+
 
 static void null_init_queue(struct nullb *nullb, struct nullb_queue *nq)
 {
@@ -501,6 +560,7 @@ static int null_init_hctx(struct blk_mq_hw_ctx *hctx, void *data,
 
 static struct blk_mq_ops null_mq_ops = {
 	.queue_rq       = null_queue_rq,
+	//.queue_rq_async = queue_rq_async,
 	.map_queue      = blk_mq_map_queue,
 	.init_hctx	= null_init_hctx,
 	.complete	= null_softirq_done_fn,
@@ -795,7 +855,7 @@ static int null_add_dev(void)
 			rv = -ENOMEM;
 			goto out_cleanup_tags;
 		}
-		//queue_nullb = nullb->q;
+		queue_nullb = nullb->q;
 	} else if (queue_mode == NULL_Q_BIO) {
 		nullb->q = blk_alloc_queue_node(GFP_KERNEL, home_node);
 		if (!nullb->q) {
@@ -827,6 +887,7 @@ static int null_add_dev(void)
 	nullb->index = nullb_indexes++;
 	mutex_unlock(&lock);
 
+	printk("---------------------------> block size: %d \n", bs);
 	blk_queue_logical_block_size(nullb->q, bs);
 	blk_queue_physical_block_size(nullb->q, bs);
 
@@ -1130,6 +1191,7 @@ static void __exit null_exit(void)
 	mutex_unlock(&lock);
 
 	kmem_cache_destroy(ppa_cache);
+	queue_nullb = NULL;
 }
 
 module_init(null_init);

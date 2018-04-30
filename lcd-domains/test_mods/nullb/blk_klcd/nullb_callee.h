@@ -4,7 +4,8 @@
 #include "../glue_helper.h"
 
 struct drv_info {
-	struct thc_channel *chnl;
+	/* auxiliary dispatch channel */
+	struct thc_channel *aux_chnl;
 	struct glue_cspace *cspace;
 	struct thc_channel_group *ch_grp;
 	cptr_t sync_endpoint;
@@ -18,7 +19,7 @@ int dispatch_sync_loop (void);
 
 struct drv_info * 
 add_drv(struct thc_channel_group_item *curr_item, struct glue_cspace *cspace,
-        cptr_t sync_endpoint);
+        cptr_t sync_endpoint, struct thc_channel *aux_chnl);
 
 void remove_drv(struct drv_info *fs);
 

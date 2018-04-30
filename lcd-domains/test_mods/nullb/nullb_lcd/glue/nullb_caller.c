@@ -16,6 +16,9 @@ static struct glue_cspace *c_cspace;
 extern struct thc_channel *blk_async_chl;
 extern struct thc_channel_group ch_grp;
 
+/* This is where auxiliary channel will be added */
+struct thc_channel *disp_chnl[2];
+
 struct blk_mq_hw_ctx_container *ctx_container_g; 
 struct blk_mq_ops_container *ops_container_g;
 
@@ -230,7 +233,7 @@ int nullbu_mmap_user(struct fipc_message *request, struct thc_channel *channel, 
 	gva_t page_gva;
 	unsigned long *page_virt;
 	
-	printk("mmap lcd begins \n");
+	//printk("mmap lcd begins \n");
 	request_cookie = thc_get_request_cookie(request);
 	order = fipc_get_reg1(request);
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
@@ -251,7 +254,7 @@ int nullbu_mmap_user(struct fipc_message *request, struct thc_channel *channel, 
 		goto fail_recv;
 	}
 	
-	printk("map virt \n");
+	//printk("map virt \n");
 	/* map the page into ram map area for now */
 	ret = lcd_map_virt(page, order, &page_gva);
 	if (ret) { 
@@ -260,7 +263,7 @@ int nullbu_mmap_user(struct fipc_message *request, struct thc_channel *channel, 
 		goto fail_map;
 	}
 
-	printk("map virt done \n");
+	//printk("map virt done \n");
 	page_virt = (void *)gva_val(page_gva);
 	//*(page_virt) = 0xAA11BBCCDD;
 
@@ -274,7 +277,7 @@ fail_sync:
 	fipc_set_reg1(response, func_ret);
 	thc_ipc_reply(channel, request_cookie, response);
 
-	printk("mmap lcd ends \n");
+	//printk("mmap lcd ends \n");
 	return ret;
 }
 
@@ -480,12 +483,15 @@ void blk_mq_end_request(struct request *rq, int error)
 {
 	int ret;
 	struct fipc_message *request;
-	struct fipc_message *response;
+	static int index = 0;
+	//static int count = 0;
+	//struct fipc_message *response;
 	//uint32_t request_cookie;
 
 	//printk("[LCD_GLUE] END_REQ glue begins \n");
 	//BENCH_BEGIN_LCD(queue_rq);
-	ret = async_msg_blocking_send_start(blk_async_chl, &request);
+	//count ++;
+	ret = async_msg_blocking_send_start(disp_chnl[index], &request);
 	if (ret) {
 		LIBLCD_ERR("failed to get a send slot");
 		goto fail_async;
@@ -496,29 +502,44 @@ void blk_mq_end_request(struct request *rq, int error)
 
 	fipc_set_reg0(request, rq->tag);	
 	fipc_set_reg1(request, error);
+	
+	thc_set_msg_type(request, msg_type_request);
+	fipc_send_msg_end (thc_channel_to_fipc(disp_chnl[index]), request);
+
+	//if(count == 2) {
+		/* toggle index */
+	//	index ^= 1;
+	//	count = 0;
+	//}
 
 	//printk("[LCD_GLUE] END_REQ ipc call-> rq->tag: %d \n", rq->tag);
-	ret = thc_ipc_call(blk_async_chl, request, &response);
-	if (ret) {
-		LIBLCD_ERR("thc_ipc_call");
-		goto fail_ipc;
-	}
+	//ret = thc_ipc_call(blk_async_chl, request, &response);
+	//if (ret) {
+	//	LIBLCD_ERR("thc_ipc_call");
+	//	goto fail_ipc;
+	//}
 	
-	fipc_recv_msg_end(thc_channel_to_fipc(blk_async_chl), response);
+	//thc_ipc_send_request(blk_async_chl, request, &request_cookie);
+	//if (ret) {
+	//	printk("send_req failed \n");
+	//	goto fail_send;
+	//}
+
+	//ret = thc_ipc_recv_response_lcd(blk_async_chl, request_cookie, &response);
+	//if (ret) {
+	//	printk("recv_resp failed \n");
+	//	goto fail_send;
+	//}
+	
+	//fipc_recv_msg_end(thc_channel_to_fipc(blk_async_chl), response);
 
 	//BENCH_END_LCD(queue_rq);
-//	ret = thc_ipc_send_request(blk_async_chl, request, &request_cookie);
-//	if (ret) {
-//		LIBLCD_ERR("thc_ipc_call");
-//		goto fail_ipc;
-//	}
-	//thc_set_msg_type(request, msg_type_request);
-	//fipc_send_msg_end (thc_channel_to_fipc(blk_async_chl), request);
-	//printk("[LCD_GLUE] END_REQ glue ends -> ra->tag: %d\n", rq->tag);
+		//printk("[LCD_GLUE] END_REQ glue ends -> ra->tag: %d\n", rq->tag);
 	return;
 
+//fail_send:
 fail_async:
-fail_ipc:
+//fail_ipc:
 	return;
 
 }
@@ -913,8 +934,10 @@ fail_ipc:
 int register_blkdev(unsigned int devno, const char *name)
 {
 	int ret;
-        cptr_t tx, rx, page;
+        cptr_t tx, rx;
         struct thc_channel *chnl;
+	//cptr_t tx_aux, rx_aux;
+        struct thc_channel *aux_chnl = NULL;
 
 	/* dispatch item */
 	struct thc_channel_group_item *disp_item;
@@ -933,12 +956,18 @@ int register_blkdev(unsigned int devno, const char *name)
                 goto fail2;
         }
 	
+	//ret = setup_async_channel(&tx_aux, &rx_aux, &aux_chnl);
+        //if (ret) {
+          //      LIBLCD_ERR("async chnl setup failed");
+          //      goto fail_aux;
+        //}
+
 	disp_item = kzalloc(sizeof(*disp_item), GFP_KERNEL);
 	if(!disp_item) {
 		LIBLCD_ERR("no mem for disp_item");
 		goto fail3;	
 	}
-	printk("cptr_vals tx: %ld rx: %ld page.cptr: %ld \n",tx.cptr, rx.cptr, page.cptr);
+	//printk("cptr_vals tx: %ld rx: %ld tx_aux.cptr: %ld rx_aux.cptr: %ld\n",tx.cptr, rx.cptr, tx_aux.cptr, rx_aux.cptr);
 	/*
          * Do rpc, sending:
          *
@@ -953,6 +982,8 @@ int register_blkdev(unsigned int devno, const char *name)
         lcd_set_cr0(blk_sync_endpoint);
         lcd_set_cr1(rx);
         lcd_set_cr2(tx);
+        //lcd_set_cr3(rx_aux);
+        //lcd_set_cr4(tx_aux);
 	
 	/* TODO find a way to marshall the string! 
 	 * for this simple case kstrtou64() should work 
@@ -967,7 +998,8 @@ int register_blkdev(unsigned int devno, const char *name)
         lcd_set_cr0(CAP_CPTR_NULL);
         lcd_set_cr1(CAP_CPTR_NULL);
         lcd_set_cr2(CAP_CPTR_NULL);
-        lcd_set_cr3(CAP_CPTR_NULL);
+        //lcd_set_cr3(CAP_CPTR_NULL);
+        //lcd_set_cr4(CAP_CPTR_NULL);
         if (ret) {
                 LIBLCD_ERR("lcd_call");
                 goto fail4;
@@ -987,6 +1019,8 @@ int register_blkdev(unsigned int devno, const char *name)
          * Kick off async recv
          */
         blk_async_chl = chnl;
+	disp_chnl[0] = chnl;
+	disp_chnl[1] = aux_chnl;
 	disp_item->channel = chnl;
 	disp_item->channel_id = 0; //dispatch item has 0 id
 	add_chnl_group_item(disp_item, &ch_grp);
@@ -998,7 +1032,9 @@ fail5:
 fail4:
 	kfree(disp_item);
 fail3:
-	lcd_cap_delete(page);
+	//destroy_async_channel(aux_chnl);
+//fail_aux:
+	destroy_async_channel(chnl);
 
 fail2:
         lcd_cap_delete(blk_sync_endpoint);
@@ -1253,7 +1289,7 @@ static int setup_sync(cptr_t sync_ep, cptr_t tx, cptr_t rx)
 	lcd_set_cr0(rx);
         lcd_set_cr1(tx);
 	
-	printk("calling sync send \n");	
+	//printk("calling sync send \n");	
 	ret = lcd_sync_send(blk_sync_endpoint);
 	lcd_set_cr0(CAP_CPTR_NULL); /* flush cr0 after send */
 	lcd_set_cr1(CAP_CPTR_NULL); /* flush cr0 after send */
@@ -1336,14 +1372,15 @@ fail1:
 
 int release_callee(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
 {
-	struct fipc_message *response;
+	//struct fipc_message *response;
 	unsigned int request_cookie;
 	int ret = 0;
 	struct thc_channel *chnl = NULL;
 	int channel_id = 0;
 	
 	//BENCH_COMPUTE_STAT(queue_rq);
-	dump_data();
+	//dump_data();
+	//thc_ipc_dump_stat();
 
 	request_cookie = thc_get_request_cookie(request);
 	channel_id = fipc_get_reg0(request);
@@ -1351,23 +1388,23 @@ int release_callee(struct fipc_message *request, struct thc_channel *channel, st
 
 	chnl = get_chnl_from_id(channel_id, &ch_grp);
 	if(chnl) {
-		printk("calling destroy asyn_channel \n");
+		//printk("calling destroy asyn_channel \n");
 		destroy_async_channel(chnl);
 	}
 
 	remove_chnl_group_item(channel_id, &ch_grp);
 
-	if (async_msg_blocking_send_start(channel, &response)) {
-		LIBLCD_ERR("error getting response msg");
-		ret = -EIO;
-		goto fail1;
-	}
+	//if (async_msg_blocking_send_start(channel, &response)) {
+	//	LIBLCD_ERR("error getting response msg");
+	//	ret = -EIO;
+	//	goto fail1;
+	//}
 
-	thc_ipc_reply(channel, request_cookie, response);
+	//thc_ipc_reply(channel, request_cookie, response);
 
 	return ret;
 		
-fail1:
-	return ret;
+//fail1:
+//	return ret;
 
 }

@@ -17,7 +17,7 @@
 #include <linux/fcntl.h>
 
 #define BENCH_MAX_ENTRIES 8000000
-#define MARKER_MAX_ENTRIES 1000000
+#define MARKER_MAX_ENTRIES 8000000
 
 static __always_inline void reset_counter(u64 *cnt, u64 *ov) {
 	*(cnt) = 0;
@@ -73,7 +73,9 @@ static __always_inline void reset_counter(u64 *cnt, u64 *ov) {
 	((name##_cnt >= BENCH_MAX_ENTRIES) ?  (reset_counter(&name##_cnt, &name##_ov)) : name##_cnt);
 
 #define BENCH_COMPUTE_STAT(name) \
-	bench_compute_stat(name##_diff,name##_id,name##_cnt,name##_ov);
+	bench_compute_stat(name##_diff,name##_id,name##_cnt,name##_ov); \
+	name##_cnt = 0; \
+	name##_ov = 0; \
 
 #define BENCH_DUMP_DATA(name) \
 	bench_dump_data(name##_diff,name##_id);
@@ -207,23 +209,23 @@ static u64 inline bench_find_base(u64 number)
 	return base;
 }
 
-static int inline bench_compute_values_within_intervals(u64 *data, u64 lower, u64 upper)
+static int inline bench_compute_values_within_intervals(u64 *data, u64 lower, u64 upper, u64 entries)
 {
 	int i;
 	int count = 0;
 
-	for (i = 0; i < BENCH_MAX_ENTRIES; i++)
+	//for (i = 0; i < BENCH_MAX_ENTRIES; i++)
+	for (i = 0; i < entries; i++)
 	{
 		if((data[i] >= lower) && (data[i] < upper)) {
 			count ++;
 		}
-
 	}
 	return count;
 }
 
 #define BENCH_MAX_BARS 10
-static void inline bench_draw_histogram(u64 *data, struct bench_stat *stat)
+static void inline bench_draw_histogram(u64 *data, struct bench_stat *stat, u64 entries)
 {
 	u64 range = 0;
 	u64 base_lower = 0;
@@ -238,7 +240,7 @@ static void inline bench_draw_histogram(u64 *data, struct bench_stat *stat)
 
 	for (i = base_lower; i < base_upper; i += range) {
 		printk("[ %llu - %llu ]\t |-------------------| (%d) \n", i, i + range, 
-			bench_compute_values_within_intervals(data, i, i+range));
+			bench_compute_values_within_intervals(data, i, i+range, entries));
 	}
 
 	return;
@@ -265,6 +267,7 @@ static void inline bench_compute_stat(u64 *data, char *id, u64 cnt, u64 ov)
 	int diff = 0;
 	int i;
 	u64 sum;
+	u64 entries = 0;
 
 	printk("[BENCH_COMPUTE] computing stat for %s \n",id);
 	
@@ -279,13 +282,20 @@ static void inline bench_compute_stat(u64 *data, char *id, u64 cnt, u64 ov)
 		kfree(stat);
 		return;
 	}
-
-	if((cnt < (BENCH_MAX_ENTRIES - 1)) && (ov == 0)) {
+	
+	entries = cnt + (ov * BENCH_MAX_ENTRIES);
+	if (entries == 0) {
 		printk("[BENCH_COMPUTE] not enough samples collected \n");
 		return;
 	}
+
+	//if((cnt < (BENCH_MAX_ENTRIES - 1)) && (ov == 0)) {
+	//	printk("[BENCH_COMPUTE] not enough samples collected \n");
+	//	return;
+	//}
 	
-	for(sum = 0, i = 0; i < BENCH_MAX_ENTRIES; i++) {
+	//for(sum = 0, i = 0; i < BENCH_MAX_ENTRIES; i++) {
+	for(sum = 0, i = 0; i < entries; i++) {
 		sum += data[i];
 	}
 
@@ -294,11 +304,12 @@ static void inline bench_compute_stat(u64 *data, char *id, u64 cnt, u64 ov)
 		return;
 	}
 
-	//mean = do_div(sum, BENCH_MAX_ENTRIES);
-	stat->mean = sum / BENCH_MAX_ENTRIES;
+	//stat->mean = sum / BENCH_MAX_ENTRIES;
+	stat->mean = sum / entries;
 
 	stat->min = stat->max = data[0];
-	for(i = 0; i < BENCH_MAX_ENTRIES; i++) {
+	//for(i = 0; i < BENCH_MAX_ENTRIES; i++) {
+	for(i = 0; i < entries; i++) {
 		if(data[i] < stat->min) {
 			stat->min = data[i];
 		}	
@@ -311,22 +322,24 @@ static void inline bench_compute_stat(u64 *data, char *id, u64 cnt, u64 ov)
 		stat->var += diff * diff;
 	}
 
-	stat->stddev = int_sqrt_local(stat->var / BENCH_MAX_ENTRIES);
+	//stat->stddev = int_sqrt_local(stat->var / BENCH_MAX_ENTRIES);
+	stat->stddev = int_sqrt_local(stat->var / entries);
 
 	bench_compute_confidence_intervals(stat);
 
 
 
 	printk("---------------- [BENCH_SUMMARY - %s] --------------- \n "
-			"samples: \t %d\n avg: \t %llu \n min: \t %llu \n max: \t %llu"
-			"\n sdv: \t %llu \n", id, BENCH_MAX_ENTRIES, stat->mean, stat->min, 
+			"samples: \t %llu\n avg: \t %llu \n min: \t %llu \n max: \t %llu"
+			"\n sdv: \t %llu \n", id, /*BENCH_MAX_ENTRIES*/ entries, stat->mean, stat->min, 
 			stat->max, stat->stddev);
 
-	bench_draw_histogram(data, stat);	
+	bench_draw_histogram(data, stat, entries);	
 
 	printk("[BENCH_VALUES] Total number of values in the confidence interval [%llu - %llu]"
 		       "- %d \n", stat->lower, stat->upper,
-			bench_compute_values_within_intervals(data, stat->lower, stat->upper));
+			bench_compute_values_within_intervals(data, stat->lower, stat->upper, entries));
+	cnt = 0;
 	kfree(stat);
 }	
 

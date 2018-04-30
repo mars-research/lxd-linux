@@ -11,6 +11,13 @@
 
 #include "blk.h"
 
+static bool __always_inline check_fio(void) {
+	if(strcmp(current->comm, "fio") == 0) {
+		return true;
+	}
+	return false;
+}
+
 static struct bio *blk_bio_discard_split(struct request_queue *q,
 					 struct bio *bio,
 					 struct bio_set *bs,
@@ -194,15 +201,19 @@ void blk_queue_split(struct request_queue *q, struct bio **bio,
 	struct bio *split, *res;
 	unsigned nsegs;
 
+	//(check_fio() == true) ? printk("[%s:%s] in --> \n",__FILE__,__func__) : -1;
 	switch (bio_op(*bio)) {
 	case REQ_OP_DISCARD:
 	case REQ_OP_SECURE_ERASE:
+		//(check_fio() == true) ? printk("REQ_OP_SECURE_ERASE: \n") : -1;
 		split = blk_bio_discard_split(q, *bio, bs, &nsegs);
 		break;
 	case REQ_OP_WRITE_SAME:
+		//(check_fio() == true) ? printk("REQ_OP_WRITE_SAME: \n") : -1;
 		split = blk_bio_write_same_split(q, *bio, bs, &nsegs);
 		break;
 	default:
+		//(check_fio() == true) ? printk("default: \n") : -1;
 		split = blk_bio_segment_split(q, *bio, q->bio_split, &nsegs);
 		break;
 	}
@@ -218,9 +229,11 @@ void blk_queue_split(struct request_queue *q, struct bio **bio,
 
 		bio_chain(split, *bio);
 		trace_block_split(q, split, (*bio)->bi_iter.bi_sector);
+		//(check_fio() == true) ? printk("calling make req again \n") : -1;
 		generic_make_request(*bio);
 		*bio = split;
 	}
+	//(check_fio() == true) ? printk("[%s:%s] <-- out \n",__FILE__,__func__) : -1;
 }
 EXPORT_SYMBOL(blk_queue_split);
 

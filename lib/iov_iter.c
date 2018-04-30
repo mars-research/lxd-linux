@@ -4,6 +4,19 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <net/checksum.h>
+#include <linux/blk-bench.h>
+#include <linux/bdump.h>
+
+//INIT_BENCHMARK_DATA(gup);
+
+extern struct request_queue *queue_nullb;
+
+static bool __always_inline check_fio(void) {
+        if(strcmp(current->comm, "fio") == 0) {
+                return true;
+        }
+        return false;
+}
 
 #define iterate_iovec(i, n, __v, __p, skip, STEP) {	\
 	size_t left;					\
@@ -537,10 +550,23 @@ unsigned long iov_iter_gap_alignment(const struct iov_iter *i)
 }
 EXPORT_SYMBOL(iov_iter_gap_alignment);
 
+//static void __always_inline bench_start(void) {
+//	BENCH_BEGIN(gup);
+//}
+
+//static void __always_inline bench_end(void) {
+//	BENCH_END(gup);
+//}
+
+//void bdump_data(void) {
+//	BENCH_COMPUTE_STAT(gup);
+//}
+
 ssize_t iov_iter_get_pages(struct iov_iter *i,
 		   struct page **pages, size_t maxsize, unsigned maxpages,
 		   size_t *start)
 {
+	//(check_fio() == true) ? printk("[%s:%s] --> in maxsize: %d maxpages: %d\n", __FILE__, __func__, maxsize, maxpages) : -1;
 	if (maxsize > i->count)
 		maxsize = i->count;
 
@@ -557,7 +583,11 @@ ssize_t iov_iter_get_pages(struct iov_iter *i,
 			len = maxpages * PAGE_SIZE;
 		addr &= ~(PAGE_SIZE - 1);
 		n = DIV_ROUND_UP(len, PAGE_SIZE);
+
+		//(check_fio() == true) ? printk("GUP -> addr: %p nr_pages: %d *start: %zu \n", addr, n, *start) : -1;
+		//(check_fio() == true) ? bench_start() : -1;
 		res = get_user_pages_fast(addr, n, (i->type & WRITE) != WRITE, pages);
+		//(check_fio() == true) ? bench_end() : -1;
 		if (unlikely(res < 0))
 			return res;
 		return (res == n ? len : res * PAGE_SIZE) - *start;
@@ -570,6 +600,7 @@ ssize_t iov_iter_get_pages(struct iov_iter *i,
 		return -EFAULT;
 	})
 	)
+	//(check_fio() == true) ? printk("[%s:%s] --> out \n", __FILE__, __func__) : -1;
 	return 0;
 }
 EXPORT_SYMBOL(iov_iter_get_pages);
@@ -802,6 +833,7 @@ int import_single_range(int rw, void __user *buf, size_t len,
 
 	iov->iov_base = buf;
 	iov->iov_len = len;
+	//(check_fio() == true) ? printk("call iov_iter_init -> len:%d \n", len) : -1;
 	iov_iter_init(i, rw, iov, 1, len);
 	return 0;
 }
