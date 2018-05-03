@@ -377,7 +377,6 @@ static void handle_loop(long id)
 			//printk("main klcd count --> %d \n",count);
 		}
 		LIBLCD_MSG("blk exited loop, calling blk_exit");
-		THCStopAllAwes();
 
 		);
 

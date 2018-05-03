@@ -1426,6 +1426,99 @@ fail_async:
 
 }
 //#endif
+
+/* TODO: contains duplicate code. Needs to be merged with other ctx functions */
+void queue_rq_async_ctx_klcd(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_async *bd_async, 
+		struct trampoline_hidden_args *hidden_args, struct thc_channel *chnl)
+{
+	int func_ret;
+	struct blk_mq_hw_ctx_container *ctx_container;
+	struct blk_mq_ops_container *ops_container;
+	int count = 0;
+
+	ctx_container = container_of(ctx, struct blk_mq_hw_ctx_container, blk_mq_hw_ctx);
+	ops_container = (struct blk_mq_ops_container *)hidden_args->struct_container;
+
+	while(!list_empty(bd_async->rq_list)) {
+		struct request *rq;
+		struct blk_mq_queue_data bd;
+		struct fipc_message *request;
+		struct fipc_message *response;
+		unsigned int request_cookie;
+		int ret; 
+	
+		rq = list_first_entry(bd_async->rq_list, struct request, queuelist);
+		list_del_init(&rq->queuelist);
+
+		bd.rq = rq;
+		bd.list = bd_async->list;
+		bd.last = list_empty(bd_async->rq_list);
+		
+		ret = async_msg_blocking_send_start(chnl, &request);
+		if (ret) {
+			LIBLCD_ERR("ctx failed to get a send slot");
+			goto fail_async;
+		}
+		
+		async_msg_set_fn_type(request, QUEUE_RQ_FN);
+
+		fipc_set_reg0(request, ctx->queue_num);
+		fipc_set_reg1(request, ctx_container->other_ref.cptr);
+		fipc_set_reg2(request, ops_container->other_ref.cptr);
+		fipc_set_reg3(request, rq->tag);
+
+		ret = thc_ipc_send_request(chnl,
+					request, &request_cookie);
+
+		if (ret)
+			LIBLCD_ERR("***************async_ctx thc_ipc_send_request *****************");
+		ret = thc_ipc_recv_response(chnl, request_cookie, &response);
+
+		if (ret) {
+			LIBLCD_ERR("***************async_ctx thc_ipc_call*****************");
+				//goto fail_ipc;
+		}
+			
+			/* This should not execute when ipc_call is blocked on reply */
+		func_ret = fipc_get_reg0(response);
+		fipc_recv_msg_end(thc_channel_to_fipc(chnl), response);
+	
+		switch (func_ret) {
+		case BLK_MQ_RQ_QUEUE_OK:
+			bd_async->queued++;
+			break;
+		case BLK_MQ_RQ_QUEUE_BUSY:
+			list_add(&rq->queuelist, bd_async->rq_list);
+			__blk_mq_requeue_request(rq);
+			break;
+		default:
+			pr_err("blk-mq: bad return on queue: %d\n", ret);
+		case BLK_MQ_RQ_QUEUE_ERROR:
+			if(rq) {
+				rq->errors = -EIO;
+				blk_mq_end_request(rq, rq->errors);
+			}
+			break;
+		}
+
+		if (func_ret == BLK_MQ_RQ_QUEUE_BUSY)
+			break;
+
+		/*
+		 * We've done the first request. If we have more than 1
+		 * left in the list, set dptr to defer issue.
+		 */
+		if (!bd_async->list && bd_async->rq_list->next != bd_async->rq_list->prev)
+			bd_async->list = bd_async->drv_list;
+
+		count++;
+	}
+	return;
+
+fail_async:
+	return;
+}
+
 /* Async variant of queue_rq which does DO_FINISH of
  * passing requests to LCD */
 void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_async *bd_async, 
@@ -1503,7 +1596,7 @@ void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_asyn
 				/* This should not execute when ipc_call is blocked on reply */
 				func_ret = fipc_get_reg0(response);
 				fipc_recv_msg_end(thc_channel_to_fipc(chnl), response);
-			
+
 				switch (func_ret) {
 				case BLK_MQ_RQ_QUEUE_OK:
 					bd_async->queued++;
@@ -1641,7 +1734,7 @@ void queue_rq_async(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_async *b
                 	/* TODO fix klcd's async_channel. Value has got modified above */
 			printk("queue_rq_async called in klcd ctx \n");
 			chnl = hidden_args->async_chnl;
-			queue_rq_async_ctx(ctx, bd_async, hidden_args, chnl);
+			queue_rq_async_ctx_klcd(ctx, bd_async, hidden_args, chnl);
 		}
 	}
 }
