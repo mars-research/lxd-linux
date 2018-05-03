@@ -301,7 +301,6 @@ int blk_mq_start_request_callee(struct fipc_message *request, struct thc_channel
 	//unsigned int request_cookie;
 	int ret = 0;
 	int tag = fipc_get_reg0(request);
-
 	//MARKER_BEGIN(blk_mq_end_req);	
 	//request_cookie = thc_get_request_cookie(request);
 	//BENCH_BEGIN(async_reply);
@@ -1364,6 +1363,35 @@ static void queue_rq_async_noyield(struct blk_mq_hw_ctx *ctx, struct blk_mq_queu
 		thc_set_msg_type(request, msg_type_request);
     		fipc_send_msg_end(thc_channel_to_fipc(chnl), request);
 
+#ifdef SENDER_DISPATCH_LOOP
+		/* for blk_mq_start_request */
+    		ret = thc_ipc_recv_resp_noyield(chnl, &response);
+	    	if (ret) {
+			printk(KERN_ERR "error receiving response\n");
+			goto fail_async;
+	    	}
+
+//		printk("%s:%d, got msg type %d\n",
+//				__func__, __LINE__,
+//				async_msg_get_fn_type(response));
+
+		dispatch_async_loop(chnl, response, c_cspace,
+				hidden_args->sync_ep);
+
+		/* for blk_mq_end_request */
+    		ret = thc_ipc_recv_resp_noyield(chnl, &response);
+	    	if (ret) {
+			printk(KERN_ERR "error receiving response\n");
+			goto fail_async;
+	    	}
+
+//		printk("%s:%d, got msg type %d\n",
+//				__func__, __LINE__,
+//				async_msg_get_fn_type(response));
+
+		dispatch_async_loop(chnl, response, c_cspace,
+				hidden_args->sync_ep);
+#endif
 		/* receive message */
 		//BENCH_BEGIN(async_reply);
     		ret = thc_ipc_recv_resp_noyield(chnl, &response);
@@ -1519,6 +1547,14 @@ fail_async:
 	return;
 }
 
+struct cptr sync_ep;
+/* sender side dispatch loop callback - called by thc_ipc_recv_req_resp */
+int sender_dispatch(struct thc_channel *chnl, struct fipc_message *out, void *arg)
+{
+	return dispatch_async_loop(chnl, out, c_cspace, sync_ep); 
+}
+
+
 /* Async variant of queue_rq which does DO_FINISH of
  * passing requests to LCD */
 void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_async *bd_async, 
@@ -1547,6 +1583,7 @@ void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_asyn
 			struct blk_mq_queue_data bd;
 		      	struct fipc_message *request;
         		struct fipc_message *response;
+			unsigned int request_cookie;
 			int ret; 
 		
 			//printk("[KLCD] ^^async inside do_fin \n");
@@ -1582,7 +1619,15 @@ void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_asyn
 				/* If KLCD or more than 1 items in list - take the ipc_call route */
 				//if(chnl == hidden_args->async_chnl || items > 1) {
 				//BENCH_BEGIN(async_reply);
+#ifdef SENDER_DISPATCH_LOOP
+				ret = thc_ipc_send_request(chnl, request, &request_cookie);
+				ret = thc_ipc_recv_req_resp(chnl, &response, request_cookie, sender_dispatch, (void*)rq);
+
+				fipc_recv_msg_end(thc_channel_to_fipc(chnl), response);
+#else
 				ret = thc_ipc_call(chnl, request, &response);
+#endif
+				//ret = thc_ipc_call(chnl, request, &response);
 				//} else {
 					//BENCH_BEGIN(async_reply);
 				//	ret = thc_ipc_call_noyield_single_chnl(chnl, request, &response);

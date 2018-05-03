@@ -16,6 +16,7 @@
 
 
 #define PMFS_ASYNC_RPC_BUFFER_ORDER 20
+#define SENDER_DISPATCH_LOOP
 
 enum dispatch_t {
         BLK_MQ_ALLOC_TAG_SET,

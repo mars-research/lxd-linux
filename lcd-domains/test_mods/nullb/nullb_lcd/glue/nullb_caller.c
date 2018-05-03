@@ -22,6 +22,12 @@ struct thc_channel *disp_chnl[2];
 struct blk_mq_hw_ctx_container *ctx_container_g; 
 struct blk_mq_ops_container *ops_container_g;
 
+struct lcd_request_container {
+	struct request rq;
+	void *channel;
+	unsigned int cookie;
+};
+
 //INIT_BENCHMARK_DATA_LCD(queue_rq);
 
 int glue_nullb_init(void)
@@ -483,7 +489,12 @@ void blk_mq_end_request(struct request *rq, int error)
 {
 	int ret;
 	struct fipc_message *request;
+	struct lcd_request_container *rq_c;
+	struct thc_channel *async_chnl;
+
+#ifndef SENDER_DISPATCH_LOOP
 	static int index = 0;
+#endif
 	//static int count = 0;
 	//struct fipc_message *response;
 	//uint32_t request_cookie;
@@ -491,7 +502,16 @@ void blk_mq_end_request(struct request *rq, int error)
 	//printk("[LCD_GLUE] END_REQ glue begins \n");
 	//BENCH_BEGIN_LCD(queue_rq);
 	//count ++;
-	ret = async_msg_blocking_send_start(disp_chnl[index], &request);
+	rq_c = container_of(rq,
+			struct lcd_request_container, rq);
+
+#ifdef SENDER_DISPATCH_LOOP
+	async_chnl = rq_c->channel;
+#else
+	async_chnl = disp_chnl[index];
+#endif
+
+	ret = async_msg_blocking_send_start(async_chnl, &request);
 	if (ret) {
 		LIBLCD_ERR("failed to get a send slot");
 		goto fail_async;
@@ -504,7 +524,10 @@ void blk_mq_end_request(struct request *rq, int error)
 	fipc_set_reg1(request, error);
 	
 	thc_set_msg_type(request, msg_type_request);
-	fipc_send_msg_end (thc_channel_to_fipc(disp_chnl[index]), request);
+#ifdef SENDER_DISPATCH_LOOP
+	thc_set_msg_id(request, rq_c->cookie);
+#endif
+	fipc_send_msg_end (thc_channel_to_fipc(async_chnl), request);
 
 	//if(count == 2) {
 		/* toggle index */
@@ -587,11 +610,21 @@ void blk_mq_start_request(struct request *rq)
 {
 	int ret;
 	struct fipc_message *request;
+	struct lcd_request_container *rq_c;
+	struct thc_channel *async_chnl;
 	//struct fipc_message *response;
 	//uint32_t request_cookie;
 
+	rq_c = container_of(rq,
+			struct lcd_request_container, rq);
+
+#ifdef SENDER_DISPATCH_LOOP
+	async_chnl = rq_c->channel;
+#else
+	async_chnl = blk_async_chl;
+#endif
 	//printk("[LCD_GLUE] START_REQ glue begins \n");
-	ret = async_msg_blocking_send_start(blk_async_chl, &request);
+	ret = async_msg_blocking_send_start(async_chnl, &request);
 	if (ret) {
 		LIBLCD_ERR("failed to get a send slot");
 		goto fail_async;
@@ -618,7 +651,10 @@ void blk_mq_start_request(struct request *rq)
 	//}
 	
 	thc_set_msg_type(request, msg_type_request);
-	fipc_send_msg_end (thc_channel_to_fipc(blk_async_chl), request);
+#ifdef SENDER_DISPATCH_LOOP
+	thc_set_msg_id(request, rq_c->cookie);
+#endif
+	fipc_send_msg_end (thc_channel_to_fipc(async_chnl), request);
 	return;
 
 fail_async:
@@ -1101,7 +1137,8 @@ int queue_rq_fn_callee(struct fipc_message *request, struct thc_channel *channel
 	struct blk_mq_hw_ctx_container *ctx_container = ctx_container_g;	
 	struct blk_mq_ops_container *ops_container = ops_container_g;
 	struct blk_mq_queue_data bd;
-	struct request rq;
+	struct lcd_request_container rq_c;
+	struct request *rq = &rq_c.rq;
 	int ret;
 	int func_ret;
 	
@@ -1123,10 +1160,14 @@ int queue_rq_fn_callee(struct fipc_message *request, struct thc_channel *channel
 //		goto fail_lookup;
 //	}
 
-	rq.tag = fipc_get_reg3(request);
-	bd.rq = &rq;
+	rq->tag = fipc_get_reg3(request);
+	bd.rq = rq;
 
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
+#ifdef SENDER_DISPATCH_LOOP
+	rq_c.channel = channel;
+	rq_c.cookie = request_cookie;
+#endif
 	func_ret = ops_container->blk_mq_ops.queue_rq(&ctx_container->blk_mq_hw_ctx,
 				&bd);
 	
