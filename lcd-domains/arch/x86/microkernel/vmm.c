@@ -13,6 +13,8 @@
 #include <asm/lcd_domains/microkernel.h>
 #include <lcd_domains/microkernel.h>
 
+#define VMM_STACK_SIZE 4096
+
 int lcd_arch_run(struct lcd_arch *lcd_arch)
 {
 	int ret;
@@ -154,22 +156,25 @@ out:
 	return ret;
 }
 
-static int vmm_loop(struct lcd_vmm *vmm)
+void vmm_loop(void)
 {
 	int ret;
 	int vmm_ret = 0;
+	struct lcd_vmm *vmm =  __this_cpu_read(vmm);
+
 	/*
 	 * Enter run loop, check after each iteration if we should stop
 	 */
 	for (;;) {
-		ret = vmm_run_once(vmm, &vmm_ret);
+		ret = vmm_run_once(vmm, &vmm->ret);
 		if (ret < 0 || should_stop(vmm)) {
 			lcd_arch_dump_vmm(vmm->lcd_arch);
-			return ret;
+			vmm->ret = ret;
+			return; 
 		} else if (ret == 1) {
 			LCD_MSG("icount is %d", icount);
 			/* lcd exited */
-			return lcd_ret;
+			return;
 		} else {
 			/* ret = 0; continue */
 #ifndef CONFIG_PREEMPT
@@ -186,25 +191,71 @@ static int vmm_loop(struct lcd_vmm *vmm)
 	/* unreachable */
 }
 
-/* Start executing the minimal hypervisor on a new stack */
-static int __vmm_enter(unsigned int s) {
+// SWIZZLE_DEF:
+//  - _NAME: name of the function
+//  - _NS:   new stack, address just above top of commited region
+//  - _FN:   (nested) function to call:  void _FN(void)
 
-	/* Thunk to continue execution on the new stack */
-	THUNK(vmm_loop); 
+#define SWIZZLE_DEF_(_NAME,_NS,_FN)                                     \
+  noinline void _NAME(void) {                                           \
+    __asm__ volatile("movq %0, %%rdi      \n\t" /* put NS to %rdi   */  \
+                     "subq $8, %%rdi      \n\t" /* fix NS address   */  \
+                     "movq %%rsp, (%%rdi) \n\t" /* store sp to NS   */  \
+                     "movq %%rdi, %%rsp   \n\t" /* set sp to NS     */  \
+                     "call " _FN "        \n\t" /* call _FN         */  \
+                     "popq %%rsp          \n\t" /* restore old sp   */  \
+                     :                                                  \
+                     : "m" (_NS)                                        \
+                     : "memory", "cc", "rsi", "rdi");                   \
+  }
+
+
+/* Start executing the minimal hypervisor on a new stack */
+static void __vmm_enter(void * new_stack) {
+
+	/* Define function to enter _nested on a new stack */               
+	//auto void _swizzle(void) __asm__(SWIZZLE_FN_STRING(_C));            
+	SWIZZLE_DEF_(__vmm_loop, _new_stack, vmm_loop);
+
+	/* Swizzle to continue execution of vmm_loop on 
+	 * the new stack */
+	__vmm_loop(); 
 }
 
 /* Prepare the EPT for the monolithic Linux kernel to 
  * run it in the VT-x non-root */
-static int vmm_prepare_ept(struct lcd_arch_vmm *vmm) {
+static int vmm_prepare_ept(struct lcd_vmm *vmm) {
 
 };
 
-/* Enter the VT-x root mode */
+/* Prepare the stack for the execution of the hypervisor
+ * (VT-x root)
+ */
+static int vmm_alloc_stack(struct lcd_vmm *vmm) {
 
-static void vmm_enter(void *unused)
+	vmm->stack = kmalloc(VMM_STACK_SIZE, GFP_KERNEL);
+	if (!vmm->stack) {
+		D_ERR("VMM stack allocation failed, cpu:%d\n", );
+		return -1; 
+ 	}
+
+	// Note that sizeof(void) = 1 not 8.
+	vmm->stack += VMM_STACK_SIZE;
+	return 0;
+};
+
+static void vmm_free_stack(struct lcd_vmm *vmm) {
+	assert(vmm->stack); 
+	vmm->stack -= VMM_STACK_SIZE;
+    	kfree(vmm->stack);
+	return; 
+}
+
+/* Enter the VT-x root mode */
+static int vmm_enter(void *unused)
 {
 	int ret;
-	struct lcd_arch_vmm *vmm;
+	struct lcd_vmm *vmm;
 
 	vmm = __this_cpu_read(vmm);
 
@@ -212,13 +263,17 @@ static void vmm_enter(void *unused)
 	if (ret) 
 		goto failed; 
 
+	ret = vmm_alloc_stack(vmm); 
+	if (ret) 
+		goto failed; 
+
 	__vmm_enter(vmm->stack); 
 
 	LCD_MSG("Entered VMM on CPU %d\n", raw_smp_processor_id());
 
-	return;
+	return vmm->ret;
 failed: 
 	atomic_inc(&vmm_enter_failed);
 	LCD_ERR("failed to enter VMM, err = %d\n", ret);
-	return; 
+	return -1; 
 }
