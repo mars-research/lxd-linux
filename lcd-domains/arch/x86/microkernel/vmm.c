@@ -123,16 +123,16 @@ out:
 	return ret;
 }
 
-static int should_stop(struct lcd *lcd)
+static int should_stop(struct lcd_vmm *vmm)
 {
 	int ret;
 
 	/*
 	 * Check our status
 	 */
-	switch(get_lcd_status(lcd)) {
+	switch(get_vmm_status(lcd)) {
 
-	case LCD_STATUS_DEAD:
+	case LCD_STATUS_EXIT:
 		/*
 		 * We're dead; return 1 to signal to caller.
 		 * (kthread_should_stop would also become true at some
@@ -156,18 +156,22 @@ out:
 	return ret;
 }
 
-void vmm_loop(void)
+void vmm_loop(struct lcd_vmm *vmm)
 {
 	int ret;
 	int vmm_ret = 0;
-	struct lcd_vmm *vmm =  __this_cpu_read(vmm);
+
+
+	/* Deprivilege the host */
+
+	vmm_deprivilege(vmm); 
 
 	/*
 	 * Enter run loop, check after each iteration if we should stop
 	 */
 	for (;;) {
 		ret = vmm_run_once(vmm, &vmm->ret);
-		if (ret < 0 || should_stop(vmm)) {
+		if (ret < 0 || vmm_should_stop(vmm)) {
 			lcd_arch_dump_vmm(vmm->lcd_arch);
 			vmm->ret = ret;
 			return; 
@@ -191,35 +195,102 @@ void vmm_loop(void)
 	/* unreachable */
 }
 
-// SWIZZLE_DEF:
-//  - _NAME: name of the function
-//  - _NS:   new stack, address just above top of commited region
-//  - _FN:   (nested) function to call:  void _FN(void)
+#define SAVE_CALLEE_REGS()						\
+  __asm__ volatile ("" : : : "rbx", "r12", "r13", "r14", "r15",         \
+		    "memory", "cc")
+struct cont_t {
+  // Fields representing the code to run when the AWE is executed.
+  void  *eip;
+  void  *ebp;
+  void  *esp;
+}
 
-#define SWIZZLE_DEF_(_NAME,_NS,_FN)                                     \
-  noinline void _NAME(void) {                                           \
-    __asm__ volatile("movq %0, %%rdi      \n\t" /* put NS to %rdi   */  \
-                     "subq $8, %%rdi      \n\t" /* fix NS address   */  \
-                     "movq %%rsp, (%%rdi) \n\t" /* store sp to NS   */  \
-                     "movq %%rdi, %%rsp   \n\t" /* set sp to NS     */  \
-                     "call " _FN "        \n\t" /* call _FN         */  \
-                     "popq %%rsp          \n\t" /* restore old sp   */  \
-                     :                                                  \
-                     : "m" (_NS)                                        \
-                     : "memory", "cc", "rsi", "rdi");                   \
-  }
+/*
+         static void vmm_on_alt_stack_0(void *stack,   // rdi
+                                        void *fn,      // rsi
+                                        void *args)    // rdx
+*/
+__asm__ ("      .text \n\t"
+         "      .align  16                  \n\t"
+         "vmm_on_alt_stack_0:               \n\t"
+         " sub $8, %rdi                     \n\t"
+         " mov %rsp, (%rdi)                 \n\t" // Save old ESP on new stack
+         " mov %rdi, %rsp                   \n\t" // Set up new stack pointer
+         " mov %rdx, %rdi                   \n\t" // Move args into rdi
+         " call *%rsi                       \n\t" // Call callee (args in rdi)
+         " pop %rsp                         \n\t" // Restore old ESP
+         " ret                              \n\t");
+
+
+
+typedef void (*cont_fn_t)(void *cont, void *args);
+
+
+/*
+ *  Create continuation saving it in cont and call the function 
+ *  that is passed to us as a pointer
+ *
+ *  void _vmm_call_cont_direct(cont_t *cont,   // rdi
+ *                             void *args,     //rsi
+ *                             cont_fn_t fn)   // rdx
+*/
+
+__asm__ ("      .text \n\t"
+         "      .align  16           \n\t"
+         "      .globl  _vmm_call_cont_direct \n\t"
+         "      .type   _vmm_call_cont_direct, @function \n\t"
+         "_vmm_callcont_direct:             \n\t"
+         " mov  0(%rsp), %rax        \n\t" // return address into RAX
+         " mov  %rax,  0(%rdi)       \n\t" // EIP (our return address)
+         " mov  %rbp,  8(%rdi)       \n\t" // EBP
+         " mov  %rsp, 16(%rdi)       \n\t" // ESP+8 (after return)
+         " addq $8,   16(%rdi)       \n\t"
+         // cont now initialized.  Call the function
+         // rdi : cont , rsi : args , rdx : fn
+         " jmpq  %rdx                \n\t"
+         " int3\n\t");
+
+
+void vmm_enter_switch_stack(void *cont, void *args) {
+
+	struct lcd_vmm * vmm = (struct lcd_vmm *)args;
+	vmm->cont = (cont_t*) cont;
+
+	/* Execute vmm_loop() on the new stack  
+	 *
+	 * _vmm_on_alt_stack_0() calls vmm_loop() on the new stack --- this stack will be 
+	 * used by the hypervisor. 
+	 *
+	 * Inside the guest, i.e., inside dprivileged kernel we 
+	 * return to the continuation we created before */
+
+	vmm_on_alt_stack_0(vmm->stack, vmm_loop, vmm);
+	return; 
+};
+
+#define CALL_CONT(_CONT,_FN,_ARG) 				\
+	do { 							\
+		SAVE_CALLEE_REGS();  				\
+		_vmm_callcont_direct(_CONT, _ARG, _FN);		\
+      	} while (0)
 
 
 /* Start executing the minimal hypervisor on a new stack */
-static void __vmm_enter(void * new_stack) {
+void __vmm_enter(void * new_stack) {
 
-	/* Define function to enter _nested on a new stack */               
-	//auto void _swizzle(void) __asm__(SWIZZLE_FN_STRING(_C));            
-	SWIZZLE_DEF_(__vmm_loop, _new_stack, vmm_loop);
 
-	/* Swizzle to continue execution of vmm_loop on 
-	 * the new stack */
-	__vmm_loop(); 
+	/* We enter VMM in two steps
+	 *
+	 * First, _vmm_callcont_direct() creates a continuation allowing 
+	 * the VMM to come back to guest and continue its execution at 
+	 * the point after _vmm_callcont_direct() returns. 
+	 *
+	 * Second, inside vmm_enter_swotch_stack() we use __vmm_loop() 
+	 * to switch execution to the new stack. 
+	 */
+
+	CALL_CONT(&vmm->cont, (void*) vmm, vmm_enter_switch_stack); 
+	return; 
 }
 
 /* Prepare the EPT for the monolithic Linux kernel to 
@@ -251,7 +322,10 @@ static void vmm_free_stack(struct lcd_vmm *vmm) {
 	return; 
 }
 
-/* Enter the VT-x root mode */
+/* Enter the VT-x root mode. We enter the VT-x root mode on a new stack. 
+ * The hypervisor will keep spinning until the kernel asks it to exit 
+ * by updating the vmm data structure (setting vmm->status to EXIT), and triggering 
+ * an exit into the hypervisor. */
 static int vmm_enter(void *unused)
 {
 	int ret;
@@ -267,13 +341,16 @@ static int vmm_enter(void *unused)
 	if (ret) 
 		goto failed; 
 
-	__vmm_enter(vmm->stack); 
+	/* We enter the hypervisor and continue in the guest at vmm_enter_ack */
+	__vmm_enter(vmm->stack);	
 
 	LCD_MSG("Entered VMM on CPU %d\n", raw_smp_processor_id());
 
-	return vmm->ret;
+	return 0; 
+
 failed: 
 	atomic_inc(&vmm_enter_failed);
 	LCD_ERR("failed to enter VMM, err = %d\n", ret);
 	return -1; 
 }
+
