@@ -208,6 +208,22 @@ struct lcd {
 	} while(0);
 #define get_lcd_xmit(lcd) (atomic_read(&(lcd)->xmit_flag))
 
+/* similar to task structs */
+#define set_vmm_status(vmm, status_value)			\
+	do {							\
+		atomic_set(&(vmm)->status, (status_value));	\
+		smp_mb();					\
+	} while(0);					
+#define get_vmm_status(vmm) (atomic_read(&(vmm)->status))
+#define vmm_status_embryo(vmm) \
+	(get_lcd_status(vmm) == LCD_STATUS_EMBRYO)
+#define vmm_status_configed(vmm) \
+	(get_vmm_status(vmm) == LCD_STATUS_CONFIGED)
+#define vmm_status_running(vmm) \
+	(get_vmm_status(vmm) == LCD_STATUS_RUNNING)
+#define vmm_status_exit(vmm) \
+	(get_vmm_status(vmm) == LCD_STATUS_EXIT)
+
 
 /* --------------------------------------------------
  * INTERNAL ADDRESS CONVERSIONS
