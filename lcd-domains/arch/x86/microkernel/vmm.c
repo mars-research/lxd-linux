@@ -19,19 +19,6 @@ int lcd_arch_run(struct lcd_arch *lcd_arch)
 {
 	int ret;
 
-	/*
-	 * Load the lcd and invalidate any cached mappings.
-	 *
-	 * *preemption disabled*
-	 */
-	vmx_get_cpu(lcd_arch);
-
-	/*
-	 * Interrupts off
-	 *
-	 * This is important - see Documentation/lcd-domains/vmx.txt.
-	 */
-	local_irq_disable();
 
 	/*
 	 * Enter lcd
@@ -44,10 +31,6 @@ int lcd_arch_run(struct lcd_arch *lcd_arch)
 	 */
 	ret = vmx_handle_exception_interrupt(lcd_arch);
 	
-	/*
-	 * Now turn interrupts back on.
-	 */
-	local_irq_enable();
 
 	if (ret) {
 		/*
@@ -64,19 +47,6 @@ int lcd_arch_run(struct lcd_arch *lcd_arch)
 	 */
 	ret = vmx_handle_other_exits(lcd_arch);
 
-out:
-	/*
-	 * Preemption enabled
-	 */
-	vmx_put_cpu(lcd_arch);	
-
-	/*
-	 * If there was an error, dump the lcd's state.
-	 */
-	if (ret < 0)
-		lcd_arch_dump_lcd(lcd_arch);
-
-	return ret;
 }
 
 /* RUN LOOP -------------------------------------------------- */
@@ -156,15 +126,41 @@ out:
 	return ret;
 }
 
+void vmm_set_entry_point(struct lcd_vmm *vmm) {
+
+	
+	return; 
+};
+
+
 void vmm_loop(struct lcd_vmm *vmm)
 {
 	int ret;
 	int vmm_ret = 0;
 
 
-	/* Deprivilege the host */
+	/* Set entry point for the host using vmm->cont */
+	vmm_set_entry_point(vmm); 
 
-	vmm_deprivilege(vmm); 
+	/*
+	 * Load vmcs pointer on this cpu
+	 */
+	//vmcs_load(vmm->lcd_arch->vmcs);
+	
+	/*
+	 * Load the lcd and invalidate any cached mappings.
+	 *
+	 * *preemption disabled*
+	 */
+	vmx_get_cpu(vmm->lcd_arch);
+
+	/*
+	 * Interrupts off
+	 *
+	 * This is important - see Documentation/lcd-domains/vmx.txt.
+	 */
+	local_irq_disable();
+
 
 	/*
 	 * Enter run loop, check after each iteration if we should stop
@@ -174,11 +170,11 @@ void vmm_loop(struct lcd_vmm *vmm)
 		if (ret < 0 || vmm_should_stop(vmm)) {
 			lcd_arch_dump_vmm(vmm->lcd_arch);
 			vmm->ret = ret;
-			return; 
+			goto out; 
 		} else if (ret == 1) {
 			LCD_MSG("icount is %d", icount);
 			/* lcd exited */
-			return;
+			goto out;
 		} else {
 			/* ret = 0; continue */
 #ifndef CONFIG_PREEMPT
@@ -193,6 +189,26 @@ void vmm_loop(struct lcd_vmm *vmm)
 	}
 	
 	/* unreachable */
+
+out:
+	/*
+	 * Now turn interrupts back on.
+	 */
+	local_irq_enable();
+
+	/*
+	 * Preemption enabled
+	 */
+	vmx_put_cpu(lcd_arch);	
+
+	/*
+	 * If there was an error, dump the lcd's state.
+	 */
+	if (ret < 0)
+		lcd_arch_dump_lcd(lcd_arch);
+
+	return ret;
+
 }
 
 #define SAVE_CALLEE_REGS()						\
