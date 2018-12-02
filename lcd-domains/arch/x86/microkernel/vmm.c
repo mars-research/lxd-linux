@@ -15,29 +15,381 @@
 
 #define VMM_STACK_SIZE 4096
 
-int lcd_arch_run(struct lcd_arch *lcd_arch)
+typedef enum {
+	EXCEPTION_BENIGN,
+	EXCEPTION_CONTRIBUTORY,
+	EXCEPTION_PAGE_FAULT,
+} except_class_t;
+
+
+static inline except_class_t exception_class(u8 vec)
+{
+	switch (vec) {
+	case X86_TRAP_PF:
+		return EXCEPTION_PAGE_FAULT;
+	case X86_TRAP_DE:
+	case X86_TRAP_TS:
+	case X86_TRAP_NP:
+	case X86_TRAP_SS:
+	case X86_TRAP_GP:
+		return EXCEPTION_CONTRIBUTORY;
+	}
+
+	return EXCEPTION_BENIGN;
+}
+
+static inline void vmm_pack_irq(struct pending_irq *pirq, u32 instr_len, u16 intr_type,
+				 u8 vector, bool has_err, u32 ec)
+{
+	u32 irq = vector | intr_type | INTR_INFO_VALID_MASK;
+	if (has_err)
+		irq |= INTR_INFO_DELIVER_CODE_MASK;
+
+	pirq->pending = true;
+	pirq->err = ec;
+	pirq->instr_len = instr_len;
+	pirq->bits = irq & ~INTR_INFO_RESVD_BITS_MASK;
+}
+
+/* AB: borrow inject IRQ code from KSM */
+static inline void vmm_inject_irq(struct lcd_arch *lcd_arch, u32 instr_len, u16 intr_type,
+				   u8 vector, bool has_err, u32 ec)
+{
+	/*
+	 * Queue the IRQ, no injection happens here.
+	 * In case we have contributory exceptions that follow, then
+	 * we overwrite the previous with the appropriate IRQ.
+	 */
+	if (lcd_arch->pending_irq.pending) {
+		u8 prev_vec = (u8)lcd_arch->pending_irq.bits;
+		BUG(prev_vec == X86_TRAP_DF);	/* FIXME: Triple fault  */
+
+		except_class_t lhs = exception_class(prev_vec);
+		except_class_t rhs = exception_class(vector);
+		if ((lhs == EXCEPTION_CONTRIBUTORY && rhs == EXCEPTION_CONTRIBUTORY) ||
+		    (lhs == EXCEPTION_PAGE_FAULT && rhs != EXCEPTION_BENIGN))
+			return vmm_pack_irq(lcd_arch->pending_irq, 
+					instr_len, 
+					INTR_TYPE_HARD_EXCEPTION,
+					X86_TRAP_DF, true, 0);
+	}
+
+	return vmm_pack_irq(lcd_arch->pending_irq, instr_len, intr_type, vector, has_err, ec);
+}
+
+static int vmm_handle_exception_nmi(struct lcd_arch *lcd_arch)
+{
+	u32 intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
+	u16 intr_type = intr_info & INTR_INFO_INTR_TYPE_MASK;
+	u8 vector = intr_info & INTR_INFO_VECTOR_MASK;
+
+	u32 instr_len = 0;
+	if (intr_type & INTR_TYPE_HARD_EXCEPTION && vector == X86_TRAP_PF)
+		__writecr2(vmcs_read(EXIT_QUALIFICATION));
+	else
+		instr_len = vmcs_read32(VM_EXIT_INSTRUCTION_LEN);
+
+	bool has_err = intr_info & INTR_INFO_DELIVER_CODE_MASK;
+	u32 err = vmcs_read32(IDT_VECTORING_ERROR_CODE);
+	vcpu_inject_irq(lcd_arch, instr_len, intr_type, vector, has_err, err);
+
+	return 0;
+}
+
+static int vmm_handle_exit(struct lcd_arch *lcd_arch)
+{
+	int ret;
+	int type;
+
+	switch (lcd_arch->exit_reasn) {
+	case EXIT_REASON_EXCEPTION_NMI:
+		ret = vcpu_handle_exception_nmi(lcd_arch);
+		break;
+	case EXIT_REASON_EXTERNAL_INTERRUPT:
+		ret = vcpu_hadnle_external_int(); 
+		break; 
+	case EXIT_REASON_TRIPLE_FAULT: 
+		ret = vcpu_handle_triplefault(); 
+	case EXIT_REASON_INIT_SIGNAL:
+		ret = vcpu_nop();
+		break; 
+	case EXIT_REASON_STARTUP_IPI:
+		ret = vcpu_nop();
+		break; 
+	case EXIT_REASON_SMI_INTERRUPT:
+	       	ret = vcpu_nop();
+		break; 
+	case EXIT_REASON_OTHER_SMI:
+		ret = vcpu_nop(); 
+		break; 
+	case EXIT_REASON_PENDING_INTERRUPT:
+		ret = vcpu_nop();
+		break; 
+	case EXIT_REASON_NMI_WINDOW:
+	       	ret = vcpu_nop(); 
+		break; 
+	case EXIT_REASON_TASK_SWITCH
+		ret = vcpu_handle_taskswitch();
+		break; 
+	case EXIT_REASON_CPUID:
+		ret = vcpu_handle_cpuid();
+		break; 
+	case EXIT_REASON_GETSEC 
+		ret = vcpu_nop();
+		break; 
+	case EXIT_REASON_HLT:
+		ret = vcpu_handle_hlt();
+		break;
+	case EXIT_REASON_INVD:
+		ret = vcpu_handle_invd();
+		break; 
+	case EXIT_REASON_INVLPG:
+		ret = vcpu_handle_invlpg(); 
+		break; 
+	case EXIT_REASON_RDPMC:
+		ret = vcpu_nop();
+		break;
+	case EXIT_REASON_RDTSC:
+		ret = vcpu_handle_rdtsc(); 
+		break;
+	case EXIT_REASON_RSM:
+		ret = vcpu_nop(); 
+
+	case EXIT_REASON_VMCALL:
+		ret = vcpu_handle_vmcall();
+		break;
+
+	case EXIT_REASON_VMCLEAR:
+		ret = vcpu_handle_vmx(); 
+		break
+
+	case EXIT_REASON_VMLAUNCH:
+		ret = vcpu_handle_vmx(); 
+		break;
+
+	case EXIT_REASON_VMPTRLD:
+		ret = vcpu_handle_vmx()
+		break;
+
+	case EXIT_REASON_VMPTRST:
+		ret = vcpu_handle_vmx(); 
+		break;
+
+	case EXIT_REASON_VMREAD:
+		ret = vcpu_handle_vmx();
+		break;
+
+	case EXIT_REASON_VMRESUME: 
+		ret = vcpu_handle_vmx(); 
+		break;
+
+	case EXIT_REASON_VMWRITE:
+		ret = vcpu_handle_vmx();
+		break;
+
+	case EXIT_REASON_VMOFF:
+		ret = vcpu_handle_vmx();
+		break;
+
+	case EXIT_REASON_VMON:
+		ret = vcpu_handle_vmx(); 
+		break;
+
+	case EXIT_REASON_INVEPT:
+		ret = vcpu_handle_vmx(); 
+		break;
+
+	case EXIT_REASON_INVVPID:
+		ret = vcpu_handle_vmx(); 
+		break;
+
+	case EXIT_REASON_CR_ACCESS:
+		ret = vcpu_handle_cr_access(); 
+		break;
+
+	case EXIT_REASON_DR_ACCESS:
+		ret = vcpu_handle_dr_access(); 
+		break;
+
+	case EXIT_REASON_IO_INSTRUCTION:
+		ret = vcpu_handle_io_instr(); 
+		break;
+
+	case EXIT_REASON_MSR_READ:
+		ret = vcpu_handle_rdmsr(); 
+		break;
+
+	case EXIT_REASON_MSR_WRITE:
+		ret = vcpu_handle_wrmsr(); 
+		break;
+
+	case EXIT_REASON_INVALID_STATE:
+		ret = vcpu_handle_invalid_state(); 
+		break;
+
+	case EXIT_REASON_MSR_LOAD_FAIL:
+		ret = vcpu_nop(); 
+		break;
+
+	case EXIT_REASON_UNKNOWN35:
+		ret = vcpu_nop(); 
+		break;
+
+	case EXIT_REASON_MWAIT_INSTRUCTION:
+		ret = vcpu_nop(); 
+		break;
+
+	case EXIT_REASON_MONITOR_TRAP_FLAG: 
+		ret = vcpu_handle_mtf();
+		break;
+
+	case EXIT_REASON_UNKNOWN38: 
+		ret = vcpu_nop(); 
+		break;
+
+	case EXIT_REASON_MONITOR_INSTRUCTION:
+		ret = vcpu_nop(); 
+		break;
+
+	case EXIT_REASON_PAUSE_INSTRUCTION: 
+		ret = vcpu_nop(); 
+		break;
+
+	case EXIT_REASON_MCE_DURING_VMENTRY:
+		ret = vcpu_nop(); 
+		break;
+
+	case EXIT_REASON_UNKNOWN42: 
+		ret = vcpu_nop(); 
+		break;
+
+	case EXIT_REASON_TPR_BELOW_THRESHOLD: 
+		ret = vcpu_handle_tpr_threshold(); 
+		break;
+
+	case EXIT_REASON_APIC_ACCESS: 
+		ret = vcpu_handle_apic_access(); 
+		break;
+
+	case EXIT_REASON_EOI_INDUCED: 
+		ret = vcpu_handle_eoi_induced(); 
+		break;
+
+	case EXIT_REASON_GDT_IDT_ACCESS:
+		ret = vcpu_handle_gdt_idt_access(); 
+		break;
+
+	case EXIT_REASON_LDT_TR_ACCESS:
+		ret = vcpu_handle_ldt_tr_access(); 
+		break;
+
+	case EXIT_REASON_EPT_VIOLATION:
+		ret = vcpu_handle_ept_violation();
+		break;
+
+	case EXIT_REASON_EPT_MISCONFIG:
+		ret = vcpu_handle_ept_misconfig(); 
+		break;
+
+	case EXIT_REASON_RDTSCP:
+		ret = vcpu_handle_rdtscp(); 
+		break;
+
+	case EXIT_REASON_PREEMPTION_TIMER:
+		ret = vcpu_nop(); 
+		break;
+
+	case EXIT_REASON_WBINVD:
+		ret = vcpu_handle_wbinvd(); 
+		break;
+
+	case EXIT_REASON_XSETBV:
+		ret = vcpu_handle_xsetbv(); 
+		break;
+
+	case EXIT_REASON_APIC_WRITE:
+		ret = vcpu_handle_apic_write(); 
+		break;
+
+	case EXIT_REASON_RDRAND:
+		ret = vcpu_nop(); 
+		break;
+
+	case EXIT_REASON_INVPCID:
+		ret = vcpu_nop(); 
+		break;
+
+	case EXIT_REASON_VMFUNC:
+		ret = vcpu_handle_vmfunc(); 
+		break;
+
+	case EXIT_REASON_ENCLS:
+		ret = vcpu_nop(); 
+		break;
+
+	case EXIT_REASON_RDSEED:
+		ret = vcpu_nop(); 
+		break;
+
+	case EXIT_REASON_PML_FULL:
+		ret = vcpu_handle_pml_full(); 
+		break;
+
+	case EXIT_REASON_XSAVES: 
+		ret = vcpu_nop();
+		break;
+
+	case EXIT_REASON_XRSTORS:
+		ret = vcpu_nop(); 
+		break;
+
+	case EXIT_REASON_PCOMMIT:
+		ret = vcpu_nop(); 
+		break;
+	default:
+		LCD_ERR("unhandled exit reason %d", lcd_arch->exit_reason);
+		ret = -EIO;
+		break;
+	}
+
+
+	/* AB: I borrow injection code from KSM */
+	if (lcd_arch->pending_irq.pending) {
+		bool injected = false;
+
+		if (ilcd_arch->pending_irq.bits & INTR_INFO_DELIVER_CODE_MASK)
+			injected = vmcs_write32(VM_ENTRY_EXCEPTION_ERROR_CODE, lcd_arch->pending_irq.err) == 0;
+
+		injected &= vmcs_write32(VM_ENTRY_INTR_INFO_FIELD, lcd_arch->pending_irq.bits) == 0;
+		if (lcd_arch->pending_irq.instr_len)
+			injected &= vmcs_write32(VM_ENTRY_INSTRUCTION_LEN, lcd_arch->pending_irq.instr_len) == 0;
+
+		lcd_arch->pending_irq.pending = !injected;
+	}
+
+	return ret;
+}
+
+int lcd_vmm_arch_run(struct lcd_arch *lcd_arch)
 {
 	int ret;
 
 
 	/*
-	 * Enter lcd
+	 * Enter lcd with vmlaunch/vmresume
 	 */
 	vmx_enter(lcd_arch);
 
 	/*
-	 * Check/handle nmi's, exceptions, and external interrupts *before*
-	 * we re-enable interrupts.
+	 * Check/handle nmi's, exceptions, and external interrupts 
 	 */
-	ret = vmx_handle_exception_interrupt(lcd_arch);
-	
-
+	ret = vmm_handle_exit(lcd_arch);
 	if (ret) {
 		/*
 		 * We exited due to an exception, nmi, or external interrupt.
 		 * All done.
 		 */
-		goto out;
+		return 0; 
 	}
 
 	/*
@@ -45,7 +397,7 @@ int lcd_arch_run(struct lcd_arch *lcd_arch)
 	 *
 	 * Intel SDM V3 Appendix C
 	 */
-	ret = vmx_handle_other_exits(lcd_arch);
+	//ret = vmx_handle_other_exits(lcd_arch);
 
 }
 
