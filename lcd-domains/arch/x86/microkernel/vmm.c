@@ -15,6 +15,7 @@
 
 #define VMM_STACK_SIZE 4096
 
+#if 0
 typedef enum {
 	EXCEPTION_BENIGN,
 	EXCEPTION_CONTRIBUTORY,
@@ -96,81 +97,252 @@ static int vmm_handle_exception_nmi(struct lcd_arch *lcd_arch)
 	return 0;
 }
 
+#endif
+
+static char *vmm_exit_to_str(struct lcd_arch *lcd_arch) {
+	switch (lcd_arch->exit_reason) {
+	case EXIT_REASON_EXCEPTION_NMI:
+		return "EXIT_REASON_EXCEPTION_NMI";
+	case EXIT_REASON_EXTERNAL_INTERRUPT:
+		return "EXIT_REASON_EXTERNAL_INTERRUPT";
+	case EXIT_REASON_TRIPLE_FAULT:
+		return "EXIT_REASON_TRIPLE_FAULT"; 
+	case EXIT_REASON_INIT_SIGNAL:
+		return "EXIT_REASON_INIT_SIGNAL";
+	case EXIT_REASON_STARTUP_IPI:
+		return "EXIT_REASON_STARTUP_IPI";
+	case EXIT_REASON_SMI_INTERRUPT:
+		return "EXIT_REASON_SMI_INTERRUPT";
+	case EXIT_REASON_OTHER_SMI:
+		return "EXIT_REASON_OTHER_SMI";
+	case EXIT_REASON_PENDING_INTERRUPT:
+		return "EXIT_REASON_PENDING_INTERRUPT";
+	case EXIT_REASON_NMI_WINDOW:
+		return "EXIT_REASON_NMI_WINDOW";
+	case EXIT_REASON_TASK_SWITCH:
+		return "EXIT_REASON_TASK_SWITCH"; 
+	case EXIT_REASON_CPUID:
+		return "EXIT_REASON_CPUID";
+	case EXIT_REASON_GETSEC:
+		return "EXIT_REASON_GETSEC";	
+	case EXIT_REASON_HLT:
+		return "EXIT_REASON_HLT";
+	case EXIT_REASON_INVD:
+		return "EXIT_REASON_INVD";
+	case EXIT_REASON_INVLPG:
+		return "EXIT_REASON_INVLPG";
+	case EXIT_REASON_RDPMC:
+		return "EXIT_REASON_RDPMC";
+	case EXIT_REASON_RDTSC:
+		return "EXIT_REASON_RDTSC";
+	case EXIT_REASON_RSM:
+		return "EXIT_REASON_RSM";
+	case EXIT_REASON_VMCALL:
+		return "EXIT_REASON_VMCALL";
+	case EXIT_REASON_VMCLEAR:
+		return "EXIT_REASON_VMCLEAR";
+	case EXIT_REASON_VMLAUNCH:
+		return "EXIT_REASON_VMLAUNCH";
+	case EXIT_REASON_VMPTRLD:
+		return "EXIT_REASON_VMPTRLD";
+	case EXIT_REASON_VMPTRST:
+		return "EXIT_REASON_VMPTRST";
+	case EXIT_REASON_VMREAD:
+		return "EXIT_REASON_VMREAD";
+	case EXIT_REASON_VMRESUME:
+		return "EXIT_REASON_VMRESUME"; 
+	case EXIT_REASON_VMWRITE:
+		return "EXIT_REASON_VMWRITE";
+	case EXIT_REASON_VMOFF:
+		return "EXIT_REASON_VMOFF";
+	case EXIT_REASON_VMON:
+		return "EXIT_REASON_VMON";
+	case EXIT_REASON_INVEPT:
+		return "EXIT_REASON_INVEPT";
+	case EXIT_REASON_INVVPID:
+		return "EXIT_REASON_INVVPID";
+	case EXIT_REASON_CR_ACCESS:
+		return "EXIT_REASON_CR_ACCESS";
+	case EXIT_REASON_DR_ACCESS:
+		return "EXIT_REASON_DR_ACCESS";
+	case EXIT_REASON_IO_INSTRUCTION:
+		return "EXIT_REASON_IO_INSTRUCTION";
+	case EXIT_REASON_MSR_READ:
+		return "EXIT_REASON_MSR_READ";
+	case EXIT_REASON_MSR_WRITE:
+		return "EXIT_REASON_MSR_WRITE";
+	case EXIT_REASON_INVALID_STATE:
+		return "EXIT_REASON_INVALID_STATE";
+	case EXIT_REASON_MSR_LOAD_FAIL:
+		return "EXIT_REASON_MSR_LOAD_FAIL";
+	case EXIT_REASON_UNKNOWN35:
+		return "EXIT_REASON_UNKNOWN35";
+	case EXIT_REASON_MWAIT_INSTRUCTION:
+		return "EXIT_REASON_MWAIT_INSTRUCTION";
+	case EXIT_REASON_MONITOR_TRAP_FLAG:
+		return "EXIT_REASON_MONITOR_TRAP_FLAG"; 
+	case EXIT_REASON_UNKNOWN38:
+		return "EXIT_REASON_UNKNOWN38"; 
+	case EXIT_REASON_MONITOR_INSTRUCTION:
+		return "EXIT_REASON_MONITOR_INSTRUCTION";
+	case EXIT_REASON_PAUSE_INSTRUCTION:
+		return "EXIT_REASON_PAUSE_INSTRUCTION"; 
+	case EXIT_REASON_MCE_DURING_VMENTRY:
+		return "EXIT_REASON_MCE_DURING_VMENTRY";
+	case EXIT_REASON_UNKNOWN42:
+		return "EXIT_REASON_UNKNOWN42"; 
+	case EXIT_REASON_TPR_BELOW_THRESHOLD:
+		return "EXIT_REASON_TPR_BELOW_THRESHOLD"; 
+	case EXIT_REASON_APIC_ACCESS:
+		return "EXIT_REASON_APIC_ACCESS"; 
+	case EXIT_REASON_EOI_INDUCED:
+		return "EXIT_REASON_EOI_INDUCED"; 
+	case EXIT_REASON_GDT_IDT_ACCESS:
+		return "EXIT_REASON_GDT_IDT_ACCESS";
+	case EXIT_REASON_LDT_TR_ACCESS:
+		return "EXIT_REASON_LDT_TR_ACCESS";
+	case EXIT_REASON_EPT_VIOLATION:
+		return "EXIT_REASON_EPT_VIOLATION";
+	case EXIT_REASON_EPT_MISCONFIG:
+		return "EXIT_REASON_EPT_MISCONFIG";
+	case EXIT_REASON_RDTSCP:
+		return "EXIT_REASON_RDTSCP";
+	case EXIT_REASON_PREEMPTION_TIMER:
+		return "EXIT_REASON_PREEMPTION_TIMER";
+	case EXIT_REASON_WBINVD:
+		return "EXIT_REASON_WBINVD";
+	case EXIT_REASON_XSETBV:
+		return "EXIT_REASON_XSETBV";
+	case EXIT_REASON_APIC_WRITE:
+		return "EXIT_REASON_APIC_WRITE";
+	case EXIT_REASON_RDRAND:
+		return "EXIT_REASON_RDRAND";
+	case EXIT_REASON_INVPCID:
+		return "EXIT_REASON_INVPCID";
+	case EXIT_REASON_VMFUNC:
+		return "EXIT_REASON_VMFUNC";
+	case EXIT_REASON_ENCLS:
+		return "EXIT_REASON_ENCLS";
+	case EXIT_REASON_RDSEED:
+		return "EXIT_REASON_RDSEED";
+	case EXIT_REASON_PML_FULL:
+		return "EXIT_REASON_PML_FULL";
+	case EXIT_REASON_XSAVES:
+		return "EXIT_REASON_XSAVES"; 
+	case EXIT_REASON_XRSTORS:
+		return "EXIT_REASON_XRSTORS";
+	case EXIT_REASON_PCOMMIT:
+		return "EXIT_REASON_PCOMMIT";
+	default:
+		return "unknown";
+	}
+
+	return "shouldn't happen";
+};
+
+static int vcpu_nop(struct lcd_arch *lcd_arch)
+{
+	LCD_ERR("Unhandled VT-x exit:%d (%s)\n", 
+			lcd_arch->exit_reason, vmm_exit_to_str(lcd_arch));
+	return -1;
+}
+
+static bool vcpu_handle_cpuid(struct lcd_arch *lcd_arch)
+{
+	int cpuid[4];
+	int func = ksm_read_reg32(vcpu, STACK_REG_AX);
+	int subf = ksm_read_reg32(vcpu, STACK_REG_CX);
+	__cpuidex(cpuid, func, subf);
+
+	ksm_write_reg32(vcpu, STACK_REG_AX, cpuid[0]);
+	ksm_write_reg32(vcpu, STACK_REG_BX, cpuid[1]);
+	ksm_write_reg32(vcpu, STACK_REG_CX, cpuid[2]);
+	ksm_write_reg32(vcpu, STACK_REG_DX, cpuid[3]);
+	vcpu_advance_rip(vcpu);
+
+	return true;
+}
+
 static int vmm_handle_exit(struct lcd_arch *lcd_arch)
 {
 	int ret;
 	int type;
 
-	switch (lcd_arch->exit_reasn) {
+	switch (lcd_arch->exit_reason) {
 	case EXIT_REASON_EXCEPTION_NMI:
-		ret = vcpu_handle_exception_nmi(lcd_arch);
+		//ret = vcpu_handle_exception_nmi(lcd_arch);
+		ret = vcpu_nop(lcd_arch);
 		break;
 	case EXIT_REASON_EXTERNAL_INTERRUPT:
-		ret = vcpu_hadnle_external_int(); 
+		//ret = vcpu_hadnle_external_int(); 
+		ret = vcpu_nop(lcd_arch);
 		break; 
 	case EXIT_REASON_TRIPLE_FAULT: 
-		ret = vcpu_handle_triplefault(); 
+		//ret = vcpu_handle_triplefault(); 
+		ret = vcpu_nop(lcd_arch);
 	case EXIT_REASON_INIT_SIGNAL:
-		ret = vcpu_nop();
+		ret = vcpu_nop(lcd_arch);
 		break; 
 	case EXIT_REASON_STARTUP_IPI:
-		ret = vcpu_nop();
+		ret = vcpu_nop(lcd_arch);
 		break; 
 	case EXIT_REASON_SMI_INTERRUPT:
-	       	ret = vcpu_nop();
+	       	ret = vcpu_nop(lcd_arch);
 		break; 
 	case EXIT_REASON_OTHER_SMI:
-		ret = vcpu_nop(); 
+		ret = vcpu_nop(lcd_arch); 
 		break; 
 	case EXIT_REASON_PENDING_INTERRUPT:
-		ret = vcpu_nop();
+		ret = vcpu_nop(lcd_arch);
 		break; 
 	case EXIT_REASON_NMI_WINDOW:
-	       	ret = vcpu_nop(); 
+	       	ret = vcpu_nop(lcd_arch); 
 		break; 
 	case EXIT_REASON_TASK_SWITCH
-		ret = vcpu_handle_taskswitch();
+		//ret = vcpu_handle_taskswitch();
+		ret = vcpu_nop(lcd_arch); 
+
 		break; 
 	case EXIT_REASON_CPUID:
 		ret = vcpu_handle_cpuid();
 		break; 
 	case EXIT_REASON_GETSEC 
-		ret = vcpu_nop();
+		ret = vcpu_nop(lcd_arch);
 		break; 
 	case EXIT_REASON_HLT:
-		ret = vcpu_handle_hlt();
+		//ret = vcpu_handle_hlt();
+		ret = vcpu_nop(lcd_arch); 
+
 		break;
 	case EXIT_REASON_INVD:
 		ret = vcpu_handle_invd();
 		break; 
 	case EXIT_REASON_INVLPG:
-		ret = vcpu_handle_invlpg(); 
+		// ret = vcpu_handle_invlpg(); 
+		ret = vcpu_nop(lcd_arch); 
 		break; 
 	case EXIT_REASON_RDPMC:
-		ret = vcpu_nop();
+		ret = vcpu_nop(lcd_arch);
 		break;
 	case EXIT_REASON_RDTSC:
 		ret = vcpu_handle_rdtsc(); 
 		break;
 	case EXIT_REASON_RSM:
-		ret = vcpu_nop(); 
+		ret = vcpu_nop(lcd_arch); 
 
 	case EXIT_REASON_VMCALL:
-		ret = vcpu_handle_vmcall();
+		//ret = vcpu_handle_vmcall();
+		ret = vcpu_nop(lcd_arch); 
 		break;
-
 	case EXIT_REASON_VMCLEAR:
 		ret = vcpu_handle_vmx(); 
 		break
-
 	case EXIT_REASON_VMLAUNCH:
 		ret = vcpu_handle_vmx(); 
 		break;
-
 	case EXIT_REASON_VMPTRLD:
 		ret = vcpu_handle_vmx()
 		break;
-
 	case EXIT_REASON_VMPTRST:
 		ret = vcpu_handle_vmx(); 
 		break;
@@ -204,99 +376,128 @@ static int vmm_handle_exit(struct lcd_arch *lcd_arch)
 		break;
 
 	case EXIT_REASON_CR_ACCESS:
-		ret = vcpu_handle_cr_access(); 
+		//ret = vcpu_handle_cr_access(); 
+		ret = vcpu_nop(lcd_arch); 
+
 		break;
 
 	case EXIT_REASON_DR_ACCESS:
-		ret = vcpu_handle_dr_access(); 
+		//ret = vcpu_handle_dr_access(); 
+		ret = vcpu_nop(lcd_arch); 
+
 		break;
 
 	case EXIT_REASON_IO_INSTRUCTION:
-		ret = vcpu_handle_io_instr(); 
+		//ret = vcpu_handle_io_instr(); 
+		ret = vcpu_nop(lcd_arch); 
+
 		break;
 
 	case EXIT_REASON_MSR_READ:
-		ret = vcpu_handle_rdmsr(); 
+		//ret = vcpu_handle_rdmsr(); 
+		ret = vcpu_nop(lcd_arch); 
+
 		break;
 
 	case EXIT_REASON_MSR_WRITE:
-		ret = vcpu_handle_wrmsr(); 
+		//ret = vcpu_handle_wrmsr(); 
+		ret = vcpu_nop(lcd_arch); 
+
 		break;
 
 	case EXIT_REASON_INVALID_STATE:
-		ret = vcpu_handle_invalid_state(); 
+		//ret = vcpu_handle_invalid_state(); 
+		ret = vcpu_nop(lcd_arch); 
+
 		break;
 
 	case EXIT_REASON_MSR_LOAD_FAIL:
-		ret = vcpu_nop(); 
+		ret = vcpu_nop(lcd_arch); 
 		break;
 
 	case EXIT_REASON_UNKNOWN35:
-		ret = vcpu_nop(); 
+		ret = vcpu_nop(lcd_arch); 
 		break;
 
 	case EXIT_REASON_MWAIT_INSTRUCTION:
-		ret = vcpu_nop(); 
+		ret = vcpu_nop(lcd_arch); 
 		break;
 
 	case EXIT_REASON_MONITOR_TRAP_FLAG: 
-		ret = vcpu_handle_mtf();
+		//ret = vcpu_handle_mtf();
+		ret = vcpu_nop(lcd_arch); 
+
 		break;
 
 	case EXIT_REASON_UNKNOWN38: 
-		ret = vcpu_nop(); 
+		ret = vcpu_nop(lcd_arch); 
 		break;
 
 	case EXIT_REASON_MONITOR_INSTRUCTION:
-		ret = vcpu_nop(); 
+		ret = vcpu_nop(lcd_arch); 
 		break;
 
 	case EXIT_REASON_PAUSE_INSTRUCTION: 
-		ret = vcpu_nop(); 
+		ret = vcpu_nop(lcd_arch); 
 		break;
 
 	case EXIT_REASON_MCE_DURING_VMENTRY:
-		ret = vcpu_nop(); 
+		ret = vcpu_nop(lcd_arch); 
 		break;
 
 	case EXIT_REASON_UNKNOWN42: 
-		ret = vcpu_nop(); 
+		ret = vcpu_nop(lcd_arch); 
 		break;
 
 	case EXIT_REASON_TPR_BELOW_THRESHOLD: 
-		ret = vcpu_handle_tpr_threshold(); 
+		//ret = vcpu_handle_tpr_threshold(); 
+		ret = vcpu_nop(lcd_arch); 
+
 		break;
 
 	case EXIT_REASON_APIC_ACCESS: 
-		ret = vcpu_handle_apic_access(); 
+		//ret = vcpu_handle_apic_access(); 
+		ret = vcpu_nop(lcd_arch); 
+
 		break;
 
 	case EXIT_REASON_EOI_INDUCED: 
-		ret = vcpu_handle_eoi_induced(); 
+		//ret = vcpu_handle_eoi_induced();
+		ret = vcpu_nop(lcd_arch); 
+
 		break;
 
 	case EXIT_REASON_GDT_IDT_ACCESS:
-		ret = vcpu_handle_gdt_idt_access(); 
+		//ret = vcpu_handle_gdt_idt_access(); 
+		ret = vcpu_nop(lcd_arch); 
+
 		break;
 
 	case EXIT_REASON_LDT_TR_ACCESS:
-		ret = vcpu_handle_ldt_tr_access(); 
+		//ret = vcpu_handle_ldt_tr_access(); 
+		ret = vcpu_nop(lcd_arch); 
+
 		break;
 
 	case EXIT_REASON_EPT_VIOLATION:
-		ret = vcpu_handle_ept_violation();
+		//ret = vcpu_handle_ept_violation();
+		ret = vcpu_nop(lcd_arch); 
+
 		break;
 
 	case EXIT_REASON_EPT_MISCONFIG:
-		ret = vcpu_handle_ept_misconfig(); 
+		//ret = vcpu_handle_ept_misconfig(); 
+		ret = vcpu_nop(lcd_arch); 
+
 		break;
 
 	case EXIT_REASON_RDTSCP:
-		ret = vcpu_handle_rdtscp(); 
+		//ret = vcpu_handle_rdtscp(); 
+		ret = vcpu_nop(lcd_arch); 
 		break;
 
 	case EXIT_REASON_PREEMPTION_TIMER:
-		ret = vcpu_nop(); 
+		ret = vcpu_nop(lcd_arch); 
 		break;
 
 	case EXIT_REASON_WBINVD:
@@ -308,15 +509,15 @@ static int vmm_handle_exit(struct lcd_arch *lcd_arch)
 		break;
 
 	case EXIT_REASON_APIC_WRITE:
-		ret = vcpu_handle_apic_write(); 
+		//ret = vcpu_handle_apic_write(); 
 		break;
 
 	case EXIT_REASON_RDRAND:
-		ret = vcpu_nop(); 
+		ret = vcpu_nop(lcd_arch); 
 		break;
 
 	case EXIT_REASON_INVPCID:
-		ret = vcpu_nop(); 
+		ret = vcpu_nop(lcd_arch); 
 		break;
 
 	case EXIT_REASON_VMFUNC:
@@ -324,27 +525,29 @@ static int vmm_handle_exit(struct lcd_arch *lcd_arch)
 		break;
 
 	case EXIT_REASON_ENCLS:
-		ret = vcpu_nop(); 
+		ret = vcpu_nop(lcd_arch); 
 		break;
 
 	case EXIT_REASON_RDSEED:
-		ret = vcpu_nop(); 
+		ret = vcpu_nop(lcd_arch); 
 		break;
 
 	case EXIT_REASON_PML_FULL:
-		ret = vcpu_handle_pml_full(); 
+		//ret = vcpu_handle_pml_full(); 
+		ret = vcpu_nop(lcd_arch); 
+
 		break;
 
 	case EXIT_REASON_XSAVES: 
-		ret = vcpu_nop();
+		ret = vcpu_nop(lcd_arch);
 		break;
 
 	case EXIT_REASON_XRSTORS:
-		ret = vcpu_nop(); 
+		ret = vcpu_nop(lcd_arch); 
 		break;
 
 	case EXIT_REASON_PCOMMIT:
-		ret = vcpu_nop(); 
+		ret = vcpu_nop(lcd_arch); 
 		break;
 	default:
 		LCD_ERR("unhandled exit reason %d", lcd_arch->exit_reason);
@@ -352,7 +555,7 @@ static int vmm_handle_exit(struct lcd_arch *lcd_arch)
 		break;
 	}
 
-
+#if 0
 	/* AB: I borrow injection code from KSM */
 	if (lcd_arch->pending_irq.pending) {
 		bool injected = false;
@@ -366,7 +569,7 @@ static int vmm_handle_exit(struct lcd_arch *lcd_arch)
 
 		lcd_arch->pending_irq.pending = !injected;
 	}
-
+#endif
 	return ret;
 }
 
@@ -401,81 +604,12 @@ int lcd_vmm_arch_run(struct lcd_arch *lcd_arch)
 
 }
 
-/* RUN LOOP -------------------------------------------------- */
-int icount = 0;
-static int vmm_run_once(struct lcd_vmm *vmm, int *vmm_ret)
-{
-	int ret;
-
-	ret = vmm_arch_run(vmm->lcd_arch);
-	if (ret < 0) {
-		LCD_ERR("running lcd %p", lcd);
-		goto out;
-	}
-
-	switch(ret) {
-	case LCD_ARCH_STATUS_PAGE_FAULT:
-		LCD_ERR("page fault for vmm on CPU %d", raw_smp_processor_id());
-		ret = -ENOSYS;
-		goto out;
-		break;
-	case LCD_ARCH_STATUS_EXT_INTR:
-		/*
-		 * Continue
-		 */
-		ret = 0;
-		icount++;
-		goto out;
-	case LCD_ARCH_STATUS_EPT_FAULT:
-		LCD_ERR("ept fault");
-		ret = -ENOSYS;
-		goto out;
-	case LCD_ARCH_STATUS_CR3_ACCESS:
-		/*
-		 * Continue
-		 */
-		ret = 0;
-		goto out;
-	case LCD_ARCH_STATUS_SYSCALL:
-		ret = -ENOSYS; 
-		goto out;
-	}
-	
-out:
-	return ret;
-}
 
 static int should_stop(struct lcd_vmm *vmm)
 {
-	int ret;
-
-	/*
-	 * Check our status
-	 */
-	switch(get_vmm_status(lcd)) {
-
-	case LCD_STATUS_EXIT:
-		/*
-		 * We're dead; return 1 to signal to caller.
-		 * (kthread_should_stop would also become true at some
-		 * later point)
-		 */
-		ret = 1;
-		goto out;
-	case LCD_STATUS_RUNNING:
-		/*
-		 * The lcd should start or continue running; return 0
-		 * to signal that
-		 */
-		ret = 0;
-		goto out;
-	default:
-		BUG(); /* shouldn't be in any other state */
-		ret = 1;
-		goto out;
-	}
-out:
-	return ret;
+	if (vmm->should_stop)
+		return 1;
+	return 0;
 }
 
 void vmm_set_entry_point(struct lcd_vmm *vmm) {
@@ -489,6 +623,7 @@ void vmm_loop(struct lcd_vmm *vmm)
 {
 	int ret;
 	int vmm_ret = 0;
+	int entry_count = 0;
 
 
 	/* Set entry point for the host using vmm->cont */
@@ -515,34 +650,19 @@ void vmm_loop(struct lcd_vmm *vmm)
 
 
 	/*
-	 * Enter run loop, check after each iteration if we should stop
+	 * Enter the infinite loop, check after each iteration if we should stop
 	 */
 	for (;;) {
-		ret = vmm_run_once(vmm, &vmm->ret);
+
+		ret = vmm_arch_run(vmm->lcd_arch);
 		if (ret < 0 || vmm_should_stop(vmm)) {
 			lcd_arch_dump_vmm(vmm->lcd_arch);
-			vmm->ret = ret;
-			goto out; 
-		} else if (ret == 1) {
-			LCD_MSG("icount is %d", icount);
-			/* lcd exited */
-			goto out;
-		} else {
-			/* ret = 0; continue */
-#ifndef CONFIG_PREEMPT
-			/*
-			 * Sleep if we don't have full preemption turned on, 
-			 * and someone else should have a turn.
-			 */
-			cond_resched();
-#endif
-			continue;
+			break; 
 		}
+
+		entry_count ++; 
 	}
 	
-	/* unreachable */
-
-out:
 	/*
 	 * Now turn interrupts back on.
 	 */
