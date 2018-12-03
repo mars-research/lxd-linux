@@ -247,19 +247,81 @@ static int vcpu_nop(struct lcd_arch *lcd_arch)
 	return -1;
 }
 
-static bool vcpu_handle_cpuid(struct lcd_arch *lcd_arch)
+static inline void vcpu_advance_rip(struct lcd_arch *lcd_arch)
+{
+/*	if (lcd_arch->eflags & X86_EFLAGS_TF) {
+		vcpu_inject_hardirq_noerr(vcpu, X86_TRAP_DB);
+		if (vcpu_probe_cpl(0)) {
+			__writedr(6, __readdr(6) | DR6_BS | DR6_RTM);
+			__writedr(7, __readdr(7) & ~DR7_GD);
+
+			u64 dbg = vmcs_read64(GUEST_IA32_DEBUGCTL);
+			vmcs_write64(GUEST_IA32_DEBUGCTL, dbg & ~DEBUGCTLMSR_LBR);
+		}
+	}
+*/
+
+	lcd_arch->regs.rip += vmcs_read32(VM_EXIT_INSTRUCTION_LEN);
+	vmcs_writel(GUEST_RIP, lcd_arch->regs.rip);
+
+/*	
+	size_t interruptibility = vmcs_read32(GUEST_INTERRUPTIBILITY_INFO);
+	vmcs_write32(GUEST_INTERRUPTIBILITY_INFO,
+		   interruptibility & ~(GUEST_INTR_STATE_MOV_SS | GUEST_INTR_STATE_STI));
+*/		   
+}
+
+
+static int vmm_handle_cpuid(struct lcd_arch *lcd_arch)
 {
 	int cpuid[4];
-	int func = ksm_read_reg32(vcpu, STACK_REG_AX);
-	int subf = ksm_read_reg32(vcpu, STACK_REG_CX);
+	int func = (int)lcd_arch->regs.rax;
+	int subf = (int)lcd_arch->regs.rcx;
+
 	__cpuidex(cpuid, func, subf);
 
-	ksm_write_reg32(vcpu, STACK_REG_AX, cpuid[0]);
-	ksm_write_reg32(vcpu, STACK_REG_BX, cpuid[1]);
-	ksm_write_reg32(vcpu, STACK_REG_CX, cpuid[2]);
-	ksm_write_reg32(vcpu, STACK_REG_DX, cpuid[3]);
-	vcpu_advance_rip(vcpu);
+	lcd_arch->regs.rax = cpuid[0];
+	lcd_arch->regs.rbx = cpuid[1];
+	lcd_arch->regs.rcx = cpuid[2];
+	lcd_arch->regs.rdx = cpuid[3];
 
+	vmm_advance_rip(lcd_arch);
+
+	return 0;
+}
+
+static int vcpu_handle_vmx(struct lcd_arch *lcd_arch)
+{
+	/* Handle VMX similar to SimpleVizor */
+
+	/* Set the CF flag, which is how VMX instructions indicate failure */
+	lcd_arch->regs.rflags |= 0x1; // VM_FAIL_INVALID
+
+	/* RFLAGs is actually restored from the VMCS, so update it here */
+
+	vmcs_writel(GUEST_RFLAGS, lcd_arch->regs.rflags);
+	
+	vmm_advance_rip(lcd_arch);
+	return 0;
+}
+
+static int vmm_handle_wbinvd(struct lcd_arch *lcd_arch)
+{
+	__wbinvd();
+	vmm_advance_rip(lcd_arch);
+	return 0;
+}
+
+static int vmm_handle_xsetbv(struct lcd_arch *lcd_arch)
+{
+	u32 ext = ksm_read_reg32(vcpu, STACK_REG_CX);
+	u64 val = ksm_combine_reg64(vcpu, STACK_REG_AX, STACK_REG_DX);
+
+	/* Simply issue the XSETBV instruction on the native logical processor */
+	_xsetbv((u32)lcd_arch->regs.rcx, 
+		lcd_arch->regs.rdx << 32 | lcd_arch->regs.rax);
+
+	vmm_advance_rip(lcd_arch);
 	return true;
 }
 
@@ -304,7 +366,7 @@ static int vmm_handle_exit(struct lcd_arch *lcd_arch)
 
 		break; 
 	case EXIT_REASON_CPUID:
-		ret = vcpu_handle_cpuid();
+		ret = vmm_handle_cpuid();
 		break; 
 	case EXIT_REASON_GETSEC 
 		ret = vcpu_nop(lcd_arch);
@@ -315,7 +377,7 @@ static int vmm_handle_exit(struct lcd_arch *lcd_arch)
 
 		break;
 	case EXIT_REASON_INVD:
-		ret = vcpu_handle_invd();
+		ret = vmm_handle_invd();
 		break; 
 	case EXIT_REASON_INVLPG:
 		// ret = vcpu_handle_invlpg(); 
@@ -331,48 +393,24 @@ static int vmm_handle_exit(struct lcd_arch *lcd_arch)
 		ret = vcpu_nop(lcd_arch); 
 
 	case EXIT_REASON_VMCALL:
-		//ret = vcpu_handle_vmcall();
-		ret = vcpu_nop(lcd_arch); 
-		break;
 	case EXIT_REASON_VMCLEAR:
-		ret = vcpu_handle_vmx(); 
-		break
 	case EXIT_REASON_VMLAUNCH:
-		ret = vcpu_handle_vmx(); 
-		break;
 	case EXIT_REASON_VMPTRLD:
-		ret = vcpu_handle_vmx()
-		break;
 	case EXIT_REASON_VMPTRST:
-		ret = vcpu_handle_vmx(); 
-		break;
-
 	case EXIT_REASON_VMREAD:
-		ret = vcpu_handle_vmx();
-		break;
-
 	case EXIT_REASON_VMRESUME: 
-		ret = vcpu_handle_vmx(); 
-		break;
-
 	case EXIT_REASON_VMWRITE:
-		ret = vcpu_handle_vmx();
-		break;
-
 	case EXIT_REASON_VMOFF:
-		ret = vcpu_handle_vmx();
-		break;
-
 	case EXIT_REASON_VMON:
-		ret = vcpu_handle_vmx(); 
+		ret = vmm_handle_vmx(); 
 		break;
 
 	case EXIT_REASON_INVEPT:
-		ret = vcpu_handle_vmx(); 
+		ret = vcpu_nop(lcd_arch); 
 		break;
 
 	case EXIT_REASON_INVVPID:
-		ret = vcpu_handle_vmx(); 
+		ret =  vcpu_nop(lcd_arch); 
 		break;
 
 	case EXIT_REASON_CR_ACCESS:
