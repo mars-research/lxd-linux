@@ -94,4 +94,8 @@ extern const unsigned long vmx_return;
 
 extern DEFINE_PER_CPU(struct lcd_arch *, local_lcd_arch);
 
+#if defined(LCD_VMM)
+extern DEFINE_PER_CPU(struct lcd_arch *, vmm_lcd_arch);
+#endif
+
 #endif /* ASM_X86_LCD_DOMAINS_RUN_H */
