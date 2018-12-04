@@ -630,7 +630,7 @@ int lcd_arch_init(void)
 	}
 
 #if defined(LCD_VMM)
-	ret = lcd_vmm_init(void);
+	ret = lcd_vmm_init();
 	if (ret) {
 		LCD_ERR("failed to initialize lcd_arch for VMM\n");
 		goto failed1; 

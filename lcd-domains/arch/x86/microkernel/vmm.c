@@ -15,6 +15,29 @@
 
 #define VMM_STACK_SIZE 4096
 
+/* EPT Memory type  */
+#define EPT_MT_UNCACHABLE		0
+#define EPT_MT_WRITECOMBINING		1
+#define EPT_MT_WRITETHROUGH		4
+#define EPT_MT_WRITEPROTECTED		5
+#define EPT_MT_WRITEBACK		6
+#define EPT_MT_UNCACHED			7
+
+/* EPT Access bits  */
+#define EPT_ACCESS_NONE			0
+#define EPT_ACCESS_READ			0x1
+#define EPT_ACCESS_WRITE		0x2
+#define EPT_ACCESS_RW			(EPT_ACCESS_READ | EPT_ACCESS_WRITE)
+#define EPT_ACCESS_EXEC			0x4
+#define EPT_ACCESS_RX			(EPT_ACCESS_READ | EPT_ACCESS_EXEC)
+#define EPT_ACCESS_RWX			(EPT_ACCESS_RW | EPT_ACCESS_EXEC)
+#define EPT_ACCESS_ALL			EPT_ACCESS_RWX
+
+/* Accessed dirty flags  */
+#define EPT_ACCESSED			0x100
+#define EPT_DIRTY			0x200
+
+
 #if 0
 typedef enum {
 	EXCEPTION_BENIGN,
@@ -823,42 +846,150 @@ void __vmm_enter(struct lcd_arch * lcd_arch) {
 	return; 
 }
 
+static inline u64 mkepte(int access, u64 hpa)
+{
+	return (access & EPT_AR_MASK) | (hpa & PAGE_PA_MASK);
+}
+
+static inline u64 *ept_page_addr(u64 *pte)
+{
+	if (!pte || !(*pte & EPT_ACCESS_RWX))
+		return 0;
+
+	return __va(PAGE_PA(*pte));
+}
+
+static inline bool in_bounds(u64 gpa, u64 start, u64 end)
+{
+	return gpa >= start && gpa < end;
+}
+
+
+u8 ept_memory_type(struct lcd_vmm *vmm, u64 gpa)
+{
+	/* AB: lift this piece from KSM */
+	/*
+	 * KSM verbatim: 
+	 *
+	 * Alex Ionescue reports on Intel KabyLake, without the 
+	 * correct memory type for a mapping, he gets an MCE, 
+	 * which is always an L2 Data Cache Read in one of the 
+	 * processor's banks.
+	 *
+	 * Some memory ranges require that the memory type is 
+	 * uncachable or write-through or even write-protected 
+	 * (this is the case for most fixed range MTRRs.
+	 *
+	 * See also: mm_cache_mtrr_ranges() in mm.c
+	 */
+	int i;
+	struct mtrr_range *mttr_range;
+	u8 type = vmm->mtrr_def;
+
+	for (i = 0; i < vmm->mtrr_count; ++i) {
+		mttr_range = &k->mtrr_ranges[i];
+		if (!in_bounds(gpa, mttr_range->start, mttr_range->end))
+			continue;
+
+		if (mttr_range->fixed || mttr_range->type == EPT_MT_UNCACHABLE)
+			return mttr_range->type;
+
+		if (mttr_range->type == EPT_MT_WRITETHROUGH && type == EPT_MT_WRITEBACK)
+			type = EPT_MT_WRITETHROUGH;
+		else
+			type = mttr_range->type;
+	}
+
+	return type;
+}
+
+u64 *ept_alloc_page(u64 *pml4, int access, int mtype, u64 gpa, u64 hpa)
+{
+	/* PML4 (512 GB) */
+	u64 *pml4e = &pml4[PGD_INDEX_P(gpa)];
+	u64 *pdpt = ept_page_addr(pml4e);
+
+	if (!pdpt) {
+		pdpt = mm_alloc_page();
+		if (!pdpt)
+			return NULL;
+
+		*pml4e = mkepte(EPT_ACCESS_ALL, __pa(pdpt));
+	}
+
+	/* PDPT (1 GB)  */
+	u64 *pdpte = &pdpt[PUD_INDEX_P(gpa)];
+	u64 *pdt = ept_page_addr(pdpte);
+	if (!pdt) {
+		pdt = mm_alloc_page();
+		if (!pdt)
+			return NULL;
+
+		*pdpte = mkepte(EPT_ACCESS_ALL, __pa(pdt));
+	}
+
+	/* PDT (2 MB)  */
+	u64 *pdte = &pdt[PMD_INDEX_P(gpa)];
+	u64 *pt = ept_page_addr(pdte);
+	if (!pt) {
+		pt = mm_alloc_page();
+		if (!pt)
+			return NULL;
+
+		*pdte = mkepte(EPT_ACCESS_ALL, __pa(pt));
+	}
+
+	/* PT (4 KB)  */
+	u64 *page = &pt[PTE_INDEX_P(gpa)];
+	*page = mkepte(access, hpa);
+	*page |= mtype << VMX_EPT_MT_EPTE_SHIFT;
+	return page;
+}
+
+
 /* Prepare the EPT for the monolithic Linux kernel to 
  * run it in the VT-x non-root */
-static int vmm_arch_ept_init(struct lcd_arch *lcd_arch) {
-	struct pmem_range ranges[MAX_RANGES];
-	int range_count;
+static int vmm_arch_ept_init(struct vmm *vmm) {
+	u8 mtrr_def;
 	u64 addr;
+	u8 mt; 
 	int i; 
 
-	ret = mm_cache_ram_ranges(ranges, &range_count);
+	ret = mm_cache_ram_ranges(&vmm->ranges, &vmm->range_count);
 	if (ret < 0)
-		goto out_ksm;
+		return -1; 
 
-	LCD_INFO("detected %d physical memory ranges\n", range_count);
+	/* MTRR   */
+	mm_cache_mtrr_ranges(&vmm->mttr_ranges, &vmm->mtrr_count, &mtrr_def);
+	KSM_DEBUG("Detected %d MTRR ranges (default type:%d)\n", 
+		vmm->mtrr_count, vmm->mtrr_def);
+	for (i = 0; i < vmm->mtrr_count; i++) {
+		KSM_DEBUG("MTRR Range: 0x%016llX -> 0x%016llX fixed: %d type: %d\n",
+			  vmm->mttr_ranges[i].start, vmm->mttr_ranges[i].end, 
+			  vmm->mttr_ranges[i].fixed, vmm->mttr_ranges[i].type);
+	}
+
+	LCD_INFO("detected %d physical memory ranges\n", vmm->range_count);
 
 	for (i = 0; i < range_count; i ++ ) {
-		LCD_INFO("range: 0x%016llX -> 0x%016llX\n", ranges[i].start, ranges[i].end);
+		LCD_INFO("range: 0x%016llX -> 0x%016llX\n", vmm->ranges[i].start, vmm->ranges[i].end);
 
-		for (addr = ranges[i].start; addr < ranges[i].end; addr += PAGE_SIZE) {
-			int r = access;
-			if (access != EPT_ACCESS_ALL && mm_is_kernel_addr(__va(addr)))
-				r = EPT_ACCESS_ALL;
-
-			mt = ept_memory_type(k, addr);
-			if (!ept_alloc_page(EPT4(ept, eptp), r, mt, addr, addr))
-				return false;
+		for (addr = vmm->ranges[i].start; addr < vmm->ranges[i].end; addr += PAGE_SIZE) {
+			mt = ept_memory_type(vmm, addr);
+			if (!ept_alloc_page(EPT4(vmm->ept, eptp), r, mt, addr, addr))
+				return -1;
 		}
 	}
 
 
 	/* Allocate APIC page  */
 	apic = __readmsr(MSR_IA32_APICBASE) & MSR_IA32_APICBASE_BASE;
-	mt = ept_memory_type(k, apic);
-	if (!ept_alloc_page(EPT4(ept, eptp), EPT_ACCESS_ALL, mt, apic, apic))
+	mt = ept_memory_type(vmm, apic);
+	if (!ept_alloc_page(EPT4(vmm->ept, eptp), EPT_ACCESS_ALL, mt, apic, apic))
 		return false;
 
-
+	return 0; 
+out:
 
 
 };

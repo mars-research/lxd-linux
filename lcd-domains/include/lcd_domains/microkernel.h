@@ -955,4 +955,18 @@ int __lcd_ipc_init(void);
  */
 void __lcd_ipc_exit(void);
 
+#if defined(LCD_VMM)
+
+struct lcd_vmm {
+	struct pmem_range ranges[MAX_RANGES];
+	int range_count;
+	struct mtrr_range mtrr_ranges[MAX_MTRR];
+	int mtrr_count;
+
+
+}
+
+#endif
+
+
 #endif /* LCD_DOMAINS_INTERNAL_H */
