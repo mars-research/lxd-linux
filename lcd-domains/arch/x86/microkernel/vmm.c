@@ -652,7 +652,8 @@ static int should_stop(struct lcd_vmm *vmm)
 
 void vmm_set_entry_point(struct lcd_vmm *vmm) {
 
-	
+	lcd_arch->regs.rsp = lcd_arch->
+
 	return; 
 };
 
@@ -678,6 +679,9 @@ void vmm_loop(struct lcd_vmm *vmm)
 	 * *preemption disabled*
 	 */
 	vmx_get_cpu(vmm->lcd_arch);
+
+	vmx_setup_vmcs(lcd_arch);
+	vmx_enable_ept_switching(lcd_arch);
 
 	/*
 	 * Interrupts off
@@ -779,8 +783,8 @@ __asm__ ("      .text \n\t"
 
 void vmm_enter_switch_stack(void *cont, void *args) {
 
-	struct lcd_vmm * vmm = (struct lcd_vmm *)args;
-	vmm->cont = (cont_t*) cont;
+	struct lcd_arch * lcd_arch = (struct lcd_arch *)args;
+	lcd_arch->cont = (cont_t*) cont;
 
 	/* Execute vmm_loop() on the new stack  
 	 *
@@ -790,7 +794,7 @@ void vmm_enter_switch_stack(void *cont, void *args) {
 	 * Inside the guest, i.e., inside dprivileged kernel we 
 	 * return to the continuation we created before */
 
-	vmm_on_alt_stack_0(vmm->stack, vmm_loop, vmm);
+	vmm_on_alt_stack_0(lcd_arch->vmm_stack, vmm_loop, lcd_arch);
 	return; 
 };
 
@@ -802,7 +806,7 @@ void vmm_enter_switch_stack(void *cont, void *args) {
 
 
 /* Start executing the minimal hypervisor on a new stack */
-void __vmm_enter(void * new_stack) {
+void __vmm_enter(struct lcd_arch * lcd_arch) {
 
 
 	/* We enter VMM in two steps
@@ -815,37 +819,129 @@ void __vmm_enter(void * new_stack) {
 	 * to switch execution to the new stack. 
 	 */
 
-	CALL_CONT(&vmm->cont, (void*) vmm, vmm_enter_switch_stack); 
+	CALL_CONT(&lcd_arch->cont, (void*) lcd_arch, vmm_enter_switch_stack); 
 	return; 
 }
 
 /* Prepare the EPT for the monolithic Linux kernel to 
  * run it in the VT-x non-root */
-static int vmm_prepare_ept(struct lcd_vmm *vmm) {
+static int vmm_arch_ept_init(struct lcd_arch *lcd_arch) {
+	struct pmem_range ranges[MAX_RANGES];
+	int range_count;
+	u64 addr;
+	int i; 
+
+	ret = mm_cache_ram_ranges(ranges, &range_count);
+	if (ret < 0)
+		goto out_ksm;
+
+	LCD_INFO("detected %d physical memory ranges\n", range_count);
+
+	for (i = 0; i < range_count; i ++ ) {
+		LCD_INFO("range: 0x%016llX -> 0x%016llX\n", ranges[i].start, ranges[i].end);
+
+		for (addr = ranges[i].start; addr < ranges[i].end; addr += PAGE_SIZE) {
+			int r = access;
+			if (access != EPT_ACCESS_ALL && mm_is_kernel_addr(__va(addr)))
+				r = EPT_ACCESS_ALL;
+
+			mt = ept_memory_type(k, addr);
+			if (!ept_alloc_page(EPT4(ept, eptp), r, mt, addr, addr))
+				return false;
+		}
+	}
+
+
+	/* Allocate APIC page  */
+	apic = __readmsr(MSR_IA32_APICBASE) & MSR_IA32_APICBASE_BASE;
+	mt = ept_memory_type(k, apic);
+	if (!ept_alloc_page(EPT4(ept, eptp), EPT_ACCESS_ALL, mt, apic, apic))
+		return false;
+
+
+
 
 };
 
 /* Prepare the stack for the execution of the hypervisor
  * (VT-x root)
  */
-static int vmm_alloc_stack(struct lcd_vmm *vmm) {
+static int vmm_alloc_stack(struct lcd_arch *lcd_arch) {
 
-	vmm->stack = kmalloc(VMM_STACK_SIZE, GFP_KERNEL);
-	if (!vmm->stack) {
-		D_ERR("VMM stack allocation failed, cpu:%d\n", );
+	lcd_arch->vmm_stack = kmalloc(VMM_STACK_SIZE, GFP_KERNEL);
+	if (!lcd_arch->vmm_stack) {
+		LCD_ERR("VMM stack allocation failed, cpu:%d\n", 
+			raw_smp_processor_id());
 		return -1; 
  	}
 
 	// Note that sizeof(void) = 1 not 8.
-	vmm->stack += VMM_STACK_SIZE;
+	lcd_arch->vmm_stack += VMM_STACK_SIZE;
 	return 0;
 };
 
-static void vmm_free_stack(struct lcd_vmm *vmm) {
-	assert(vmm->stack); 
-	vmm->stack -= VMM_STACK_SIZE;
-    	kfree(vmm->stack);
+static void vmm_free_stack(struct lcd_arch *lcd_arch) {
+	assert(lcd_arch->vmm_stack); 
+	lcd_arch->vmm_stack -= VMM_STACK_SIZE;
+    	kfree(lcd_arch->vmm_stack);
 	return; 
+}
+
+int vmm_lcd_arch_create(struct lcd_arch **out)
+{
+	struct lcd_arch *lcd_arch;
+	int ret;
+	/*
+	 * Alloc lcd_arch
+	 */
+	lcd_arch = kmem_cache_zalloc(lcd_arch_cache, GFP_KERNEL);
+	if (!lcd_arch) {
+		LCD_ERR("failed to alloc lcd_arch");
+		ret = -ENOMEM;
+		goto fail_alloc;
+	}
+	/*
+	 * Set up ept
+	 */
+	ret = vmm_arch_ept_init(lcd_arch);
+	if (ret) {
+		LCD_ERR("setting up etp");
+		goto fail_ept;
+	}
+	
+	/*
+	 * Alloc vmcs
+	 */
+	lcd_arch->vmcs = lcd_arch_alloc_vmcs(raw_smp_processor_id());
+	if (!lcd_arch->vmcs) {
+		LCD_ERR("failed to alloc vmcs\n");
+		ret = -ENOMEM;
+		goto fail_vmcs;
+	}
+
+	ret = vmx_allocate_vpid(lcd_arch);
+	if (ret) {
+		LCD_ERR("failed to alloc vpid\n");
+		goto fail_vpid;
+	}
+
+	/*
+	 * Not loaded on a cpu right now
+	 */
+	lcd_arch->cpu = -1;
+	
+	*out = lcd_arch;
+	
+	return 0;
+
+fail_vpid:
+	lcd_arch_free_vmcs(lcd_arch->vmcs);
+fail_vmcs:
+	lcd_arch_ept_free(lcd_arch);
+fail_ept:
+	kmem_cache_free(lcd_arch_cache, lcd_arch);
+fail_alloc:
+	return ret;
 }
 
 /* Enter the VT-x root mode. We enter the VT-x root mode on a new stack. 
@@ -863,7 +959,7 @@ static int vmm_enter(void *unused)
 	if (ret) 
 		goto failed; 
 
-	ret = vmm_alloc_stack(vmm); 
+	ret = vmm_alloc_stack(lcd_arch); 
 	if (ret) 
 		goto failed; 
 

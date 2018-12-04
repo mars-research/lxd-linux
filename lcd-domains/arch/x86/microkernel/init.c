@@ -528,6 +528,46 @@ static void vmx_free_vmxon_areas(void)
 	}
 }
 
+#if defined(LCD_VMM)
+
+int lcd_vmm_init(void) {
+{
+	int cpu; 
+	struct lcd_arch *lcd_arch; 
+
+	for_each_possible_cpu(cpu) {
+		per_cpu(vmm_lcd_arch, cpu) = NULL; 
+	}
+
+	for_each_possible_cpu(cpu) {
+
+		/* Allocate a per-cpu lcd_arch data structure that 
+		 * we will use to run LCD VMM, i.e., a minimal VT-x root 
+		 * hypervisor */
+
+		lcd_arch = per_cpu(vmm_lcd_arch, cpu);
+		/*
+		 * Alloc vm / arch-dependent part
+		 */
+		ret = vmm_lcd_arch_create(&lcd_arch);
+		if(ret) {
+			LCD_ERR("error creating lcd_arch");
+			goto fail; 
+		}
+	}
+	return 0; 
+fail: 
+	for_each_possible_cpu(cpu) {
+		lcd_arch = per_cpu(vmm_lcd_arch, cpu); 
+		if (!lcd_arch)
+			continue;
+
+		lcd_arch_destroy(lcd_arch);
+	}		
+	return -1; 
+}
+#endif
+
 int lcd_arch_init(void)
 {
 	int ret;
@@ -586,7 +626,17 @@ int lcd_arch_init(void)
 		}
 
 		per_cpu(vmxon_area, cpu) = vmxon_buf;
+
 	}
+
+#if defined(LCD_VMM)
+	ret = lcd_vmm_init(void);
+	if (ret) {
+		LCD_ERR("failed to initialize lcd_arch for VMM\n");
+		goto failed1; 
+	};
+
+#endif
 
 	/*
 	 * Turn on vmx on each cpu
