@@ -575,6 +575,12 @@ static void __noclone vmx_enter(struct lcd_arch *lcd_arch)
 	return;
 }
 
+#if defined(LCD_VMM)
+void vmm_vmx_enter(struct lcd_arch *lcd_arch) {
+	return vmx_enter(lcd_arch); 
+}
+#endif
+
 int lcd_arch_run(struct lcd_arch *lcd_arch)
 {
 	int ret;

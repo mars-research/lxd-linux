@@ -46,6 +46,7 @@ export LCD_DOMAINS_CFLAGS=\
 	-Werror \
 	-Wall \
 	-DLCD_DOMAINS \
+	-DLCD_VMM \
 	-DLINUX_KERNEL \
 	-DLCD_TEST_MODS_PATH=\"$(PWD)/build/test_mods\"
 
