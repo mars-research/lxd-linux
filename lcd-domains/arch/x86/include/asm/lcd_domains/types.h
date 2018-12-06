@@ -97,6 +97,39 @@ struct lcd_arch_tss {
 
 typedef unsigned long lcd_arch_epte_t; /* table entry */
 
+#if defined(LCD_VMM)
+
+struct pmem_range {
+	u64 start;
+	u64 end;
+};
+
+#define MAX_RANGES	32
+extern int mm_cache_ram_ranges(struct pmem_range *ranges, int *count);
+
+struct mtrr_range {
+	bool fixed;
+	u8 type;
+	u64 start;
+	u64 end;
+};
+
+#define MAX_VAR_MTRR		255
+#define MAX_FIXED_MTRR		11*8
+#define MAX_MTRR		MAX_VAR_MTRR + MAX_FIXED_MTRR
+extern void mm_cache_mtrr_ranges(struct mtrr_range *ranges, int *count, u8 *def_type);
+
+
+struct lcd_vmm {
+	struct pmem_range ranges[MAX_RANGES];
+	int range_count;
+	struct mtrr_range mtrr_ranges[MAX_MTRR];
+	int mtrr_count;
+};
+
+#endif
+
+
 struct lcd_arch {
 	/*
 	 * CPU we're running on / vmloaded on
@@ -181,6 +214,11 @@ struct lcd_arch {
 	 * for resolving addresses to symbol names for stack traces.
 	 */
 	struct module *kernel_module;
+
+#if defined(LCD_VMM)
+	struct lcd_vmm *vmm; 
+#endif
+
 };
 
 struct lcd_vmx_capability {

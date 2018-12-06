@@ -15,11 +15,18 @@
 #include <asm/lcd_domains/microkernel.h>
 #include <lcd_domains/microkernel.h>
 
+#if defined(LCD_VMM)
+#include <asm/lcd_domains/vmm.h>
+#endif
 
 struct lcd_vmx_capability lcd_vmx_capability;
 static atomic_t vmx_enable_failed;
 static DEFINE_PER_CPU(int, vmx_enabled);
 static DEFINE_PER_CPU(struct lcd_arch_vmcs *, vmxon_area);
+
+#if defined(LCD_VMM)
+struct lcd_vmm g_lcd_vmm; 
+#endif
 
 /* DEBUGGING --------------------------------------------------*/
 
@@ -531,8 +538,9 @@ static void vmx_free_vmxon_areas(void)
 #if defined(LCD_VMM)
 
 int lcd_vmm_init(void) {
-{
-	int cpu; 
+	int cpu;
+	int ret; 
+	
 	struct lcd_arch *lcd_arch; 
 
 	for_each_possible_cpu(cpu) {
@@ -554,6 +562,8 @@ int lcd_vmm_init(void) {
 			LCD_ERR("error creating lcd_arch");
 			goto fail; 
 		}
+
+		lcd_arch->vmm = &g_lcd_vmm; 
 	}
 	return 0; 
 fail: 

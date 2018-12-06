@@ -183,6 +183,7 @@ struct lcd {
 	 * that. For now, I hope this should be enough.
 	 */
 	struct iommu_domain *domain;
+
 };
 
 /* similar to task structs */
@@ -954,19 +955,6 @@ int __lcd_ipc_init(void);
  * __lcd_ipc_exit -- Invoke before microkernel exits
  */
 void __lcd_ipc_exit(void);
-
-#if defined(LCD_VMM)
-
-struct lcd_vmm {
-	struct pmem_range ranges[MAX_RANGES];
-	int range_count;
-	struct mtrr_range mtrr_ranges[MAX_MTRR];
-	int mtrr_count;
-
-
-}
-
-#endif
 
 
 #endif /* LCD_DOMAINS_INTERNAL_H */

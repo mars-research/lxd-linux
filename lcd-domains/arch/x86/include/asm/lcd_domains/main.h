@@ -224,6 +224,12 @@ struct lcd_arch {
 #endif
 	} msr_autoload;
 
+#if defined(LCD_VMM)
+	/* EPT for running deprivileged kernel */
+	u64 *vmm_ept;
+	struct vmm *vmm; 
+#endif
+
 	/*
 	 * Pointer to struct module inside LCD container. We need this
 	 * for resolving addresses to symbol names for stack traces.
