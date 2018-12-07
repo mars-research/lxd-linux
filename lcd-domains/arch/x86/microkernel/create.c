@@ -628,7 +628,7 @@ static inline bool cpu_has_vmx_eptp_switching(void)
 	return vmx_msr & VM_FUNCTION_EPTP_SWITCHING;
 }
 
-static int vmx_enable_ept_switching(struct lcd_arch *lcd_arch)
+int vmx_enable_ept_switching(struct lcd_arch *lcd_arch)
 {
 	struct page *eptp_list_pg;
 	u64 vm_function_control;
@@ -739,7 +739,7 @@ static void vmx_setup_vmcs_guest_settings(struct lcd_arch *lcd_arch)
  * Front-end for setting up VMCS. Calls helper routines
  * to set up guest and host states of VMCS.
  */
-static void vmx_setup_vmcs(struct lcd_arch *lcd_arch)
+void vmx_setup_vmcs(struct lcd_arch *lcd_arch)
 {
 	/*
 	 * Set up guest part of vmcs, and guest exec

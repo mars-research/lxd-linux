@@ -119,12 +119,20 @@ struct mtrr_range {
 #define MAX_MTRR		MAX_VAR_MTRR + MAX_FIXED_MTRR
 extern void mm_cache_mtrr_ranges(struct mtrr_range *ranges, int *count, u8 *def_type);
 
+struct cont {
+  // Fields representing the code to run when the AWE is executed.
+  u64	rip;
+  u64   rbp;
+  u64   rsp;
+};
 
 struct lcd_vmm {
 	struct pmem_range ranges[MAX_RANGES];
 	int range_count;
 	struct mtrr_range mtrr_ranges[MAX_MTRR];
 	int mtrr_count;
+	short mtrr_def; 
+	int should_stop; 
 };
 
 #endif
@@ -217,6 +225,8 @@ struct lcd_arch {
 
 #if defined(LCD_VMM)
 	struct lcd_vmm *vmm; 
+	struct cont cont;
+	void *vmm_stack; 	
 #endif
 
 };

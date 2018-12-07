@@ -99,4 +99,7 @@ extern DEFINE_PER_CPU(struct lcd_arch *, vmm_lcd_arch);
 void vmm_vmx_enter(struct lcd_arch *lcd_arch); 
 #endif
 
+void vmx_setup_vmcs(struct lcd_arch *lcd_arch);
+int vmx_enable_ept_switching(struct lcd_arch *lcd_arch);
+
 #endif /* ASM_X86_LCD_DOMAINS_RUN_H */
