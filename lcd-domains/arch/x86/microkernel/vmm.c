@@ -38,10 +38,28 @@
 #define EPT_DIRTY			0x200
 
 #define PAGE_PA_MASK            (0xFFFFFFFFFULL << PAGE_SHIFT)
+#define PAGE_PA(page)           ((page) & PAGE_PA_MASK)
+
+#define EPT_AR_MASK                     0x7
 
 
 #define MSR_MTRR_PHYS_MASK              0x00000201 
 #define MSR_MTRR_PHYS_BASE              0x00000200
+
+#define PGD_SHIFT_P             39
+#define PUD_SHIFT_P             30
+#define PMD_SHIFT_P             21
+#define PTE_SHIFT_P             12
+
+#ifndef PTX_MASK
+#define PTX_MASK                0x1FF
+#endif
+
+#define PGD_INDEX_P(addr)               (((addr) >> PGD_SHIFT_P) & PTX_MASK)
+#define PUD_INDEX_P(addr)               (((addr) >> PUD_SHIFT_P) & PTX_MASK)
+#define PMD_INDEX_P(addr)               (((addr) >> PMD_SHIFT_P) & PTX_MASK)
+#define PTE_INDEX_P(addr)               (((addr) >> PTE_SHIFT_P) & PTX_MASK)
+
 
 #define EXIT_REASON_EXCEPTION_NMI       0
 #define EXIT_REASON_EXTERNAL_INTERRUPT  1
@@ -825,7 +843,7 @@ static int vmm_handle_exit(struct lcd_arch *lcd_arch)
 	return ret;
 }
 
-int lcd_vmm_arch_run(struct lcd_arch *lcd_arch)
+int vmm_arch_run(struct lcd_arch *lcd_arch)
 {
 	int ret;
 
@@ -857,30 +875,33 @@ int lcd_vmm_arch_run(struct lcd_arch *lcd_arch)
 }
 
 
-static int should_stop(struct lcd_vmm *vmm)
+static int vmm_should_stop(struct lcd_vmm *vmm)
 {
 	if (vmm->should_stop)
 		return 1;
 	return 0;
 }
 
-void vmm_set_entry_point(struct lcd_vmm *vmm) {
+void vmm_set_entry_point(struct lcd_arch *lcd_arch) {
 
-	lcd_arch->regs.rsp = lcd_arch->
+	lcd_arch->regs.rsp = lcd_arch->cont.rsp;
+	vmcs_writel(GUEST_RSP, lcd_arch->regs.rsp);
+	lcd_arch->regs.rbp = lcd_arch->cont.rbp; 
+	lcd_arch->regs.rip = lcd_arch->cont.rip; 
+	vmcs_writel(GUEST_RIP, lcd_arch->regs.rip);
 
 	return; 
 };
 
 
-void vmm_loop(struct lcd_vmm *vmm)
+void vmm_loop(struct lcd_arch *lcd_arch)
 {
 	int ret;
-	int vmm_ret = 0;
 	int entry_count = 0;
 
 
 	/* Set entry point for the host using vmm->cont */
-	vmm_set_entry_point(vmm); 
+	vmm_set_entry_point(lcd_arch); 
 
 	/*
 	 * Load vmcs pointer on this cpu
@@ -892,7 +913,7 @@ void vmm_loop(struct lcd_vmm *vmm)
 	 *
 	 * *preemption disabled*
 	 */
-	vmx_get_cpu(vmm->lcd_arch);
+	vmx_get_cpu(lcd_arch);
 
 	vmx_setup_vmcs(lcd_arch);
 	vmx_enable_ept_switching(lcd_arch);
@@ -910,9 +931,9 @@ void vmm_loop(struct lcd_vmm *vmm)
 	 */
 	for (;;) {
 
-		ret = vmm_arch_run(vmm->lcd_arch);
-		if (ret < 0 || vmm_should_stop(vmm)) {
-			lcd_arch_dump_vmm(vmm->lcd_arch);
+		ret = vmm_arch_run(lcd_arch);
+		if (ret < 0 || vmm_should_stop(lcd_arch->vmm)) {
+			lcd_arch_dump_lcd(lcd_arch);
 			break; 
 		}
 
@@ -929,31 +950,30 @@ void vmm_loop(struct lcd_vmm *vmm)
 	 */
 	vmx_put_cpu(lcd_arch);	
 
+	LCD_MSG("Exiting VMM, handled exits: %d\n", entry_count); 
+
 	/*
 	 * If there was an error, dump the lcd's state.
 	 */
 	if (ret < 0)
 		lcd_arch_dump_lcd(lcd_arch);
 
-	return ret;
-
+	return;
 }
 
 #define SAVE_CALLEE_REGS()						\
   __asm__ volatile ("" : : : "rbx", "r12", "r13", "r14", "r15",         \
 		    "memory", "cc")
-struct cont_t {
-  // Fields representing the code to run when the AWE is executed.
-  void  *eip;
-  void  *ebp;
-  void  *esp;
-}
-
 /*
          static void vmm_on_alt_stack_0(void *stack,   // rdi
                                         void *fn,      // rsi
                                         void *args)    // rdx
 */
+
+static void vmm_on_alt_stack_0(void *stack,   // rdi
+				void *fn,     // rsi
+				void *args);  // rdx
+
 __asm__ ("      .text \n\t"
          "      .align  16                  \n\t"
          "vmm_on_alt_stack_0:               \n\t"
@@ -978,6 +998,9 @@ typedef void (*cont_fn_t)(void *cont, void *args);
  *                             void *args,     //rsi
  *                             cont_fn_t fn)   // rdx
 */
+void _vmm_call_cont_direct(struct cont *cont,   // rdi
+			void *args,     //rsi
+			cont_fn_t fn);   // rdx
 
 __asm__ ("      .text \n\t"
          "      .align  16           \n\t"
@@ -998,7 +1021,7 @@ __asm__ ("      .text \n\t"
 void vmm_enter_switch_stack(void *cont, void *args) {
 
 	struct lcd_arch * lcd_arch = (struct lcd_arch *)args;
-	lcd_arch->cont = (cont_t*) cont;
+	lcd_arch->cont = *(struct cont*) cont;
 
 	/* Execute vmm_loop() on the new stack  
 	 *
@@ -1015,7 +1038,7 @@ void vmm_enter_switch_stack(void *cont, void *args) {
 #define CALL_CONT(_CONT,_FN,_ARG) 				\
 	do { 							\
 		SAVE_CALLEE_REGS();  				\
-		_vmm_callcont_direct(_CONT, _ARG, _FN);		\
+		_vmm_call_cont_direct(_CONT, _ARG, _FN);		\
       	} while (0)
 
 
@@ -1078,7 +1101,7 @@ u8 ept_memory_type(struct lcd_vmm *vmm, u64 gpa)
 	u8 type = vmm->mtrr_def;
 
 	for (i = 0; i < vmm->mtrr_count; ++i) {
-		mttr_range = &k->mtrr_ranges[i];
+		mttr_range = &vmm->mtrr_ranges[i];
 		if (!in_bounds(gpa, mttr_range->start, mttr_range->end))
 			continue;
 
@@ -1099,9 +1122,14 @@ u64 *ept_alloc_page(u64 *pml4, int access, int mtype, u64 gpa, u64 hpa)
 	/* PML4 (512 GB) */
 	u64 *pml4e = &pml4[PGD_INDEX_P(gpa)];
 	u64 *pdpt = ept_page_addr(pml4e);
+	u64 *pdpte;
+	u64 *pdt;
+	u64 *pdte;
+	u64 *pt;
+	u64 *page;
 
 	if (!pdpt) {
-		pdpt = mm_alloc_page();
+		pdpt = (void *)get_zeroed_page(GFP_KERNEL | GFP_ATOMIC);
 		if (!pdpt)
 			return NULL;
 
@@ -1109,10 +1137,10 @@ u64 *ept_alloc_page(u64 *pml4, int access, int mtype, u64 gpa, u64 hpa)
 	}
 
 	/* PDPT (1 GB)  */
-	u64 *pdpte = &pdpt[PUD_INDEX_P(gpa)];
-	u64 *pdt = ept_page_addr(pdpte);
+	pdpte = &pdpt[PUD_INDEX_P(gpa)];
+	pdt = ept_page_addr(pdpte);
 	if (!pdt) {
-		pdt = mm_alloc_page();
+		pdt = (void *)get_zeroed_page(GFP_KERNEL | GFP_ATOMIC); 
 		if (!pdt)
 			return NULL;
 
@@ -1120,10 +1148,10 @@ u64 *ept_alloc_page(u64 *pml4, int access, int mtype, u64 gpa, u64 hpa)
 	}
 
 	/* PDT (2 MB)  */
-	u64 *pdte = &pdt[PMD_INDEX_P(gpa)];
-	u64 *pt = ept_page_addr(pdte);
+	pdte = &pdt[PMD_INDEX_P(gpa)];
+	pt = ept_page_addr(pdte);
 	if (!pt) {
-		pt = mm_alloc_page();
+		pt = (void *)get_zeroed_page(GFP_KERNEL | GFP_ATOMIC); 
 		if (!pt)
 			return NULL;
 
@@ -1131,43 +1159,43 @@ u64 *ept_alloc_page(u64 *pml4, int access, int mtype, u64 gpa, u64 hpa)
 	}
 
 	/* PT (4 KB)  */
-	u64 *page = &pt[PTE_INDEX_P(gpa)];
+	page = &pt[PTE_INDEX_P(gpa)];
 	*page = mkepte(access, hpa);
 	*page |= mtype << VMX_EPT_MT_EPTE_SHIFT;
 	return page;
 }
 
-static int vmm_detect_memory_regions(struct vmm *vmm) {
+static int vmm_detect_memory_regions(struct lcd_vmm *vmm) {
 	u8 mtrr_def;
 	u64 addr;
 	u8 mt; 
-	int i; 
+	int i, ret;  
 
-	ret = mm_cache_ram_ranges(&vmm->ranges, &vmm->range_count);
+	ret = mm_cache_ram_ranges(vmm->ranges, &vmm->range_count);
 	if (ret < 0) {
 		LCD_ERR("Failed to detect cache regions\n");
 		return -1;
 	}	
 
-	LCD_INFO("detected %d physical memory ranges\n", vmm->range_count);
+	LCD_MSG("detected %d physical memory ranges\n", vmm->range_count);
 
-	for (i = 0; i < range_count; i ++ ) {
-		LCD_INFO("range: 0x%016llX -> 0x%016llX\n", vmm->ranges[i].start, vmm->ranges[i].end);
+	for (i = 0; i < vmm->range_count; i ++ ) {
+		LCD_MSG("range: 0x%016llX -> 0x%016llX\n", vmm->ranges[i].start, vmm->ranges[i].end);
 	}
 
 	/* MTRR   */
-	ret = mm_cache_mtrr_ranges(&vmm->mttr_ranges, &vmm->mtrr_count, &mtrr_def);
+	ret = mm_cache_mtrr_ranges(vmm->mttr_ranges, &vmm->mtrr_count, &mtrr_def);
 	if (ret < 0) {
 		LCD_ERR("Failed to detect MTTR ranges\n");
 		return -1;
 	}	
 
 
-	LCD_INFO("Detected %d MTRR ranges (default type:%d)\n", 
+	LCD_MSG("Detected %d MTRR ranges (default type:%d)\n", 
 		vmm->mtrr_count, vmm->mtrr_def);
 
 	for (i = 0; i < vmm->mtrr_count; i++) {
-		LCD_INFO("MTRR Range: 0x%016llX -> 0x%016llX fixed: %d type: %d\n",
+		LCD_MSG("MTRR Range: 0x%016llX -> 0x%016llX fixed: %d type: %d\n",
 			  vmm->mttr_ranges[i].start, vmm->mttr_ranges[i].end, 
 			  vmm->mttr_ranges[i].fixed, vmm->mttr_ranges[i].type);
 	}
@@ -1185,7 +1213,7 @@ static int vmm_arch_ept_init(struct lcd_arch *lcd_arch) {
 	struct vmm * vmm = lcd_arch->vmm; 
 
 	for (i = 0; i < vmm->range_count; i ++ ) {
-		LCD_INFO("range: 0x%016llX -> 0x%016llX\n", 
+		LCD_MSG("range: 0x%016llX -> 0x%016llX\n", 
 				vmm->ranges[i].start, vmm->ranges[i].end);
 
 		for (addr = vmm->ranges[i].start; addr < vmm->ranges[i].end; addr += PAGE_SIZE) {
