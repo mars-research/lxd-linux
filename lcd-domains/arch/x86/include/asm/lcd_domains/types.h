@@ -178,21 +178,6 @@ struct lcd_arch {
 	u32 vec_no;
 	u32 exit_instr_len;
 
-	/*
-	 * AB: Borrow this code from KSM
-	 *
-	 * IRQs are queued to incase we inject another interrupt
-	 * (or we were unable to past VM exit), so that we can inject
-	 * contributory faults appropriately, e.g. #PF into #DF, etc.
-	 *
-	 */
-	struct {
-		bool pending;
-		u32 err;
-		u32 bits;
-		u32 instr_len;
-	} pending_irq;
-
 	struct page *eptp_list_pg;
 	/*
 	 * Stuff we need to save explicitly
@@ -222,12 +207,15 @@ struct lcd_arch {
 	 * for resolving addresses to symbol names for stack traces.
 	 */
 	struct module *kernel_module;
-
 #if defined(LCD_VMM)
 	struct lcd_vmm *vmm; 
 	struct cont cont;
-	void *vmm_stack; 	
+	void *vmm_stack; 
+	/* EPT for running deprivileged kernel */
+	u64 *vmm_ept;
+
 #endif
+
 
 };
 
