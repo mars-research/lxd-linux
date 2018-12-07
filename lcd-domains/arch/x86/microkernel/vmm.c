@@ -532,7 +532,7 @@ static int vmm_handle_vmx(struct lcd_arch *lcd_arch)
 	return 0;
 }
 
-static int vmm_handle_wbinvd(struct lcd_arch *lcd_arch)
+int vmm_handle_wbinvd(struct lcd_arch *lcd_arch)
 {
 	//__wbinvd();
 	__asm __volatile("wbinvd");
@@ -541,7 +541,7 @@ static int vmm_handle_wbinvd(struct lcd_arch *lcd_arch)
 	return 0;
 }
 
-static int vmm_handle_xsetbv(struct lcd_arch *lcd_arch)
+int vmm_handle_xsetbv(struct lcd_arch *lcd_arch)
 {
 
 	/* Simply issue the XSETBV instruction on the native logical processor */
@@ -857,13 +857,6 @@ int vmm_arch_run(struct lcd_arch *lcd_arch)
 	 * Check/handle nmi's, exceptions, and external interrupts 
 	 */
 	ret = vmm_handle_exit(lcd_arch);
-	if (ret) {
-		/*
-		 * We exited due to an exception, nmi, or external interrupt.
-		 * All done.
-		 */
-		return 0; 
-	}
 
 	/*
 	 * Handle all other exit reasons
@@ -872,6 +865,7 @@ int vmm_arch_run(struct lcd_arch *lcd_arch)
 	 */
 	//ret = vmx_handle_other_exits(lcd_arch);
 
+	return ret; 	
 }
 
 
@@ -970,7 +964,7 @@ void vmm_loop(struct lcd_arch *lcd_arch)
                                         void *args)    // rdx
 */
 
-static void vmm_on_alt_stack_0(void *stack,   // rdi
+void vmm_on_alt_stack_0(void *stack,   // rdi
 				void *fn,     // rsi
 				void *args);  // rdx
 
@@ -1165,10 +1159,8 @@ u64 *ept_alloc_page(u64 *pml4, int access, int mtype, u64 gpa, u64 hpa)
 	return page;
 }
 
-static int vmm_detect_memory_regions(struct lcd_vmm *vmm) {
+int vmm_detect_memory_regions(struct lcd_vmm *vmm) {
 	u8 mtrr_def;
-	u64 addr;
-	u8 mt; 
 	int i, ret;  
 
 	ret = mm_cache_ram_ranges(vmm->ranges, &vmm->range_count);
@@ -1184,11 +1176,11 @@ static int vmm_detect_memory_regions(struct lcd_vmm *vmm) {
 	}
 
 	/* MTRR   */
-	ret = mm_cache_mtrr_ranges(vmm->mttr_ranges, &vmm->mtrr_count, &mtrr_def);
-	if (ret < 0) {
-		LCD_ERR("Failed to detect MTTR ranges\n");
-		return -1;
-	}	
+	mm_cache_mtrr_ranges(vmm->mtrr_ranges, &vmm->mtrr_count, &mtrr_def);
+	//if (ret < 0) {
+	//	LCD_ERR("Failed to detect MTTR ranges\n");
+	//	return -1;
+	//}	
 
 
 	LCD_MSG("Detected %d MTRR ranges (default type:%d)\n", 
@@ -1196,8 +1188,8 @@ static int vmm_detect_memory_regions(struct lcd_vmm *vmm) {
 
 	for (i = 0; i < vmm->mtrr_count; i++) {
 		LCD_MSG("MTRR Range: 0x%016llX -> 0x%016llX fixed: %d type: %d\n",
-			  vmm->mttr_ranges[i].start, vmm->mttr_ranges[i].end, 
-			  vmm->mttr_ranges[i].fixed, vmm->mttr_ranges[i].type);
+			  vmm->mtrr_ranges[i].start, vmm->mtrr_ranges[i].end, 
+			  vmm->mtrr_ranges[i].fixed, vmm->mtrr_ranges[i].type);
 	}
 
 	return 0; 
@@ -1206,11 +1198,10 @@ static int vmm_detect_memory_regions(struct lcd_vmm *vmm) {
 /* Prepare the EPT for the monolithic Linux kernel to 
  * run it in the VT-x non-root */
 static int vmm_arch_ept_init(struct lcd_arch *lcd_arch) {
-	u8 mtrr_def;
 	u64 addr;
 	u8 mt; 
 	int i; 
-	struct vmm * vmm = lcd_arch->vmm; 
+	struct lcd_vmm * vmm = lcd_arch->vmm; 
 
 	for (i = 0; i < vmm->range_count; i ++ ) {
 		LCD_MSG("range: 0x%016llX -> 0x%016llX\n", 
@@ -1226,13 +1217,10 @@ static int vmm_arch_ept_init(struct lcd_arch *lcd_arch) {
 	/* Allocate APIC page  */
 	addr = __readmsr(MSR_IA32_APICBASE) & MSR_IA32_APICBASE_BASE;
 	mt = ept_memory_type(vmm, addr);
-	if (!ept_alloc_page(EPT4(lcd_arch->vmm_ept, EPT_ACCESS_ALL, mt, addr, addr))
+	if (!ept_alloc_page(lcd_arch->vmm_ept, EPT_ACCESS_ALL, mt, addr, addr))
 		return false;
 
 	return 0; 
-out:
-
-
 };
 
 /* Prepare the stack for the execution of the hypervisor
@@ -1252,8 +1240,8 @@ static int vmm_alloc_stack(struct lcd_arch *lcd_arch) {
 	return 0;
 };
 
-static void vmm_free_stack(struct lcd_arch *lcd_arch) {
-	assert(lcd_arch->vmm_stack); 
+void vmm_free_stack(struct lcd_arch *lcd_arch) {
+	BUG_ON(lcd_arch->vmm_stack); 
 	lcd_arch->vmm_stack -= VMM_STACK_SIZE;
     	kfree(lcd_arch->vmm_stack);
 	return; 
@@ -1316,18 +1304,21 @@ fail_alloc:
 	return ret;
 }
 
-/* Enter the VT-x root mode. We enter the VT-x root mode on a new stack. 
- * The hypervisor will keep spinning until the kernel asks it to exit 
- * by updating the vmm data structure (setting vmm->status to EXIT), and triggering 
- * an exit into the hypervisor. */
-static int vmm_enter(void *unused)
+/* Enter the VT-x root mode. Create a new stack, prepare an EPT and enter 
+ * the VT-x root mode on a new stack. 
+ *
+ * The hypervisor will keep spinning until the kernel asks it to exit by 
+ * setting the vmm->should_stop flag. 
+ *
+ */
+void vmm_enter(void *unused)
 {
 	int ret;
-	struct lcd_vmm *vmm;
+	struct lcd_arch *lcd_arch;
 
-	vmm = __this_cpu_read(vmm);
+	lcd_arch = __this_cpu_read(lcd_arch);
 
-	ret = vmm_prepare_ept(vmm); 
+	ret = vmm_arch_ept_init(vmm_lcd_arch); 
 	if (ret) 
 		goto failed; 
 
@@ -1336,15 +1327,14 @@ static int vmm_enter(void *unused)
 		goto failed; 
 
 	/* We enter the hypervisor and continue in the guest at vmm_enter_ack */
-	__vmm_enter(vmm->stack);	
+	__vmm_enter(lcd_arch->vmm_stack);	
 
 	LCD_MSG("Entered VMM on CPU %d\n", raw_smp_processor_id());
 
-	return 0; 
+	return; 
 
 failed: 
-	atomic_inc(&vmm_enter_failed);
 	LCD_ERR("failed to enter VMM, err = %d\n", ret);
-	return -1; 
+	return; 
 }
 

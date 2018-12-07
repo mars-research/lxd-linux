@@ -547,6 +547,13 @@ int lcd_vmm_init(void) {
 		per_cpu(vmm_lcd_arch, cpu) = NULL; 
 	}
 
+	ret = vmm_detect_memory_regions(&g_lcd_vmm);
+	if (ret) {
+		LCD_ERR("error detecting memory ranges: %d\n", ret);
+		goto fail; 
+	};
+
+
 	for_each_possible_cpu(cpu) {
 
 		/* Allocate a per-cpu lcd_arch data structure that 
@@ -565,6 +572,7 @@ int lcd_vmm_init(void) {
 
 		lcd_arch->vmm = &g_lcd_vmm; 
 	}
+
 	return 0; 
 fail: 
 	for_each_possible_cpu(cpu) {
@@ -665,6 +673,15 @@ int lcd_arch_init(void)
 		ret = -EBUSY;
 		goto failed2;
 	}
+
+#if defined(LCD_VMM)
+	if (on_each_cpu(vmm_enter, NULL, 1)) {
+		LCD_ERR("timeout waiting for VMM enter on CPU.\n");
+		ret = -EIO;
+		goto failed2; 
+	}
+#endif
+
 
 	/*
 	 * Init lcd_arch_thread cache (using instead of kmalloc since

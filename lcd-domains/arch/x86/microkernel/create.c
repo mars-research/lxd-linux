@@ -899,7 +899,7 @@ void vmx_put_cpu(struct lcd_arch *lcd_arch)
 /**
  * Reserves a vpid and sets it in the vcpu.
  */
-static int vmx_allocate_vpid(struct lcd_arch *lcd_arch)
+int vmx_allocate_vpid(struct lcd_arch *lcd_arch)
 {
 	int vpid;
 
