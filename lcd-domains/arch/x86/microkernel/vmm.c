@@ -128,7 +128,6 @@
 #define EXIT_REASON_XRSTORS             64
 #define EXIT_REASON_PCOMMIT             65
 
-
 #if 0
 typedef enum {
 	EXCEPTION_BENIGN,
@@ -887,11 +886,101 @@ void vmm_set_entry_point(struct lcd_arch *lcd_arch) {
 	return; 
 };
 
+/**
+ * Sets up VMCS settings--execution control, control register
+ * access, exception handling.
+ *
+ * We need the lcd_arch so we can set up it's ept.
+ */
+static void vmm_setup_vmcs_guest_settings(struct lcd_arch *lcd_arch)
+{
+	/*
+	 * VPID
+	 */
+	vmcs_write16(VIRTUAL_PROCESSOR_ID, lcd_arch->vpid);
+	/*
+	 * No VMCS Shadow (Intel SDM V3 24.4.2)
+	 */
+	vmcs_write64(VMCS_LINK_POINTER, -1ull);
+	/*
+	 * Execution controls
+	 */
+	vmcs_write32(PIN_BASED_VM_EXEC_CONTROL,
+		lcd_global_vmcs_config.pin_based_exec_controls);
+	vmcs_write32(CPU_BASED_VM_EXEC_CONTROL,
+		lcd_global_vmcs_config.primary_proc_based_exec_controls);
+	vmcs_write32(SECONDARY_VM_EXEC_CONTROL,
+		lcd_global_vmcs_config.secondary_proc_based_exec_controls);
+	/*
+	 * Entry / Exit controls
+	 */
+	vmcs_write32(VM_ENTRY_CONTROLS, 
+		lcd_global_vmcs_config.vmentry_controls);
+	vmcs_write32(VM_EXIT_CONTROLS, 
+		lcd_global_vmcs_config.vmexit_controls);
+	/*
+	 * EPT
+	 */
+	vmcs_write64(EPT_POINTER, lcd_arch->vmm_ept.vmcs_ptr);
+	/*
+	 * LCDs normally exit on every exception, in the 
+	 * first implementation of the VMM we try not 
+	 * to exit at all. 
+	 *
+	 * Exit on any kind of page fault (Intel SDM V3 25.2)
+	 */
+	//vmcs_write32(EXCEPTION_BITMAP, 0xffffffff);
+	//vmcs_write32(PAGE_FAULT_ERROR_CODE_MASK, 0);
+	//vmcs_write32(PAGE_FAULT_ERROR_CODE_MATCH, 0);
+
+	/* Never exit on a pagefault (Intel SDM V3 25.2) */
+	vmcs_write32(EXCEPTION_BITMAP, 0x1 << 14);
+	vmcs_write32(PAGE_FAULT_ERROR_CODE_MASK, 0);
+	vmcs_write32(PAGE_FAULT_ERROR_CODE_MATCH, 0xffffffff);
+
+	/*
+	 * No %cr3 targets (Intel SDM V3 24.6.7)
+	 *
+	 * (Loads / stores to %cr3 are allowed in non-root anyway.)
+	 */
+	vmcs_write32(CR3_TARGET_COUNT, 0);
+	/*
+	 * %cr0 and %cr4 guest accesses always cause vm exit
+	 *
+	 * Intel SDM V3 24.6.7
+	 */
+	vmcs_writel(CR0_GUEST_HOST_MASK, ~0ul);
+	vmcs_writel(CR4_GUEST_HOST_MASK, ~0ul);
+}
+
+
+/**
+ * Front-end for setting up VMCS. Calls helper routines
+ * to set up guest and host states of VMCS.
+ */
+void vmm_setup_vmcs(struct lcd_arch *lcd_arch)
+{
+	/*
+	 * Set up guest part of vmcs, and guest exec
+	 */
+	vmm_setup_vmcs_guest_settings(lcd_arch);
+	vmx_setup_vmcs_guest_regs(lcd_arch);
+	/*
+	 * Set up MSR bitmap and autoloading
+	 */
+	vmx_setup_vmcs_msr(lcd_arch);
+	/*
+	 * Set up host part of vmcs
+	 */
+	vmx_setup_vmcs_host(lcd_arch);
+}
+
 
 void vmm_loop(struct lcd_arch *lcd_arch)
 {
 	int ret;
 	int entry_count = 0;
+	int local_entry_count = 0; 
 
 
 	/* Set entry point for the host using vmm->cont */
@@ -909,7 +998,7 @@ void vmm_loop(struct lcd_arch *lcd_arch)
 	 */
 	vmx_get_cpu(lcd_arch);
 
-	vmx_setup_vmcs(lcd_arch);
+	vmm_setup_vmcs(lcd_arch);
 	vmx_enable_ept_switching(lcd_arch);
 
 	/*
@@ -931,7 +1020,13 @@ void vmm_loop(struct lcd_arch *lcd_arch)
 			break; 
 		}
 
-		entry_count ++; 
+		entry_count ++;
+		local_entry_count ++; 
+
+		if (local_entry_count > 1000) {
+			LCD_MSG("Exiting VMM, handled exits: %d\n", entry_count);
+			local_entry_count = 0; 
+		}
 	}
 	
 	/*
@@ -1072,7 +1167,6 @@ static inline bool in_bounds(u64 gpa, u64 start, u64 end)
 	return gpa >= start && gpa < end;
 }
 
-
 u8 ept_memory_type(struct lcd_vmm *vmm, u64 gpa)
 {
 	/* AB: lift this piece from KSM */
@@ -1202,6 +1296,38 @@ static int vmm_arch_ept_init(struct lcd_arch *lcd_arch) {
 	u8 mt; 
 	int i; 
 	struct lcd_vmm * vmm = lcd_arch->vmm; 
+	hva_t page;
+	u64 eptp;
+	
+	/*
+	 * Alloc the root global page directory page
+	 */
+	page = __hva(get_zeroed_page(GFP_KERNEL));
+	if (!hva_val(page)) {
+		LCD_ERR("failed to alloc page\n");
+		return -ENOMEM;
+	}
+	lcd_arch->vmm_ept.root = (lcd_arch_epte_t *)hva2va(page);
+
+	/*
+	 * Init the VMCS EPT pointer
+	 *
+	 * -- default memory type (write-back)
+	 * -- default ept page walk length (4, pointer stores
+	 *    length - 1)
+	 * -- use access/dirty bits, if available
+	 *
+	 * See Intel SDM V3 24.6.11 and Figure 28-1.
+	 */
+
+	eptp = VMX_EPT_DEFAULT_MT |
+		(LCD_ARCH_EPT_WALK_LENGTH - 1) << LCD_ARCH_EPTP_WALK_SHIFT;
+	if (cpu_has_vmx_ept_ad_bits()) {
+		lcd_arch->vmm_ept.access_dirty_enabled = true;
+		eptp |= VMX_EPT_AD_ENABLE_BIT;
+	}
+	eptp |= hpa_val(va2hpa(lcd_arch->vmm_ept.root)) & PAGE_MASK;
+	lcd_arch->vmm_ept.vmcs_ptr = eptp;
 
 	for (i = 0; i < vmm->range_count; i ++ ) {
 		LCD_MSG("range: 0x%016llX -> 0x%016llX\n", 
@@ -1209,7 +1335,8 @@ static int vmm_arch_ept_init(struct lcd_arch *lcd_arch) {
 
 		for (addr = vmm->ranges[i].start; addr < vmm->ranges[i].end; addr += PAGE_SIZE) {
 			mt = ept_memory_type(vmm, addr);
-			if (!ept_alloc_page(lcd_arch->vmm_ept, EPT_ACCESS_ALL, mt, addr, addr))
+			if (!ept_alloc_page(lcd_arch->vmm_ept.root, 
+						EPT_ACCESS_ALL, mt, addr, addr))
 				return -1;
 		}
 	}
@@ -1217,7 +1344,7 @@ static int vmm_arch_ept_init(struct lcd_arch *lcd_arch) {
 	/* Allocate APIC page  */
 	addr = __readmsr(MSR_IA32_APICBASE) & MSR_IA32_APICBASE_BASE;
 	mt = ept_memory_type(vmm, addr);
-	if (!ept_alloc_page(lcd_arch->vmm_ept, EPT_ACCESS_ALL, mt, addr, addr))
+	if (!ept_alloc_page(lcd_arch->vmm_ept.root, EPT_ACCESS_ALL, mt, addr, addr))
 		return false;
 
 	return 0; 
