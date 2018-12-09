@@ -237,7 +237,13 @@ static int setup_vmcs_config(struct lcd_vmcs_config *vmcs_conf)
 	/*
 	 * VMX Execution Controls (Intel SDM V3 24.6)
 	 */
-	
+#if defined(LCD_VMM)
+	/* We don't want INT and NMI exits in the first 
+	 * version of LCD VMM 
+ 	 */
+
+	pin_based_exec_controls = 0; 
+#else
 	/*
 	 * Pin Based Execution Controls (exceptions, nmi's, ...)
 	 * 
@@ -245,6 +251,7 @@ static int setup_vmcs_config(struct lcd_vmcs_config *vmcs_conf)
 	 */
 	pin_based_exec_controls = PIN_BASED_EXT_INTR_MASK | 
 		PIN_BASED_NMI_EXITING;
+#endif
 	if (adjust_vmx_controls(&pin_based_exec_controls,
 					PIN_BASED_RESERVED_MASK,
 					MSR_IA32_VMX_PINBASED_CTLS) < 0) {
@@ -273,7 +280,10 @@ static int setup_vmcs_config(struct lcd_vmcs_config *vmcs_conf)
 	 * Note: TSC offsetting and TPR Shadowing are not set. We are
 	 * currently not virtualizing access to the TPR.
 	 */
-	primary_proc_based_exec_controls = CPU_BASED_HLT_EXITING |
+	primary_proc_based_exec_controls = 
+#if !defined(LCD_VMM)		
+		/* Don't exit in case we use LCDs VMM for now */
+		CPU_BASED_HLT_EXITING |
 		CPU_BASED_INVLPG_EXITING |
 		CPU_BASED_MWAIT_EXITING |
 		CPU_BASED_RDPMC_EXITING |
@@ -285,6 +295,7 @@ static int setup_vmcs_config(struct lcd_vmcs_config *vmcs_conf)
 		CPU_BASED_UNCOND_IO_EXITING |
 		CPU_BASED_USE_MSR_BITMAPS |
 		CPU_BASED_MONITOR_EXITING |
+#endif		
 		CPU_BASED_ACTIVATE_SECONDARY_CONTROLS;
 	if (adjust_vmx_controls(&primary_proc_based_exec_controls,
 					CPU_BASED_RESERVED_MASK,
@@ -311,7 +322,13 @@ static int setup_vmcs_config(struct lcd_vmcs_config *vmcs_conf)
 	secondary_proc_based_exec_controls = SECONDARY_EXEC_ENABLE_EPT |
 		SECONDARY_EXEC_RDTSCP |
 		SECONDARY_EXEC_ENABLE_VPID |
+#if !defined(LCD_VMM)	
 		SECONDARY_EXEC_WBINVD_EXITING |
+#endif
+#if defined(LCD_VMM)
+		SECONDARY_EXEC_XSAVES |
+		SECONDARY_EXEC_ENABLE_INVPCID |	
+#endif
 		SECONDARY_EXEC_ENABLE_VMFUNCTIONS;
 
 	if (adjust_vmx_controls(&secondary_proc_based_exec_controls,
