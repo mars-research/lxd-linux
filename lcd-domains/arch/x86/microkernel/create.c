@@ -188,8 +188,7 @@ static void vmx_setup_vmcs_host(struct lcd_arch *lcd_arch)
 	u32 high32;
 	u16 tmps;
 
-	/*
-	 * Host %cr0, %cr4, %cr3
+	/* Host %cr0, %cr4, %cr3
 	 *
 	 * -- ensure TS (Task Switched) in %cr0 is 0
 	 *

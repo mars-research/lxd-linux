@@ -630,10 +630,18 @@ int lcd_arch_init(void)
 		goto failed1;
 	}	
 
-	/* Allow access to %fs and %gs */
+#if defined(LCD_VMM)
+	/*
+	 * Intel SDM V3 24.6.9, 31.10.1
+	 * Allow access to all MSRs (set to 0)
+	*/
+	memset(lcd_global_msr_bitmap, 0, PAGE_SIZE);
+#else
 	memset(lcd_global_msr_bitmap, 0xff, PAGE_SIZE);
+	/* Allow access to %fs and %gs */
 	vmx_disable_intercept_for_msr(lcd_global_msr_bitmap, MSR_FS_BASE);
 	vmx_disable_intercept_for_msr(lcd_global_msr_bitmap, MSR_GS_BASE);
+#endif
 
 	/*
 	 * Initialize VPID bitmap spinlock
