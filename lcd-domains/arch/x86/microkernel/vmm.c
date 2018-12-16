@@ -128,6 +128,31 @@
 #define EXIT_REASON_XRSTORS             64
 #define EXIT_REASON_PCOMMIT             65
 
+#define __sidt(idt)     __asm __volatile("sidt %0" : "=m" (*idt));
+#define __lidt(idt)     __asm __volatile("lidt %0" :: "m" (*idt));
+#define __sgdt(gdt)     __asm __volatile("sgdt %0" : "=m" (*gdt));
+#define __lgdt(gdt)     __asm __volatile("lgdt %0" :: "m" (*gdt));
+
+struct gdtr {
+        u16 limit;
+        uintptr_t base;
+} __packed;
+
+unsigned long __segmentlimit(unsigned long selector)
+{
+        unsigned long limit;
+        __asm __volatile("lsl %1, %0" : "=r" (limit) : "r" (selector));
+        return limit;
+}
+
+static inline u32 __accessright(u16 selector)
+{
+        if (selector)
+                return (__lar(selector) >> 8) & 0xF0FF;
+
+        /* unusable  */
+        return 0x10000;
+}
 #if 0
 typedef enum {
 	EXCEPTION_BENIGN,
@@ -936,23 +961,280 @@ static void vmm_setup_vmcs_guest_settings(struct lcd_arch *lcd_arch)
 	/* Never exit on a pagefault (Intel SDM V3 25.2) */
 	vmcs_write32(EXCEPTION_BITMAP, 0x1 << 14);
 	vmcs_write32(PAGE_FAULT_ERROR_CODE_MASK, 0);
-	vmcs_write32(PAGE_FAULT_ERROR_CODE_MATCH, 0xffffffff);
+	vmcs_write32(PAGE_FAULT_ERROR_CODE_MATCH, ~0ul);
 
 	/*
 	 * No %cr3 targets (Intel SDM V3 24.6.7)
-	 *
-	 * (Loads / stores to %cr3 are allowed in non-root anyway.)
+	 * 
+	 * It looks like CR3 wil always cause an exit, no? 
 	 */
 	vmcs_write32(CR3_TARGET_COUNT, 0);
-	/*
-	 * %cr0 and %cr4 guest accesses always cause vm exit
+	/* 
+	 * Intel SDM V3 24.6.6
+	 * %cr0 and %cr4 guest accesses always cause vm exit: all bits 1s
+	 * %cr0 and %cr4 are accessible to the guest (no exits): all bits 0
 	 *
-	 * Intel SDM V3 24.6.7
 	 */
-	vmcs_writel(CR0_GUEST_HOST_MASK, ~0ul);
-	vmcs_writel(CR4_GUEST_HOST_MASK, ~0ul);
+	vmcs_writel(CR0_GUEST_HOST_MASK, 0);
+	vmcs_writel(CR4_GUEST_HOST_MASK, 0);
 }
 
+/**
+ * Sets up initial guest register values in VMCS.
+ *
+ * Most of the guest state is set here and in 
+ * vmx_setup_vmcs_guest_settings. The processor
+ * is picky about what goes into the guest state; if
+ * it doesn't like it, vmentry will fail. See Intel
+ * SDM V3 26.3.1.
+ *
+ * vmx_setup_vmcs_guest_regs
+ *   - %cr0, %cr4
+ *   - EFER MSR (part of setting guest to use 64-bit mode)
+ *   - %rsp (for now! should be accessible by arch-indep
+ *     code through interface)
+ *   - %rflags
+ *   - segment registers -- %cs, %ds, %ss, %es, %fs, %gs
+ *     - we have to do more setup here since the processor
+ *       doesn't set defaults (access rights, limits, etc.)
+ *   - misc fields -- activity state, debug controls, etc.
+ *
+ * vmx_setup_vmcs_guest_settings
+ *   - vpid
+ *   - execution, exit, and entry controls
+ *   - ept pointer (so you must init ept before!)
+ *   - exception handling
+ *   - %cr0, %cr4 access masks
+ *
+ * lcd_arch_set_pc
+ *   - %rip (to be set by arch-indep code)
+
+ * lcd_arch_set_gva_root
+ *   - %cr3 (to be set by arch-indep code)
+ */
+static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
+{
+	unsigned long cr0;
+	unsigned long cr4;
+
+	struct desc_struct *gdt;
+	hva_t host_tss;
+	unsigned long tmpl;
+
+	struct gdtr gdtr;
+
+
+	/*
+	 * Guest %cr0, %cr4, %cr3
+	 *
+	 * -- ensure TS (Task Switched) in %cr0 is 0
+	 *
+	 * Intel SDM V3 2.5
+	 */
+	vmcs_writel(GUEST_CR0, read_cr0());
+	vmcs_writel(CR0_READ_SHADOW, read_cr0());
+	vmcs_vritel(CR0_GUEST_HOST_MASK, 0);
+
+
+	vmcs_writel(GUEST_CR4, read_cr4());
+	vmcs_writel(CR4_READ_SHADOW, read_cr4());
+	vmcs_vritel(CR4_GUEST_HOST_MASK, 0);
+
+	vmcs_writel(GUEST_CR3, read_cr3());
+
+	/*
+	 * MSR EFER (extended feature enable register)
+	 *
+	 * -- 64-bit mode (long mode enabled and active)
+	 */
+	vmcs_writel(GUEST_IA32_EFER, EFER_LME | EFER_LMA);
+
+	/*
+ 	 * IA32 MSR - setup PAT entry	 
+ 	 */
+	vmx_setup_pat_msr(0, PAT_WB);
+	vmx_setup_pat_msr(1, PAT_UC);
+
+	/*
+	 * Sysenter info (%cs, %eip, and %esp)
+	 *
+	 * Even though the guest cannot access the sysenter msr,
+	 * the processor loads the values in these fields on exit,
+	 * so we need to have the correct values there.
+	 *
+	 * %esp is set when the vmcs is loaded on a cpu (since
+	 * each cpu has its own sysenter stack? following dune and
+	 * kvm here ...). This happens in __vmx_setup_cpu.
+	 *
+	 * See Intel SDM V3 27.5.1
+	 */
+	rdmsr(MSR_IA32_SYSENTER_CS, low32, high32);
+	vmcs_write32(GUEST_IA32_SYSENTER_CS, low32);
+	rdmsrl(MSR_IA32_SYSENTER_EIP, tmpl);
+	vmcs_writel(GUEST_IA32_SYSENTER_EIP, tmpl);
+
+	/*
+	 * Sysenter %esp (per cpu? so has to go in here? following
+	 * dune and kvm...)
+	 */
+	rdmsrl(MSR_IA32_SYSENTER_ESP, tmpl);
+	vmcs_writel(GUEST_IA32_SYSENTER_ESP, tmpl);
+
+	/*
+	 * Linux uses per-cpu TSS and GDT, so we need to set these
+	 * in the host part of the vmcs when switching cpu's.
+	 */
+	gdt = vmx_host_gdt();
+	vmx_host_tss(&host_tss);
+	vmcs_writel(GUEST_TR_BASE, hva_val(host_tss));
+	vmcs_writel(GUEST_GDTR_BASE, (unsigned long)gdt);
+
+	/* No need to handle LDT, I assume Linux doesn't use it */
+	//vmcs_writel(GUEST_LDTR_BASE, __segmentbase(gdtr.base, ldt));
+
+	/*
+	 * %fs and %gs are also per-cpu
+	 *
+	 * (MSRs are used to load / store %fs and %gs in 64-bit mode.
+	 * See Intel SDM V3 3.2.4 and 3.4.4.)
+	 */
+	rdmsrl(MSR_FS_BASE, tmpl);
+	vmcs_writel(HOST_FS_BASE, tmpl);
+	rdmsrl(MSR_GS_BASE, tmpl);
+	vmcs_writel(HOST_GS_BASE, tmpl);
+
+	/*
+	 * %rsp, %rip -- to be set by arch-independent code when guest address 
+	 * space set up (see lcd_arch_set_sp and lcd_arch_set_pc).
+	 */
+	see comment about set_sp and set_pc above
+
+	/*
+	 * %rflags
+	 */
+	vmcs_writel(GUEST_RFLAGS, __readeflags());
+
+	/*
+	 *===--- Segment and descriptor table registers ---===
+	 *
+	 * See Intel SDM V3 26.3.1.2, 26.3.1.3 for register requirements
+	 */
+
+	/* 
+	 * Bases for segment and desc table registers.
+	 *
+	 * Note: MSR's for %fs and %gs will be loaded with
+	 * the values in %fs.base and %gs.base; see Intel SDM V3 26.3.2.1.
+	 */
+	
+	/*
+	 * Guest segment selectors
+	 *
+	 * Even though %es, %ds, and %ss are ignored in 64-bit
+	 * mode, we still set them. See x86/include/asm/segment.h and
+	 * Intel SDM V3 3.4.4.
+	 */
+
+
+	savesegment(cs, tmps);
+	vmcs_write16(GUEST_CS_SELECTOR, tmps);
+	vmcs_writel(GUEST_CS_LIMIT, __segmentlimit(tmps));
+	vmcs_writel(GUEST_CS_AR_BYTES, __accessright(tmps));
+	vmcs_writel(GUEST_CS_BASE, 0);
+
+
+	savesegment(ds, tmps);
+	vmcs_write16(GUEST_DS_SELECTOR, tmps);
+	vmcs_writel(GUEST_DS_LIMIT, __segmentlimit(tmps));
+	vmcs_writel(GUEST_DS_AR_BYTES, __accessright(tmps));
+	vmcs_writel(GUEST_DS_BASE, 0);
+
+	savesegment(es, tmps);
+	vmcs_write16(GUEST_ES_SELECTOR, tmps);
+	vmcs_writel(GUEST_ES_LIMIT, __segmentlimit(tmps));
+	vmcs_writel(GUEST_ES_AR_BYTES, __accessright(tmps));
+	vmcs_writel(GUEST_ES_BASE, 0);
+
+	savesegment(ss, tmps);
+	vmcs_write16(GUEST_SS_SELECTOR, tmps);
+	vmcs_writel(GUEST_SS_LIMIT, __segmentlimit(tmps));
+	vmcs_writel(GUEST_SS_AR_BYTES, __accessright(tmps));
+
+	savesegment(fs, tmps);
+	vmcs_write16(GUEST_FS_SELECTOR, tmps);
+	vmcs_writel(GUEST_FS_LIMIT, __segmentlimit(tmps));
+	vmcs_writel(GUEST_FS_AR_BYTES, __accessright(tmps));
+	vmcs_writel(GUEST_FS_BASE, __readmsr(MSR_IA32_FS_BASE));
+
+	savesegment(gs, tmps);
+	vmcs_write16(GUEST_GS_SELECTOR, tmps);
+	vmcs_writel(GUEST_GS_LIMIT, __segmentlimit(tmps));
+	vmcs_writel(GUEST_GS_AR_BYTES, __accessright(tmps));
+	vmcs_writel(GUEST_GS_BASE, __readmsr(MSR_IA32_GS_BASE));
+
+	store_tr(tmps);
+	vmcs_write16(GUEST_TR_SELECTOR, tmps);
+	vmcs_writel(GUEST_TR_LIMIT, __segmentlimit(tmps));
+	vmcs_writel(GUEST_TR_AR_BYTES, __accessright(tmps));
+
+
+
+	/* IDT and GDT */
+	__sgdt(&gdtr);
+	__sidt(idtr);
+
+	vmcs_write32(GUEST_GDTR_LIMIT, gdtr.limit);
+	vmcs_write32(GUEST_IDTR_LIMIT, idtr->limit);
+	
+	/*
+	 * idtr
+	 */
+	idt = vmx_host_idt();
+	vmcs_writel(GUEST_IDTR_BASE, (unsigned long)idt);
+
+	vmcs_writel(GUEST_DR7, __readdr(7));
+	err |= vmcs_write(GUEST_RSP, gsp);
+	err |= vmcs_write(GUEST_RIP, gip);
+		
+
+
+
+	/*
+	 * Guest activity state = active
+	 *
+	 * Intel SDM V3 24.4.2
+	 */
+	vmcs_write32(GUEST_ACTIVITY_STATE, GUEST_ACTIVITY_ACTIVE);
+
+	/*
+	 * Guest interruptibility state = 0 (interruptible)
+	 *
+	 * Intel SDM V3 24.4.2
+	 */
+	vmcs_write32(GUEST_INTERRUPTIBILITY_INFO, 0);
+
+	/*
+	 * Clear the interrupt event injection field (valid bit is 0)
+	 *
+	 * Intel SDM V3 24.8.3
+	 */
+	vmcs_write32(VM_ENTRY_INTR_INFO_FIELD, 0);
+
+	/*
+	 * No pending debug exceptions
+	 *
+	 * Intel SDM V3 24.4.2
+	 */
+	vmcs_write32(GUEST_PENDING_DBG_EXCEPTIONS, 0);
+
+	/*
+	 * This might not be needed in 64-bit mode
+	 *
+	 * Intel SDM V3 26.3.1.5
+	 */
+	vmcs_write64(GUEST_IA32_DEBUGCTL, __readmsr(MSR_IA32_DEBUGCTLMSR));
+
+}
 
 /**
  * Front-end for setting up VMCS. Calls helper routines
