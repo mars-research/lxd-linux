@@ -56,7 +56,7 @@ struct lcd_arch_vmcs *lcd_arch_alloc_vmcs(int cpu)
  * Returns pointer to current gdt (array of segment descriptors) on 
  * calling cpu.
  */
-static struct desc_struct * vmx_host_gdt(void)
+struct desc_struct * vmx_host_gdt(void)
 {
 	struct desc_ptr gdt_ptr;
 	/*
@@ -76,7 +76,7 @@ static struct desc_struct * vmx_host_gdt(void)
  * Returns pointer to current idt (array of gate descriptors) on 
  * calling cpu.
  */
-static gate_desc * vmx_host_idt(void)
+gate_desc * vmx_host_idt(void)
 {
 	struct desc_ptr idt_ptr;
 	native_store_idt(&idt_ptr);
@@ -147,7 +147,7 @@ static int vmx_host_seg_base(u16 selector, hva_t *hva_out)
 /**
  * Returns hva of current tss.
  */
-static int vmx_host_tss(hva_t *hva_out)
+int vmx_host_tss(hva_t *hva_out)
 {
 	u16 tr;
 	int ret;
@@ -180,7 +180,7 @@ static int vmx_host_tss(hva_t *hva_out)
  * vmx_enter
  *   - host %rsp: not known until we're about to enter
  */
-static void vmx_setup_vmcs_host(struct lcd_arch *lcd_arch)
+void vmx_setup_vmcs_host(struct lcd_arch *lcd_arch)
 {
 	unsigned long tmpl;
 	gate_desc *idt;
@@ -277,7 +277,7 @@ static void vmx_setup_vmcs_host(struct lcd_arch *lcd_arch)
 /**
  * Sets up MSR autloading for MSRs listed in autload_msrs (local var).
  */
-static void vmx_setup_vmcs_msr(struct lcd_arch *lcd_arch)
+void vmx_setup_vmcs_msr(struct lcd_arch *lcd_arch)
 {
 	int i;
 	u64 val;
@@ -327,19 +327,10 @@ static void vmx_setup_vmcs_msr(struct lcd_arch *lcd_arch)
 	}
 }
 
-enum vmx_pat_type {
-	PAT_UC = 0,             /* uncached */
-        PAT_WC = 1,             /* Write combining */
-        PAT_WT = 4,             /* Write Through */
-        PAT_WP = 5,             /* Write Protected */
-        PAT_WB = 6,             /* Write Back (default) */
-        PAT_UC_MINUS = 7,       /* UC, but can be overriden by MTRR */
-};
-
 /**
  * Sets up a corresponding PAT entry	
  */
-static int vmx_setup_pat_msr(unsigned char pat_entry, unsigned char pat_type)
+int vmx_setup_pat_msr(unsigned char pat_entry, unsigned char pat_type)
 {
 	u64 pat = 0;
 

@@ -95,7 +95,7 @@ struct lcd_arch_tss {
 #define LCD_ARCH_EPTP_WALK_SHIFT 3
 #define LCD_ARCH_PTRS_PER_EPTE   (1 << 9) /* 512 table entries */
 
-typedef unsigned long lcd_arch_epte_t; /* table entry */
+typedef u64 lcd_arch_epte_t; /* table entry */
 
 #if defined(LCD_VMM)
 

@@ -94,11 +94,28 @@ extern const unsigned long vmx_return;
 
 extern DEFINE_PER_CPU(struct lcd_arch *, local_lcd_arch);
 
+enum vmx_pat_type {
+	PAT_UC = 0,             /* uncached */
+        PAT_WC = 1,             /* Write combining */
+        PAT_WT = 4,             /* Write Through */
+        PAT_WP = 5,             /* Write Protected */
+        PAT_WB = 6,             /* Write Back (default) */
+        PAT_UC_MINUS = 7,       /* UC, but can be overriden by MTRR */
+};
+
+
 #if defined(LCD_VMM)
 extern DEFINE_PER_CPU(struct lcd_arch *, vmm_lcd_arch);
 void vmm_vmx_enter(struct lcd_arch *lcd_arch); 
 void vmm_enter(void *unused);
 int vmm_detect_memory_regions(struct lcd_vmm *vmm);
+int vmx_setup_pat_msr(unsigned char pat_entry, unsigned char pat_type);
+struct desc_struct * vmx_host_gdt(void);
+int vmx_host_tss(hva_t *hva_out);
+gate_desc * vmx_host_idt(void);
+void vmx_setup_vmcs_msr(struct lcd_arch *lcd_arch);
+void vmx_setup_vmcs_host(struct lcd_arch *lcd_arch);
+inline bool cpu_has_vmx_ept_ad_bits(void);
 
 #endif
 

@@ -8,6 +8,8 @@
 #include <linux/tboot.h>
 #include <asm/vmx.h>
 #include <asm/virtext.h>
+#include <asm/tlbflush.h>
+
 
 #include <lcd_domains/types.h>
 #include <asm/lcd_domains/microkernel.h>
@@ -128,10 +130,29 @@
 #define EXIT_REASON_XRSTORS             64
 #define EXIT_REASON_PCOMMIT             65
 
+#define MSR_IA32_FS_BASE                0xC0000100
+#define MSR_IA32_GS_BASE                0xC0000101
+
+
 #define __sidt(idt)     __asm __volatile("sidt %0" : "=m" (*idt));
 #define __lidt(idt)     __asm __volatile("lidt %0" :: "m" (*idt));
 #define __sgdt(gdt)     __asm __volatile("sgdt %0" : "=m" (*gdt));
 #define __lgdt(gdt)     __asm __volatile("lgdt %0" :: "m" (*gdt));
+
+#define __readeflags()  ({                                                      \
+        u64 rflags;                                                             \
+        __asm __volatile("pushfq\n\tpopq %0" : "=r" (rflags));                  \
+        rflags;                                                                 \
+})
+
+#define __readdr(dr) __extension__ ({                   \
+        unsigned long long val;                         \
+	__asm __volatile("movq %%dr" #dr ", %0"         \
+                         : "=r" (val));                 \
+        val;                                            \
+})
+
+
 
 struct gdtr {
         u16 limit;
@@ -144,6 +165,16 @@ unsigned long __segmentlimit(unsigned long selector)
         __asm __volatile("lsl %1, %0" : "=r" (limit) : "r" (selector));
         return limit;
 }
+
+static inline u64 __lar(u64 sel)
+{       
+        u64 ar;
+        __asm __volatile("lar %1, %0"
+                         : "=r" (ar)
+                         : "r" (sel));
+        return ar;
+}
+
 
 static inline u32 __accessright(u16 selector)
 {
@@ -961,7 +992,7 @@ static void vmm_setup_vmcs_guest_settings(struct lcd_arch *lcd_arch)
 	/* Never exit on a pagefault (Intel SDM V3 25.2) */
 	vmcs_write32(EXCEPTION_BITMAP, 0x1 << 14);
 	vmcs_write32(PAGE_FAULT_ERROR_CODE_MASK, 0);
-	vmcs_write32(PAGE_FAULT_ERROR_CODE_MATCH, ~0ul);
+	vmcs_write32(PAGE_FAULT_ERROR_CODE_MATCH, 0xffffffff);
 
 	/*
 	 * No %cr3 targets (Intel SDM V3 24.6.7)
@@ -1014,15 +1045,17 @@ static void vmm_setup_vmcs_guest_settings(struct lcd_arch *lcd_arch)
  */
 static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 {
-	unsigned long cr0;
-	unsigned long cr4;
 
 	struct desc_struct *gdt;
 	hva_t host_tss;
 	unsigned long tmpl;
+	u32 low32;
+	u32 high32;
+	u16 tmps;
 
 	struct gdtr gdtr;
-
+	struct gdtr idtr;
+	gate_desc *idt;
 
 	/*
 	 * Guest %cr0, %cr4, %cr3
@@ -1033,12 +1066,12 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	 */
 	vmcs_writel(GUEST_CR0, read_cr0());
 	vmcs_writel(CR0_READ_SHADOW, read_cr0());
-	vmcs_vritel(CR0_GUEST_HOST_MASK, 0);
+	vmcs_writel(CR0_GUEST_HOST_MASK, 0);
 
 
-	vmcs_writel(GUEST_CR4, read_cr4());
-	vmcs_writel(CR4_READ_SHADOW, read_cr4());
-	vmcs_vritel(CR4_GUEST_HOST_MASK, 0);
+	vmcs_writel(GUEST_CR4, __read_cr4());
+	vmcs_writel(CR4_READ_SHADOW, __read_cr4());
+	vmcs_writel(CR4_GUEST_HOST_MASK, 0);
 
 	vmcs_writel(GUEST_CR3, read_cr3());
 
@@ -1069,16 +1102,16 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	 * See Intel SDM V3 27.5.1
 	 */
 	rdmsr(MSR_IA32_SYSENTER_CS, low32, high32);
-	vmcs_write32(GUEST_IA32_SYSENTER_CS, low32);
+	vmcs_write32(GUEST_SYSENTER_CS, low32);
 	rdmsrl(MSR_IA32_SYSENTER_EIP, tmpl);
-	vmcs_writel(GUEST_IA32_SYSENTER_EIP, tmpl);
+	vmcs_writel(GUEST_SYSENTER_EIP, tmpl);
 
 	/*
 	 * Sysenter %esp (per cpu? so has to go in here? following
 	 * dune and kvm...)
 	 */
 	rdmsrl(MSR_IA32_SYSENTER_ESP, tmpl);
-	vmcs_writel(GUEST_IA32_SYSENTER_ESP, tmpl);
+	vmcs_writel(GUEST_SYSENTER_ESP, tmpl);
 
 	/*
 	 * Linux uses per-cpu TSS and GDT, so we need to set these
@@ -1107,7 +1140,7 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	 * %rsp, %rip -- to be set by arch-independent code when guest address 
 	 * space set up (see lcd_arch_set_sp and lcd_arch_set_pc).
 	 */
-	see comment about set_sp and set_pc above
+	//see comment about set_sp and set_pc above
 
 	/*
 	 * %rflags
@@ -1181,10 +1214,10 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 
 	/* IDT and GDT */
 	__sgdt(&gdtr);
-	__sidt(idtr);
+	__sidt(&idtr);
 
 	vmcs_write32(GUEST_GDTR_LIMIT, gdtr.limit);
-	vmcs_write32(GUEST_IDTR_LIMIT, idtr->limit);
+	vmcs_write32(GUEST_IDTR_LIMIT, idtr.limit);
 	
 	/*
 	 * idtr
@@ -1193,8 +1226,9 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	vmcs_writel(GUEST_IDTR_BASE, (unsigned long)idt);
 
 	vmcs_writel(GUEST_DR7, __readdr(7));
-	err |= vmcs_write(GUEST_RSP, gsp);
-	err |= vmcs_write(GUEST_RIP, gip);
+	
+	//err |= vmcs_write(GUEST_RSP, gsp);
+	//err |= vmcs_write(GUEST_RIP, gip);
 		
 
 
@@ -1246,7 +1280,7 @@ void vmm_setup_vmcs(struct lcd_arch *lcd_arch)
 	 * Set up guest part of vmcs, and guest exec
 	 */
 	vmm_setup_vmcs_guest_settings(lcd_arch);
-	vmx_setup_vmcs_guest_regs(lcd_arch);
+	vmm_setup_vmcs_guest_regs(lcd_arch);
 	/*
 	 * Set up MSR bitmap and autoloading
 	 */

@@ -33,7 +33,7 @@ static inline bool cpu_has_vmx_invept_global(void)
 	return lcd_vmx_capability.ept & VMX_EPT_EXTENT_GLOBAL_BIT;
 }
 
-static inline bool cpu_has_vmx_ept_ad_bits(void)
+inline bool cpu_has_vmx_ept_ad_bits(void)
 {
 	return lcd_vmx_capability.ept & VMX_EPT_AD_BIT;
 }
