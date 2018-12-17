@@ -82,43 +82,6 @@ static void print_vmx_controls(u32 controls, u32 mask, u32 msr)
 
 /* VMCS CONFIGURATION ---------------------------------------- */
 
-/**
- * Clears the correct bit in the msr bitmap to allow vm access
- * to an msr.
- */
-static void vmx_disable_intercept_for_msr(unsigned long *msr_bitmap, u32 msr)
-{
-	int sz;
-	sz = sizeof(unsigned long);
-
-	/*
-	 * Intel SDM V3 24.6.9 (MSR-Bitmap Addresses).
-	 *
-	 * The bitmap is 4KBs:
-	 *
-	 *  -- bitmap + 0KB (0x000) = read bitmap for low MSRs
-	 *  -- bitmap + 1KB (0x400) = read bitmap for high MSRs
-	 *  -- bitmap + 2KB (0x800) = write bitmap for low MSRs
-	 *  -- bitmap + 3KB (0xc00) = write bitmap for high MSRs
-	 *
-	 * We have to divide by the size of an unsigned long to get
-	 * the correct pointer offset.
-	 */
-	if (msr <= 0x1fff) {
-		/*
-		 * Low MSR
-		 */
-		__clear_bit(msr, msr_bitmap + 0x000 / sz); /* read  */
-		__clear_bit(msr, msr_bitmap + 0x800 / sz); /* write */
-	} else if ((msr >= 0xc0000000) && (msr <= 0xc0001fff)) {
-		/*
-		 * High MSR
-		 */
-		msr &= 0x1fff;
-		__clear_bit(msr, msr_bitmap + 0x400 / sz); /* read  */
-		__clear_bit(msr, msr_bitmap + 0xc00 / sz); /* write */
-	}
-}
 	
 /**
  * Checks and sets basic vmcs settings (vmxon region size, etc.)
