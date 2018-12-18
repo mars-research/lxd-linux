@@ -1409,9 +1409,9 @@ void _vmm_call_cont_direct(struct cont *cont,   // rdi
 
 __asm__ ("      .text \n\t"
          "      .align  16           \n\t"
- //        "      .globl  _vmm_call_cont_direct \n\t"
-//         "      .type   _vmm_call_cont_direct, @function \n\t"
-         "_vmm_callcont_direct:             \n\t"
+         "      .globl  _vmm_call_cont_direct \n\t"
+         "      .type   _vmm_call_cont_direct, @function \n\t"
+         "_vmm_call_cont_direct:             \n\t"
          " mov  0(%rsp), %rax        \n\t" // return address into RAX
          " mov  %rax,  0(%rdi)       \n\t" // EIP (our return address)
          " mov  %rbp,  8(%rdi)       \n\t" // EBP

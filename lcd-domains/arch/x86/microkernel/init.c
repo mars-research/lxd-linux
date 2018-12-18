@@ -258,7 +258,10 @@ static int setup_vmcs_config(struct lcd_vmcs_config *vmcs_conf)
 		CPU_BASED_UNCOND_IO_EXITING |
 		CPU_BASED_USE_MSR_BITMAPS |
 		CPU_BASED_MONITOR_EXITING |
-#endif		
+#else
+		CPU_BASED_CR3_LOAD_EXITING |
+		CPU_BASED_CR3_STORE_EXITING |
+#endif
 		CPU_BASED_ACTIVATE_SECONDARY_CONTROLS;
 	if (adjust_vmx_controls(&primary_proc_based_exec_controls,
 					CPU_BASED_RESERVED_MASK,
