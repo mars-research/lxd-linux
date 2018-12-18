@@ -1752,7 +1752,7 @@ void vmm_enter(void *unused)
 
 	lcd_arch = __this_cpu_read(lcd_arch);
 
-	ret = vmm_arch_ept_init(vmm_lcd_arch); 
+	ret = vmm_arch_ept_init(lcd_arch); 
 	if (ret) 
 		goto failed; 
 
