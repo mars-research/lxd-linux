@@ -610,6 +610,17 @@ int lcd_arch_init(void)
 #endif
 
 	/*
+	 * Init lcd_arch_thread cache (using instead of kmalloc since
+	 * these structs need to be aligned properly)
+	 */
+	lcd_arch_cache = KMEM_CACHE(lcd_arch, 0);
+	if (!lcd_arch_cache) {
+		LCD_ERR("failed to set up kmem cache\n");
+		ret = -ENOMEM;
+		goto failed3;
+	}
+
+	/*
 	 * Initialize VPID bitmap spinlock
 	 */
 	spin_lock_init(&lcd_vpids.lock);
@@ -674,16 +685,7 @@ int lcd_arch_init(void)
 #endif
 
 
-	/*
-	 * Init lcd_arch_thread cache (using instead of kmalloc since
-	 * these structs need to be aligned properly)
-	 */
-	lcd_arch_cache = KMEM_CACHE(lcd_arch, 0);
-	if (!lcd_arch_cache) {
-		LCD_ERR("failed to set up kmem cache\n");
-		ret = -ENOMEM;
-		goto failed3;
-	}
+	
 
 	return 0;
 
