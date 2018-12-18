@@ -1409,8 +1409,8 @@ void _vmm_call_cont_direct(struct cont *cont,   // rdi
 
 __asm__ ("      .text \n\t"
          "      .align  16           \n\t"
-         "      .globl  _vmm_call_cont_direct \n\t"
-         "      .type   _vmm_call_cont_direct, @function \n\t"
+ //        "      .globl  _vmm_call_cont_direct \n\t"
+//         "      .type   _vmm_call_cont_direct, @function \n\t"
          "_vmm_callcont_direct:             \n\t"
          " mov  0(%rsp), %rax        \n\t" // return address into RAX
          " mov  %rax,  0(%rdi)       \n\t" // EIP (our return address)
@@ -1703,14 +1703,6 @@ int vmm_lcd_arch_create(struct lcd_arch **out)
 		ret = -ENOMEM;
 		goto fail_alloc;
 	}
-	/*
-	 * Set up ept
-	 */
-	ret = vmm_arch_ept_init(lcd_arch);
-	if (ret) {
-		LCD_ERR("setting up etp");
-		goto fail_ept;
-	}
 	
 	/*
 	 * Alloc vmcs
@@ -1741,7 +1733,6 @@ fail_vpid:
 	lcd_arch_free_vmcs(lcd_arch->vmcs);
 fail_vmcs:
 	lcd_arch_ept_free(lcd_arch);
-fail_ept:
 	kmem_cache_free(lcd_arch_cache, lcd_arch);
 fail_alloc:
 	return ret;
@@ -1780,4 +1771,107 @@ failed:
 	LCD_ERR("failed to enter VMM, err = %d\n", ret);
 	return; 
 }
+
+/* 
+ * lcd_arch_init() 
+ *    
+ *    - cpu_has_vmx()
+ *
+ *    - setup_vmcs_config (lcd_global_vmcs_config)
+ *        -- pin based controls in a global var
+ *
+ *    - msr bitmap
+ *
+ *    - foreach cpu
+ *        vmxon_buf -- alloc()
+ *
+ *    - lcd_vmm_init()
+ *
+ *    - on each cpu
+ *        vmm_enter()
+ *
+ *
+ *  lcd_vmm_init()
+ *
+ *    - vmm_detect_memory_regions()
+ *
+ *    - foreach cpu
+ *        - vmm_lcd_arch_create()
+ *
+ *  vmm_lcd_arch_create()
+ *
+ *    - lcd_arch = alloc ()
+ *    - lcd_arch->vmcs = lcd_arch_alloc_vmcs()
+ *    - vmx_allocate_vpid()
+ *
+ * vmm_enter()
+ * 
+ *    - vmm_arch_ept_init()
+ *    - vmm_alloc_stack()
+ *    - __vmm_enter()
+ *
+ * __vmm_enter()
+ *
+ *    - CALL_CONT (vmm_enter_switch_stack())
+ *
+ * vmm_enter_switch_stack()
+ *    
+ *    - vmm_loop() 
+ *
+ * vmm_loop()
+ *
+ *   - vmm_set_entry_point() 
+ *   - vmx_get_cpu()
+ *   - vmm_setup_vmcs()
+ *   - vmx_enable_ept_switching()
+ *   - local_irq_disable()
+ *
+ *   - for(;;)
+ *       -- vmm_arch_run()
+ *
+ *
+ * vmx_get_cpu()
+ *
+ *   - vmcs_load()
+ *   - __vmx_setup_cpu()
+ *
+ *
+ * __vmx_setup_cpu()
+ *
+ *   // Re-load CPU-specific VMCS data when LCD migrates
+ *   // HOST_TR_BASE
+ *   // HOST_GDTR_BASE
+ *   // MSR_IA32_SYSENTER_ESP
+ *   // HOST_FS_BASE
+ *   // HOST_GS_BASE
+ *
+ *
+ * vmm_setup_vmcs()
+ *   - vmm_setup_vmcs_guest_settings()
+ *   - vmm_setup_vmcs_guest_regs()
+ *   - vmx_setup_vmcs_msr()
+ *   - vmx_setup_vmcs_host()
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ * 
+ *
+ *
+ *
+ *
+ *
+ */
 
