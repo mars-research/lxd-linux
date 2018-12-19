@@ -1750,7 +1750,7 @@ void vmm_enter(void *unused)
 	int ret;
 	struct lcd_arch *lcd_arch;
 
-	lcd_arch = __this_cpu_read(lcd_arch);
+	lcd_arch = __this_cpu_read(vmm_lcd_arch);
 
 	ret = vmm_arch_ept_init(lcd_arch); 
 	if (ret) 
