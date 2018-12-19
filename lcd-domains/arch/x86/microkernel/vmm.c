@@ -1302,9 +1302,6 @@ void vmm_loop(struct lcd_arch *lcd_arch)
 		lcd_arch->cont.rsp, lcd_arch->cont.rip, lcd_arch->cont.rbp);
 
 	
-	/* Set entry point for the host using vmm->cont */
-	vmm_set_entry_point(lcd_arch); 
-
 	/*
 	 * Load vmcs pointer on this cpu
 	 */
@@ -1319,6 +1316,10 @@ void vmm_loop(struct lcd_arch *lcd_arch)
 
 	vmm_setup_vmcs(lcd_arch);
 	vmx_enable_ept_switching(lcd_arch);
+
+	/* Set entry point for the host using vmm->cont */
+	vmm_set_entry_point(lcd_arch); 
+
 
 	LCD_MSG("Ready to disable IRQs and enter the runloop\n"); 
 
@@ -1777,7 +1778,7 @@ void vmm_enter(void *unused)
 	LCD_MSG("Entering VMM on a new stack:0x%llx\n", lcd_arch->vmm_stack);
 
 	/* We enter the hypervisor and continue in the guest at vmm_enter_ack */
-	__vmm_enter(lcd_arch->vmm_stack);	
+	__vmm_enter(lcd_arch);	
 
 	LCD_MSG("Entered VMM on CPU %d\n", raw_smp_processor_id());
 
