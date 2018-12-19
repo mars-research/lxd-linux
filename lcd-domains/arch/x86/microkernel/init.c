@@ -543,10 +543,6 @@ int lcd_vmm_init(void) {
 		 * we will use to run LCD VMM, i.e., a minimal VT-x root 
 		 * hypervisor */
 
-		lcd_arch = per_cpu(vmm_lcd_arch, cpu);
-		/*
-		 * Alloc vm / arch-dependent part
-		 */
 		ret = vmm_lcd_arch_create(&lcd_arch);
 		if(ret) {
 			LCD_ERR("error creating lcd_arch");
@@ -554,6 +550,8 @@ int lcd_vmm_init(void) {
 		}
 
 		lcd_arch->vmm = &g_lcd_vmm; 
+		per_cpu(vmm_lcd_arch, cpu) = lcd_arch; 
+
 	}
 
 	return 0; 
