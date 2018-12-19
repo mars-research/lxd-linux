@@ -1298,7 +1298,10 @@ void vmm_loop(struct lcd_arch *lcd_arch)
 	int entry_count = 0;
 	int local_entry_count = 0; 
 
+	LCD_MSG("Entering VMM loop, setting entry point: rsp: 0x%llx, rip: 0x%llx, rbp: 0x%llx\n", 
+		lcd_arch->cont.rsp, lcd_arch->cont.rip, lcd_arch->cont.rbp);
 
+	
 	/* Set entry point for the host using vmm->cont */
 	vmm_set_entry_point(lcd_arch); 
 
@@ -1316,6 +1319,8 @@ void vmm_loop(struct lcd_arch *lcd_arch)
 
 	vmm_setup_vmcs(lcd_arch);
 	vmx_enable_ept_switching(lcd_arch);
+
+	LCD_MSG("Ready to disable IRQs and enter the runloop\n"); 
 
 	/*
 	 * Interrupts off
@@ -1419,7 +1424,7 @@ __asm__ ("      .text \n\t"
          " addq $8,   16(%rdi)       \n\t"
          // cont now initialized.  Call the function
          // rdi : cont , rsi : args , rdx : fn
-         " jmpq  %rdx                \n\t"
+         " jmpq  *%rdx                \n\t"
          " int3\n\t");
 
 
@@ -1435,15 +1440,20 @@ void vmm_enter_switch_stack(void *cont, void *args) {
 	 *
 	 * Inside the guest, i.e., inside dprivileged kernel we 
 	 * return to the continuation we created before */
+	LCD_MSG("Switching stacks: rsp: 0x%llx, rip: 0x%llx, rbp: 0x%llx\n", 
+		lcd_arch->cont.rsp, lcd_arch->cont.rip, lcd_arch->cont.rbp);
+
+	LCD_MSG("stack: 0x%llx, func: 0x%llx, lcd_arch: 0x%llx\n", 
+		lcd_arch->vmm_stack, vmm_loop, lcd_arch);
 
 	vmm_on_alt_stack_0(lcd_arch->vmm_stack, vmm_loop, lcd_arch);
 	return; 
 };
 
-#define CALL_CONT(_CONT,_FN,_ARG) 				\
+#define CALL_CONT(_CONT,_ARG,_FN) 				\
 	do { 							\
 		SAVE_CALLEE_REGS();  				\
-		_vmm_call_cont_direct(_CONT, _ARG, _FN);		\
+		_vmm_call_cont_direct(_CONT, _ARG, _FN);	\
       	} while (0)
 
 
@@ -1460,6 +1470,10 @@ void __vmm_enter(struct lcd_arch * lcd_arch) {
 	 * Second, inside vmm_enter_swotch_stack() we use __vmm_loop() 
 	 * to switch execution to the new stack. 
 	 */
+
+	//LCD_MSG("CALL CONT: &lcd_arch->cont: 0x%llx, lcd_arch: 0x%llx, vmm_enter_switch_stack: 0x%llx\n", 
+	//	&lcd_arch->cont, (void *)lcd_arch, vmm_enter_switch_stack);
+
 
 	CALL_CONT(&lcd_arch->cont, (void*) lcd_arch, vmm_enter_switch_stack); 
 	return; 
@@ -1759,6 +1773,8 @@ void vmm_enter(void *unused)
 	ret = vmm_alloc_stack(lcd_arch); 
 	if (ret) 
 		goto failed; 
+
+	LCD_MSG("Entering VMM on a new stack:0x%llx\n", lcd_arch->vmm_stack);
 
 	/* We enter the hypervisor and continue in the guest at vmm_enter_ack */
 	__vmm_enter(lcd_arch->vmm_stack);	
