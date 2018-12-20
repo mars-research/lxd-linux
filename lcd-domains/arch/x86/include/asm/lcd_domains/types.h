@@ -214,11 +214,11 @@ struct lcd_arch {
 	/*
 	 * VMM EPT for running deprivileged kernel 
 	 */
-	struct {
-		lcd_arch_epte_t *root;
-		u64 vmcs_ptr; /* to be loaded in vmcs EPT_POINTER field */
-		bool access_dirty_enabled;
-	} vmm_ept;
+	//struct {
+	//	lcd_arch_epte_t *root;
+	//	u64 vmcs_ptr; /* to be loaded in vmcs EPT_POINTER field */
+	//	bool access_dirty_enabled;
+	//`;} vmm_ept;
 
 
 #endif

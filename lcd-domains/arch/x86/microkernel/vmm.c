@@ -977,7 +977,7 @@ static void vmm_setup_vmcs_guest_settings(struct lcd_arch *lcd_arch)
 	/*
 	 * EPT
 	 */
-	vmcs_write64(EPT_POINTER, lcd_arch->vmm_ept.vmcs_ptr);
+	vmcs_write64(EPT_POINTER, lcd_arch->ept.vmcs_ptr);
 	/*
 	 * LCDs normally exit on every exception, in the 
 	 * first implementation of the VMM we try not 
@@ -1638,7 +1638,7 @@ static int vmm_arch_ept_init(struct lcd_arch *lcd_arch) {
 		LCD_ERR("failed to alloc page\n");
 		return -ENOMEM;
 	}
-	lcd_arch->vmm_ept.root = (lcd_arch_epte_t *)hva2va(page);
+	lcd_arch->ept.root = (lcd_arch_epte_t *)hva2va(page);
 
 	/*
 	 * Init the VMCS EPT pointer
@@ -1654,11 +1654,11 @@ static int vmm_arch_ept_init(struct lcd_arch *lcd_arch) {
 	eptp = VMX_EPT_DEFAULT_MT |
 		(LCD_ARCH_EPT_WALK_LENGTH - 1) << LCD_ARCH_EPTP_WALK_SHIFT;
 	if (cpu_has_vmx_ept_ad_bits()) {
-		lcd_arch->vmm_ept.access_dirty_enabled = true;
+		lcd_arch->ept.access_dirty_enabled = true;
 		eptp |= VMX_EPT_AD_ENABLE_BIT;
 	}
-	eptp |= hpa_val(va2hpa(lcd_arch->vmm_ept.root)) & PAGE_MASK;
-	lcd_arch->vmm_ept.vmcs_ptr = eptp;
+	eptp |= hpa_val(va2hpa(lcd_arch->ept.root)) & PAGE_MASK;
+	lcd_arch->ept.vmcs_ptr = eptp;
 
 	for (i = 0; i < vmm->range_count; i ++ ) {
 		LCD_MSG("range: 0x%016llX -> 0x%016llX\n", 
@@ -1666,7 +1666,7 @@ static int vmm_arch_ept_init(struct lcd_arch *lcd_arch) {
 
 		for (addr = vmm->ranges[i].start; addr < vmm->ranges[i].end; addr += PAGE_SIZE) {
 			mt = ept_memory_type(vmm, addr);
-			if (!ept_alloc_page(lcd_arch->vmm_ept.root, 
+			if (!ept_alloc_page(lcd_arch->ept.root, 
 						EPT_ACCESS_ALL, mt, addr, addr))
 				return -1;
 		}
@@ -1675,7 +1675,7 @@ static int vmm_arch_ept_init(struct lcd_arch *lcd_arch) {
 	/* Allocate APIC page  */
 	addr = __readmsr(MSR_IA32_APICBASE) & MSR_IA32_APICBASE_BASE;
 	mt = ept_memory_type(vmm, addr);
-	if (!ept_alloc_page(lcd_arch->vmm_ept.root, EPT_ACCESS_ALL, mt, addr, addr))
+	if (!ept_alloc_page(lcd_arch->ept.root, EPT_ACCESS_ALL, mt, addr, addr))
 		return false;
 
 	return 0; 
@@ -1737,6 +1737,7 @@ int vmm_lcd_arch_create(struct lcd_arch **out)
 
 	/*
 	 * Not loaded on a cpu right now
+	 * This is used in vmx_get_cpu()
 	 */
 	lcd_arch->cpu = -1;
 	
