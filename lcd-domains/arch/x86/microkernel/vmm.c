@@ -611,6 +611,8 @@ static int vmm_handle_exit(struct lcd_arch *lcd_arch)
 {
 	int ret;
 
+	LCD_MSG("Handling exit 0x%llx", lcd_arch->exit_reason);
+
 	switch (lcd_arch->exit_reason) {
 	case EXIT_REASON_EXCEPTION_NMI:
 		//ret = vcpu_handle_exception_nmi(lcd_arch);
@@ -875,7 +877,10 @@ static int vmm_handle_exit(struct lcd_arch *lcd_arch)
 		ret = vmm_nop(lcd_arch); 
 		break;
 	default:
-		LCD_ERR("unhandled exit reason %d", lcd_arch->exit_reason);
+		LCD_ERR("Unhandled exit reason 0x%llx", lcd_arch->exit_reason);
+		LCD_MSG("instr len:%d, qualification:0x%llx, idt vectoring:0x%x, error code: 0x%x, exit interrupt info: 0x%x, vec_no:%d\n", 
+			lcd_arch->exit_reason, lcd_arch->exit_instr_len, lcd_arch->exit_qualification, lcd_arch->idt_vectoring_info, lcd_arch->error_code, lcd_arch->exit_intr_info, lcd_arch->vec_no); 
+	       
 		ret = -EIO;
 		break;
 	}
