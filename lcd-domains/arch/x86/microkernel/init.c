@@ -470,7 +470,7 @@ static void vmx_enable(void *unused)
 
 	this_cpu_write(vmx_enabled, 1);
 
-	printk(KERN_INFO "VMX enabled on CPU %d\n",	
+	LCD_MSG("VMX enabled on CPU %d\n",	
 		raw_smp_processor_id());
 	return;
 
