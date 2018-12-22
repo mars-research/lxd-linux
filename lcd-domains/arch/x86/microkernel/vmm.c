@@ -1788,7 +1788,7 @@ int vmm_detect_memory_regions(struct lcd_vmm *vmm) {
 	LCD_MSG("detected %d physical memory ranges\n", vmm->range_count);
 
 	for (i = 0; i < vmm->range_count; i ++ ) {
-		LCD_MSG("range: 0x%016llX -> 0x%016llX\n", vmm->ranges[i].start, vmm->ranges[i].end);
+		//LCD_MSG("range: 0x%016llX -> 0x%016llX\n", vmm->ranges[i].start, vmm->ranges[i].end);
 	}
 
 	/* MTRR   */
@@ -1803,9 +1803,9 @@ int vmm_detect_memory_regions(struct lcd_vmm *vmm) {
 		vmm->mtrr_count, vmm->mtrr_def);
 
 	for (i = 0; i < vmm->mtrr_count; i++) {
-		LCD_MSG("MTRR Range: 0x%016llX -> 0x%016llX fixed: %d type: %d\n",
-			  vmm->mtrr_ranges[i].start, vmm->mtrr_ranges[i].end, 
-			  vmm->mtrr_ranges[i].fixed, vmm->mtrr_ranges[i].type);
+		//LCD_MSG("MTRR Range: 0x%016llX -> 0x%016llX fixed: %d type: %d\n",
+		//	  vmm->mtrr_ranges[i].start, vmm->mtrr_ranges[i].end, 
+		//	  vmm->mtrr_ranges[i].fixed, vmm->mtrr_ranges[i].type);
 	}
 
 	return 0; 
@@ -1852,8 +1852,8 @@ static int vmm_arch_ept_init(struct lcd_arch *lcd_arch) {
 	lcd_arch->ept.vmcs_ptr = eptp;
 
 	for (i = 0; i < vmm->range_count; i ++ ) {
-		LCD_MSG("range: 0x%016llX -> 0x%016llX\n", 
-				vmm->ranges[i].start, vmm->ranges[i].end);
+		//LCD_MSG("range: 0x%016llX -> 0x%016llX\n", 
+		//		vmm->ranges[i].start, vmm->ranges[i].end);
 
 		for (addr = vmm->ranges[i].start; addr < vmm->ranges[i].end; addr += PAGE_SIZE) {
 			mt = ept_memory_type(vmm, addr);
@@ -1881,8 +1881,8 @@ static int vmm_dbg_ept_test(struct lcd_arch *lcd_arch) {
 	LCD_MSG("Starting EPT test, counter:%d\n", counter); 
 
 	for (i = 0; i < vmm->range_count; i ++ ) {
-		LCD_MSG("range: 0x%016llX -> 0x%016llX\n", 
-				vmm->ranges[i].start, vmm->ranges[i].end);
+		//LCD_MSG("range: 0x%016llX -> 0x%016llX\n", 
+		//		vmm->ranges[i].start, vmm->ranges[i].end);
 
 		for (addr = vmm->ranges[i].start; addr < vmm->ranges[i].end; addr += PAGE_SIZE) {
 			counter += *(unsigned long long *) __va(addr); 
