@@ -996,14 +996,14 @@ static void vmm_setup_vmcs_guest_settings(struct lcd_arch *lcd_arch)
 	 *
 	 * Exit on any kind of page fault (Intel SDM V3 25.2)
 	 */
-	//vmcs_write32(EXCEPTION_BITMAP, 0xffffffff);
-	//vmcs_write32(PAGE_FAULT_ERROR_CODE_MASK, 0);
-	//vmcs_write32(PAGE_FAULT_ERROR_CODE_MATCH, 0);
+	vmcs_write32(EXCEPTION_BITMAP, 0xffffffff);
+	vmcs_write32(PAGE_FAULT_ERROR_CODE_MASK, 0);
+	vmcs_write32(PAGE_FAULT_ERROR_CODE_MATCH, 0);
 
 	/* Never exit on a pagefault (Intel SDM V3 25.2) */
-	vmcs_write32(EXCEPTION_BITMAP, 0x1 << 14);
-	vmcs_write32(PAGE_FAULT_ERROR_CODE_MASK, 0);
-	vmcs_write32(PAGE_FAULT_ERROR_CODE_MATCH, 0xffffffff);
+	//vmcs_write32(EXCEPTION_BITMAP, 0x1 << 14);
+	//vmcs_write32(PAGE_FAULT_ERROR_CODE_MASK, 0);
+	//vmcs_write32(PAGE_FAULT_ERROR_CODE_MATCH, 0xffffffff);
 
 	/*
 	 * No %cr3 targets (Intel SDM V3 24.6.7)
@@ -1230,7 +1230,8 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	vmcs_writel(GUEST_TR_LIMIT, __segmentlimit(tmps));
 	vmcs_writel(GUEST_TR_AR_BYTES, __accessright(tmps));
 
-	vmm_execute_cont(&lcd_arch->cont); 
+	//dump_stack(); 
+	//vmm_execute_cont(&lcd_arch->cont); 
 
 	/* IDT and GDT */
 	__sgdt(&gdtr);
