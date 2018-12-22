@@ -13,6 +13,8 @@
 
 #include <lcd_domains/types.h>
 #include <asm/lcd_domains/microkernel.h>
+#include <asm/lcd_domains/check.h>
+
 #include <lcd_domains/microkernel.h>
 
 #define VMM_STACK_SIZE 4096
@@ -130,8 +132,8 @@
 #define EXIT_REASON_XRSTORS             64
 #define EXIT_REASON_PCOMMIT             65
 
-#define MSR_IA32_FS_BASE                0xC0000100
-#define MSR_IA32_GS_BASE                0xC0000101
+//#define MSR_IA32_FS_BASE                0xC0000100
+//#define MSR_IA32_GS_BASE                0xC0000101
 
 
 #define __sidt(idt)     __asm __volatile("sidt %0" : "=m" (*idt));
@@ -877,9 +879,13 @@ static int vmm_handle_exit(struct lcd_arch *lcd_arch)
 		ret = vmm_nop(lcd_arch); 
 		break;
 	default:
+		/* Exit reasons SDM 24.9.1 */
 		LCD_ERR("Unhandled exit reason 0x%llx", lcd_arch->exit_reason);
-		LCD_MSG("instr len:%d, qualification:0x%llx, idt vectoring:0x%x, error code: 0x%x, exit interrupt info: 0x%x, vec_no:%d\n", 
-			lcd_arch->exit_reason, lcd_arch->exit_instr_len, lcd_arch->exit_qualification, lcd_arch->idt_vectoring_info, lcd_arch->error_code, lcd_arch->exit_intr_info, lcd_arch->vec_no); 
+		LCD_MSG("instr len:%d, qualification:0x%llx, idt vectoring:0x%x,"
+			" error code: 0x%x, exit interrupt info: 0x%x, vec_no:%d\n", 
+			lcd_arch->exit_reason, lcd_arch->exit_instr_len, 
+			lcd_arch->exit_qualification, lcd_arch->idt_vectoring_info, 
+			lcd_arch->error_code, lcd_arch->exit_intr_info, lcd_arch->vec_no); 
 	       
 		ret = -EIO;
 		break;
@@ -1007,6 +1013,7 @@ static void vmm_setup_vmcs_guest_settings(struct lcd_arch *lcd_arch)
 	vmcs_write32(CR3_TARGET_COUNT, 0);
 	/* 
 	 * Intel SDM V3 24.6.6
+	 *
 	 * %cr0 and %cr4 guest accesses always cause vm exit: all bits 1s
 	 * %cr0 and %cr4 are accessible to the guest (no exits): all bits 0
 	 *
@@ -1128,7 +1135,9 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	vmcs_writel(GUEST_GDTR_BASE, (unsigned long)gdt);
 
 	/* No need to handle LDT, I assume Linux doesn't use it */
+	/* -- ldtr unusable (bit 16 = 1) */
 	//vmcs_writel(GUEST_LDTR_BASE, __segmentbase(gdtr.base, ldt));
+	vmcs_writel(GUEST_LDTR_AR_BYTES, (1 << 16));
 
 	/*
 	 * %fs and %gs are also per-cpu
@@ -1137,9 +1146,9 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	 * See Intel SDM V3 3.2.4 and 3.4.4.)
 	 */
 	rdmsrl(MSR_FS_BASE, tmpl);
-	vmcs_writel(HOST_FS_BASE, tmpl);
+	vmcs_writel(GUEST_FS_BASE, tmpl);
 	rdmsrl(MSR_GS_BASE, tmpl);
-	vmcs_writel(HOST_GS_BASE, tmpl);
+	vmcs_writel(GUEST_GS_BASE, tmpl);
 
 	/*
 	 * %rsp, %rip -- to be set by arch-independent code when guest address 
@@ -1199,16 +1208,22 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	vmcs_writel(GUEST_SS_AR_BYTES, __accessright(tmps));
 
 	savesegment(fs, tmps);
+	LCD_MSG("FS selector:0x%x\n", tmps);
+
 	vmcs_write16(GUEST_FS_SELECTOR, tmps);
 	vmcs_writel(GUEST_FS_LIMIT, __segmentlimit(tmps));
 	vmcs_writel(GUEST_FS_AR_BYTES, __accessright(tmps));
-	vmcs_writel(GUEST_FS_BASE, __readmsr(MSR_IA32_FS_BASE));
+	vmcs_writel(GUEST_FS_BASE, __readmsr(MSR_FS_BASE));
+	LCD_MSG("FS base:0x%x\n", __readmsr(MSR_FS_BASE));
 
 	savesegment(gs, tmps);
+	LCD_MSG("GS selector:0x%x\n", tmps);
+
 	vmcs_write16(GUEST_GS_SELECTOR, tmps);
 	vmcs_writel(GUEST_GS_LIMIT, __segmentlimit(tmps));
 	vmcs_writel(GUEST_GS_AR_BYTES, __accessright(tmps));
-	vmcs_writel(GUEST_GS_BASE, __readmsr(MSR_IA32_GS_BASE));
+	vmcs_writel(GUEST_GS_BASE, __readmsr(MSR_GS_BASE));
+	LCD_MSG("GS base:0x%x\n", __readmsr(MSR_GS_BASE));
 
 	store_tr(tmps);
 	vmcs_write16(GUEST_TR_SELECTOR, tmps);
@@ -1324,6 +1339,15 @@ void vmm_loop(struct lcd_arch *lcd_arch)
 
 	/* Set entry point for the host using vmm->cont */
 	vmm_set_entry_point(lcd_arch); 
+
+	/*
+	 * Make sure lcd_arch has valid state
+	 */
+	ret = lcd_arch_check(lcd_arch);
+	if (ret) {
+		LCD_ERR("bad lcd_arch state");
+		return; 
+	}
 
 
 	LCD_MSG("Ready to disable IRQs and enter the runloop\n"); 
