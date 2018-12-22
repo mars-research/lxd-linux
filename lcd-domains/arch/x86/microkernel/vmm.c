@@ -614,6 +614,11 @@ static int vmm_handle_exit(struct lcd_arch *lcd_arch)
 	int ret;
 
 	LCD_MSG("Handling exit 0x%llx", lcd_arch->exit_reason);
+	LCD_MSG("instr len:%d, qualification:0x%llx, idt vectoring:0x%x,"
+			" error code: 0x%x, exit interrupt info: 0x%x, vec_no:%d\n", 
+			lcd_arch->exit_reason, lcd_arch->exit_instr_len, 
+			lcd_arch->exit_qualification, lcd_arch->idt_vectoring_info, 
+			lcd_arch->error_code, lcd_arch->exit_intr_info, lcd_arch->vec_no); 
 
 	switch (lcd_arch->exit_reason) {
 	case EXIT_REASON_EXCEPTION_NMI:
@@ -997,10 +1002,10 @@ static void vmm_setup_vmcs_guest_settings(struct lcd_arch *lcd_arch)
 	 * Exit on any kind of page fault (Intel SDM V3 25.2)
 	 */
 	/* Exit on all exceptions */
-	//vmcs_write32(EXCEPTION_BITMAP, 0xffffffff);
+	vmcs_write32(EXCEPTION_BITMAP, 0xffffffff);
 
 	/* Don't exit on NMI */
-	vmcs_write32(EXCEPTION_BITMAP, 0xfffffffb);
+	//vmcs_write32(EXCEPTION_BITMAP, 0xfffffffd);
 	vmcs_write32(PAGE_FAULT_ERROR_CODE_MASK, 0);
 	vmcs_write32(PAGE_FAULT_ERROR_CODE_MATCH, 0);
 
