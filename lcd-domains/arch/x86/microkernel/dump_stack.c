@@ -38,6 +38,14 @@ static inline gva_t stack_trace_bottom(gva_t sp)
 	return __gva(gva_val(sbottom) - sizeof(unsigned long));
 }
 
+#if defined(LCD_VMM)	
+static inline int stack_addr_gva2hva(struct lcd_arch *lcd, gva_t gva, 
+				hva_t *hva_out)
+{
+	hva_out->hva = gva.gva;
+	return 0; 
+};
+#else	
 static inline int stack_addr_gva2hva(struct lcd_arch *lcd, gva_t gva, 
 				hva_t *hva_out)
 {
@@ -51,6 +59,7 @@ static inline int stack_addr_gva2hva(struct lcd_arch *lcd, gva_t gva,
 	 */
 	return lcd_arch_ept_gpa_to_hva(lcd, gpa, hva_out);
 }
+#endif
 
 static int print_one_addr(gva_t addr, struct lcd_arch *lcd)
 {

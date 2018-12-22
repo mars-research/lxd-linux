@@ -1146,9 +1146,9 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	 * See Intel SDM V3 3.2.4 and 3.4.4.)
 	 */
 	rdmsrl(MSR_FS_BASE, tmpl);
-	vmcs_writel(HOST_FS_BASE, tmpl);
+	vmcs_writel(GUEST_FS_BASE, tmpl);
 	rdmsrl(MSR_GS_BASE, tmpl);
-	vmcs_writel(HOST_GS_BASE, tmpl);
+	vmcs_writel(GUEST_GS_BASE, tmpl);
 
 	/*
 	 * %rsp, %rip -- to be set by arch-independent code when guest address 
