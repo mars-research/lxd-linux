@@ -996,7 +996,11 @@ static void vmm_setup_vmcs_guest_settings(struct lcd_arch *lcd_arch)
 	 *
 	 * Exit on any kind of page fault (Intel SDM V3 25.2)
 	 */
-	vmcs_write32(EXCEPTION_BITMAP, 0xffffffff);
+	/* Exit on all exceptions */
+	//vmcs_write32(EXCEPTION_BITMAP, 0xffffffff);
+
+	/* Don't exit on NMI */
+	vmcs_write32(EXCEPTION_BITMAP, 0xfffffffb);
 	vmcs_write32(PAGE_FAULT_ERROR_CODE_MASK, 0);
 	vmcs_write32(PAGE_FAULT_ERROR_CODE_MATCH, 0);
 
