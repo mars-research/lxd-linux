@@ -13,6 +13,8 @@
 
 #include <lcd_domains/types.h>
 #include <asm/lcd_domains/microkernel.h>
+#include <asm/lcd_domains/check.h>
+
 #include <lcd_domains/microkernel.h>
 
 #define VMM_STACK_SIZE 4096
@@ -1329,6 +1331,15 @@ void vmm_loop(struct lcd_arch *lcd_arch)
 
 	/* Set entry point for the host using vmm->cont */
 	vmm_set_entry_point(lcd_arch); 
+
+	/*
+	 * Make sure lcd_arch has valid state
+	 */
+	ret = lcd_arch_check(lcd_arch);
+	if (ret) {
+		LCD_ERR("bad lcd_arch state");
+		return; 
+	}
 
 
 	LCD_MSG("Ready to disable IRQs and enter the runloop\n"); 
