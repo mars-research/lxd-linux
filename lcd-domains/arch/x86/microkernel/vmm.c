@@ -154,7 +154,7 @@
         val;                                            \
 })
 
-
+void vmm_execute_cont(struct cont *cont); 
 
 struct gdtr {
         u16 limit;
@@ -1230,7 +1230,7 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	vmcs_writel(GUEST_TR_LIMIT, __segmentlimit(tmps));
 	vmcs_writel(GUEST_TR_AR_BYTES, __accessright(tmps));
 
-
+	vmm_execute_cont(&lcd_arch->cont); 
 
 	/* IDT and GDT */
 	__sgdt(&gdtr);
@@ -1404,6 +1404,20 @@ void vmm_loop(struct lcd_arch *lcd_arch)
 #define SAVE_CALLEE_REGS()						\
   __asm__ volatile ("" : : : "rbx", "r12", "r13", "r14", "r15",         \
 		    "memory", "cc")
+
+/*
+            static void vmm_execute_cont(cont_t *cont)    // rdi
+*/
+__asm__ ("      .text \n\t"
+         "      .align  16                 \n\t"
+         "      .globl  vmm_execute_cont \n\t"
+         "      .type   vmm_execute_cont, @function \n\t"
+         "vmm_execute_cont:                \n\t"
+         " mov 8(%rdi), %rbp               \n\t"
+         " mov 16(%rdi), %rsp              \n\t"
+         " jmp *0(%rdi)                    \n\t");
+
+
 /*
          static void vmm_on_alt_stack_0(void *stack,   // rdi
                                         void *fn,      // rsi
@@ -1421,7 +1435,7 @@ __asm__ ("      .text \n\t"
          " mov %rsp, (%rdi)                 \n\t" // Save old ESP on new stack
          " mov %rdi, %rsp                   \n\t" // Set up new stack pointer
          " mov %rdx, %rdi                   \n\t" // Move args into rdi
-         " call *%rsi                       \n\t" // Call callee (args in rdi)
+         " call *%rsi                    \n\t" // Call callee (args in rdi)
          " pop %rsp                         \n\t" // Restore old ESP
          " ret                              \n\t");
 
@@ -1454,7 +1468,7 @@ __asm__ ("      .text \n\t"
          " addq $8,   16(%rdi)       \n\t"
          // cont now initialized.  Call the function
          // rdi : cont , rsi : args , rdx : fn
-         " jmpq  *%rdx                \n\t"
+         " jmpq  *%rdx            \n\t"
          " int3\n\t");
 
 
