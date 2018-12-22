@@ -10,6 +10,8 @@
 #include <asm/virtext.h>
 #include <asm/tlbflush.h>
 
+//#include <asm/special_insns.h>
+#include <asm/debugreg.h>
 
 #include <lcd_domains/types.h>
 #include <asm/lcd_domains/microkernel.h>
@@ -383,6 +385,57 @@ void mm_cache_mtrr_ranges(struct mtrr_range *ranges, int *range_count, u8 *def_t
 
 	*range_count = idx;
 }
+
+void vmm_dbg_show_regs(void)
+{
+	unsigned long cr0 = 0L, cr2 = 0L, cr3 = 0L, cr4 = 0L, fs, gs, shadowgs;
+	unsigned long d0, d1, d2, d3, d6, d7;
+	unsigned int fsindex, gsindex;
+	unsigned int ds, cs, es;
+
+
+	asm("movl %%ds,%0" : "=r" (ds));
+	asm("movl %%cs,%0" : "=r" (cs));
+	asm("movl %%es,%0" : "=r" (es));
+	asm("movl %%fs,%0" : "=r" (fsindex));
+	asm("movl %%gs,%0" : "=r" (gsindex));
+
+	rdmsrl(MSR_FS_BASE, fs);
+	rdmsrl(MSR_GS_BASE, gs);
+	rdmsrl(MSR_KERNEL_GS_BASE, shadowgs);
+
+	cr0 = read_cr0();
+	cr2 = read_cr2();
+	cr3 = read_cr3();
+	cr4 = __read_cr4();
+
+	LCD_MSG( "FS:  %016lx(%04x) GS:%016lx(%04x) knlGS:%016lx\n",
+	       fs, fsindex, gs, gsindex, shadowgs);
+	LCD_MSG( "CS:  %04x DS: %04x ES: %04x CR0: %016lx\n", cs, ds,
+			es, cr0);
+	LCD_MSG( "CR2: %016lx CR3: %016lx CR4: %016lx\n", cr2, cr3,
+			cr4);
+
+	get_debugreg(d0, 0);
+	get_debugreg(d1, 1);
+	get_debugreg(d2, 2);
+	get_debugreg(d3, 3);
+	get_debugreg(d6, 6);
+	get_debugreg(d7, 7);
+
+	/* Only print out debug registers if they are in their non-default state. */
+	if (!((d0 == 0) && (d1 == 0) && (d2 == 0) && (d3 == 0) &&
+	    (d6 == DR6_RESERVED) && (d7 == 0x400))) {
+		LCD_MSG( "DR0: %016lx DR1: %016lx DR2: %016lx\n",
+		       d0, d1, d2);
+		LCD_MSG( "DR3: %016lx DR6: %016lx DR7: %016lx\n",
+		       d3, d6, d7);
+	}
+
+	if (boot_cpu_has(X86_FEATURE_OSPKE))
+		LCD_MSG( "PKRU: %08x\n", read_pkru());
+}
+
 static char *vmm_exit_to_str(struct lcd_arch *lcd_arch) {
 	switch (lcd_arch->exit_reason) {
 	case EXIT_REASON_EXCEPTION_NMI:
@@ -600,10 +653,10 @@ static int  vcpu_handle_exception_nmi(struct lcd_arch *lcd_arch)
 			lcd_arch->exit_qualification, lcd_arch->idt_vectoring_info, 
 			lcd_arch->error_code, lcd_arch->exit_intr_info, lcd_arch->vec_no);
 
-	intr_type = (lcd_arch->exit_intr_info & INTR_INFO_INTR_TYPE_MASK) >> INTR_INFO_INTR_TYPE_SHIFT;
+	intr_type = lcd_arch->exit_intr_info & INTR_INFO_INTR_TYPE_MASK;
 	vector = lcd_arch->exit_intr_info & INTR_INFO_VECTOR_MASK;
 
-	LCD_MSG("Int type:0x%x, vector:%d\n", intr_type, vector);
+	LCD_MSG("Int type:0x%x, vector:%d\n", intr_type >> INTR_INFO_INTR_TYPE_SHIFT, vector);
 
 	if (intr_type & INTR_TYPE_HARD_EXCEPTION && vector == X86_TRAP_PF) {
 		//__writecr2(vmcs_read(EXIT_QUALIFICATION));
@@ -1308,7 +1361,7 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	vmcs_writel(GUEST_FS_LIMIT, __segmentlimit(tmps));
 	vmcs_writel(GUEST_FS_AR_BYTES, __accessright(tmps));
 	vmcs_writel(GUEST_FS_BASE, __readmsr(MSR_FS_BASE));
-	LCD_MSG("FS base:0x%x\n", __readmsr(MSR_FS_BASE));
+	LCD_MSG("FS base:0x%llx\n", __readmsr(MSR_FS_BASE));
 
 	savesegment(gs, tmps);
 	LCD_MSG("GS selector:0x%x\n", tmps);
@@ -1317,14 +1370,14 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	vmcs_writel(GUEST_GS_LIMIT, __segmentlimit(tmps));
 	vmcs_writel(GUEST_GS_AR_BYTES, __accessright(tmps));
 	vmcs_writel(GUEST_GS_BASE, __readmsr(MSR_GS_BASE));
-	LCD_MSG("GS base:0x%x\n", __readmsr(MSR_GS_BASE));
+	LCD_MSG("GS base:0x%llx\n", __readmsr(MSR_GS_BASE));
 
 	store_tr(tmps);
 	vmcs_write16(GUEST_TR_SELECTOR, tmps);
 	vmcs_writel(GUEST_TR_LIMIT, __segmentlimit(tmps));
 	vmcs_writel(GUEST_TR_AR_BYTES, __accessright(tmps));
 
-	//dump_stack(); 
+	vmm_dbg_show_regs(); 
 	//vmm_execute_cont(&lcd_arch->cont); 
 
 	/* IDT and GDT */
@@ -1819,6 +1872,27 @@ static int vmm_arch_ept_init(struct lcd_arch *lcd_arch) {
 	return 0; 
 };
 
+/* Touch every phisical page */
+static int vmm_dbg_ept_test(struct lcd_arch *lcd_arch) {
+	u64 addr, counter = 0;
+	int i; 
+	struct lcd_vmm * vmm = lcd_arch->vmm; 
+	
+	LCD_MSG("Starting EPT test, counter:%d\n", counter); 
+
+	for (i = 0; i < vmm->range_count; i ++ ) {
+		LCD_MSG("range: 0x%016llX -> 0x%016llX\n", 
+				vmm->ranges[i].start, vmm->ranges[i].end);
+
+		for (addr = vmm->ranges[i].start; addr < vmm->ranges[i].end; addr += PAGE_SIZE) {
+			counter += *(unsigned long long *) __va(addr); 
+		}
+	}
+
+	LCD_MSG("EPT test passed, counter:%d\n", counter); 
+	return 0; 
+};
+
 /* Prepare the stack for the execution of the hypervisor
  * (VT-x root)
  */
@@ -1910,6 +1984,8 @@ void vmm_enter(void *unused)
 	if (ret) 
 		goto failed; 
 
+	vmm_dbg_ept_test(lcd_arch); 
+
 	ret = vmm_alloc_stack(lcd_arch); 
 	if (ret) 
 		goto failed; 
@@ -1918,6 +1994,8 @@ void vmm_enter(void *unused)
 
 	/* We enter the hypervisor and continue in the guest at vmm_enter_ack */
 	__vmm_enter(lcd_arch);	
+
+	vmm_dbg_ept_test(lcd_arch);
 
 	LCD_MSG("Entered VMM on CPU %d\n", raw_smp_processor_id());
 
