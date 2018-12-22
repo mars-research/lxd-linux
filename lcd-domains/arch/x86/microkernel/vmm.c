@@ -132,8 +132,8 @@
 #define EXIT_REASON_XRSTORS             64
 #define EXIT_REASON_PCOMMIT             65
 
-#define MSR_IA32_FS_BASE                0xC0000100
-#define MSR_IA32_GS_BASE                0xC0000101
+//#define MSR_IA32_FS_BASE                0xC0000100
+//#define MSR_IA32_GS_BASE                0xC0000101
 
 
 #define __sidt(idt)     __asm __volatile("sidt %0" : "=m" (*idt));
@@ -1208,16 +1208,22 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	vmcs_writel(GUEST_SS_AR_BYTES, __accessright(tmps));
 
 	savesegment(fs, tmps);
+	LCD_MSG("FS selector:0x%x\n", tmps);
+
 	vmcs_write16(GUEST_FS_SELECTOR, tmps);
 	vmcs_writel(GUEST_FS_LIMIT, __segmentlimit(tmps));
 	vmcs_writel(GUEST_FS_AR_BYTES, __accessright(tmps));
-	vmcs_writel(GUEST_FS_BASE, __readmsr(MSR_IA32_FS_BASE));
+	vmcs_writel(GUEST_FS_BASE, __readmsr(MSR_FS_BASE));
+	LCD_MSG("FS base:0x%x\n", __readmsr(MSR_FS_BASE));
 
 	savesegment(gs, tmps);
+	LCD_MSG("GS selector:0x%x\n", tmps);
+
 	vmcs_write16(GUEST_GS_SELECTOR, tmps);
 	vmcs_writel(GUEST_GS_LIMIT, __segmentlimit(tmps));
 	vmcs_writel(GUEST_GS_AR_BYTES, __accessright(tmps));
-	vmcs_writel(GUEST_GS_BASE, __readmsr(MSR_IA32_GS_BASE));
+	vmcs_writel(GUEST_GS_BASE, __readmsr(MSR_GS_BASE));
+	LCD_MSG("GS base:0x%x\n", __readmsr(MSR_GS_BASE));
 
 	store_tr(tmps);
 	vmcs_write16(GUEST_TR_SELECTOR, tmps);
