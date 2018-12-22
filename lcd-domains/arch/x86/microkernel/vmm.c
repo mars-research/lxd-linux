@@ -877,9 +877,13 @@ static int vmm_handle_exit(struct lcd_arch *lcd_arch)
 		ret = vmm_nop(lcd_arch); 
 		break;
 	default:
+		/* Exit reasons SDM 24.9.1 */
 		LCD_ERR("Unhandled exit reason 0x%llx", lcd_arch->exit_reason);
-		LCD_MSG("instr len:%d, qualification:0x%llx, idt vectoring:0x%x, error code: 0x%x, exit interrupt info: 0x%x, vec_no:%d\n", 
-			lcd_arch->exit_reason, lcd_arch->exit_instr_len, lcd_arch->exit_qualification, lcd_arch->idt_vectoring_info, lcd_arch->error_code, lcd_arch->exit_intr_info, lcd_arch->vec_no); 
+		LCD_MSG("instr len:%d, qualification:0x%llx, idt vectoring:0x%x,"
+			" error code: 0x%x, exit interrupt info: 0x%x, vec_no:%d\n", 
+			lcd_arch->exit_reason, lcd_arch->exit_instr_len, 
+			lcd_arch->exit_qualification, lcd_arch->idt_vectoring_info, 
+			lcd_arch->error_code, lcd_arch->exit_intr_info, lcd_arch->vec_no); 
 	       
 		ret = -EIO;
 		break;
@@ -1007,6 +1011,7 @@ static void vmm_setup_vmcs_guest_settings(struct lcd_arch *lcd_arch)
 	vmcs_write32(CR3_TARGET_COUNT, 0);
 	/* 
 	 * Intel SDM V3 24.6.6
+	 *
 	 * %cr0 and %cr4 guest accesses always cause vm exit: all bits 1s
 	 * %cr0 and %cr4 are accessible to the guest (no exits): all bits 0
 	 *
