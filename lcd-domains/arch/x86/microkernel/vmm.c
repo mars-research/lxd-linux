@@ -528,6 +528,96 @@ static int vmm_nop(struct lcd_arch *lcd_arch)
 {
 	LCD_ERR("Unhandled VT-x exit:%d (%s)\n", 
 			lcd_arch->exit_reason, vmm_exit_to_str(lcd_arch));
+	LCD_MSG("reason:0x%llx, instr len:%d,"
+			" qualification:0x%llx, idt vectoring:0x%x,"
+			" error code: 0x%x, exit interrupt info: 0x%x, vec_no:%d\n", 
+			lcd_arch->exit_reason, lcd_arch->exit_instr_len, 
+			lcd_arch->exit_qualification, lcd_arch->idt_vectoring_info, 
+			lcd_arch->error_code, lcd_arch->exit_intr_info, lcd_arch->vec_no); 
+	return -1;
+}
+
+/*
+* Interruption-information format
+*/
+#define INTR_INFO_VECTOR_MASK           0xff            /* 7:0 */
+#define INTR_INFO_INTR_TYPE_MASK        0x700           /* 10:8 */
+#define INTR_INFO_INTR_TYPE_SHIFT	(8)
+
+#define INTR_INFO_DELIVER_CODE_MASK     0x800           /* 11 */
+#define INTR_INFO_UNBLOCK_NMI		0x1000		/* 12 */
+#define INTR_INFO_VALID_MASK            0x80000000      /* 31 */
+#define INTR_INFO_RESVD_BITS_MASK       0x7ffff000
+
+#define VECTORING_INFO_VECTOR_MASK 		INTR_INFO_VECTOR_MASK
+#define VECTORING_INFO_TYPE_MASK        	INTR_INFO_INTR_TYPE_MASK
+#define VECTORING_INFO_DELIVER_CODE_MASK    	INTR_INFO_DELIVER_CODE_MASK
+#define VECTORING_INFO_VALID_MASK       	INTR_INFO_VALID_MASK
+
+//#define INTR_TYPE_EXT_INTR              (0) /* external interrupt */
+//#define INTR_TYPE_NMI_INTR		(2) /* NMI */
+//#define INTR_TYPE_HARD_EXCEPTION	(3) /* processor exception */
+//#define INTR_TYPE_SOFT_INTR             (4) /* software interrupt */
+//#define INTR_TYPE_SOFT_EXCEPTION	(6) /* software exception */
+
+/* Interrupts/Exceptions */
+#define X86_TRAP_DE			0	/*  0, Divide-by-zero */
+#define X86_TRAP_DB			1	/*  1, Debug */
+#define X86_TRAP_NMI			2	/*  2, Non-maskable Interrupt */
+#define X86_TRAP_BP			3	/*  3, Breakpoint */
+#define X86_TRAP_OF			4	/*  4, Overflow */
+#define X86_TRAP_BR			5	/*  5, Bound Range Exceeded */
+#define X86_TRAP_UD			6	/*  6, Invalid Opcode */
+#define X86_TRAP_NM			7	/*  7, Device Not Available */
+#define X86_TRAP_DF			8	/*  8, Double Fault */
+#define X86_TRAP_OLD_MF			9	/*  9, Coprocessor Segment Overrun */
+#define X86_TRAP_TS			10	/* 10, Invalid TSS */
+#define X86_TRAP_NP			11	/* 11, Segment Not Present */
+#define X86_TRAP_SS			12	/* 12, Stack Segment Fault */
+#define X86_TRAP_GP			13	/* 13, General Protection Fault */
+#define X86_TRAP_PF			14	/* 14, Page Fault */
+#define X86_TRAP_SPURIOUS		15	/* 15, Spurious Interrupt */
+#define X86_TRAP_MF			16	/* 16, x87 Floating-Point Exception */
+#define X86_TRAP_AC			17	/* 17, Alignment Check */
+#define X86_TRAP_MC			18	/* 18, Machine Check */
+#define X86_TRAP_XF			19	/* 19, SIMD Floating-Point Exception */
+#define X86_TRAP_VE			20	/* 20, Virtualization Exception  */
+#define X86_TRAP_IRET			32	/* 32, IRET Exception */
+
+
+
+static int  vcpu_handle_exception_nmi(struct lcd_arch *lcd_arch)
+{
+	u16 intr_type;
+	u8 vector;
+
+	LCD_ERR("Handling NMI/exception\n");
+
+	LCD_MSG("reason:0x%llx, instr len:%d,"
+			" qualification:0x%llx, idt vectoring:0x%x,"
+			" error code: 0x%x, exit interrupt info: 0x%x, vec_no:%d\n", 
+			lcd_arch->exit_reason, lcd_arch->exit_instr_len, 
+			lcd_arch->exit_qualification, lcd_arch->idt_vectoring_info, 
+			lcd_arch->error_code, lcd_arch->exit_intr_info, lcd_arch->vec_no);
+
+	intr_type = (lcd_arch->exit_intr_info & INTR_INFO_INTR_TYPE_MASK) >> INTR_INFO_INTR_TYPE_SHIFT;
+	vector = lcd_arch->exit_intr_info & INTR_INFO_VECTOR_MASK;
+
+	LCD_MSG("Int type:0x%x, vector:%d\n", intr_type, vector);
+
+	if (intr_type & INTR_TYPE_HARD_EXCEPTION && vector == X86_TRAP_PF) {
+		//__writecr2(vmcs_read(EXIT_QUALIFICATION));
+		LCD_MSG("qualification: 0x%x\n", lcd_arch->exit_qualification);
+	} else {
+		//instr_len = vmcs_read32(VM_EXIT_INSTRUCTION_LEN);
+		LCD_MSG("instr_len: 0x%x\n", lcd_arch->exit_instr_len);
+
+	}
+
+	if(lcd_arch->exit_intr_info & INTR_INFO_DELIVER_CODE_MASK)
+		LCD_MSG("intr has error, error_code: 0x%x\n", lcd_arch->error_code);
+	
+		
 	return -1;
 }
 
@@ -614,16 +704,10 @@ static int vmm_handle_exit(struct lcd_arch *lcd_arch)
 	int ret;
 
 	LCD_MSG("Handling exit 0x%llx", lcd_arch->exit_reason);
-	LCD_MSG("instr len:%d, qualification:0x%llx, idt vectoring:0x%x,"
-			" error code: 0x%x, exit interrupt info: 0x%x, vec_no:%d\n", 
-			lcd_arch->exit_reason, lcd_arch->exit_instr_len, 
-			lcd_arch->exit_qualification, lcd_arch->idt_vectoring_info, 
-			lcd_arch->error_code, lcd_arch->exit_intr_info, lcd_arch->vec_no); 
 
 	switch (lcd_arch->exit_reason) {
 	case EXIT_REASON_EXCEPTION_NMI:
-		//ret = vcpu_handle_exception_nmi(lcd_arch);
-		ret = vmm_nop(lcd_arch);
+		ret = vcpu_handle_exception_nmi(lcd_arch);
 		break;
 	case EXIT_REASON_EXTERNAL_INTERRUPT:
 		//ret = vcpu_hadnle_external_int(); 
@@ -885,8 +969,9 @@ static int vmm_handle_exit(struct lcd_arch *lcd_arch)
 		break;
 	default:
 		/* Exit reasons SDM 24.9.1 */
-		LCD_ERR("Unhandled exit reason 0x%llx", lcd_arch->exit_reason);
-		LCD_MSG("instr len:%d, qualification:0x%llx, idt vectoring:0x%x,"
+		LCD_ERR("Unknown exit reason 0x%llx", lcd_arch->exit_reason);
+		LCD_MSG("reason:0x%llx, instr len:%d,"
+			" qualification:0x%llx, idt vectoring:0x%x,"
 			" error code: 0x%x, exit interrupt info: 0x%x, vec_no:%d\n", 
 			lcd_arch->exit_reason, lcd_arch->exit_instr_len, 
 			lcd_arch->exit_qualification, lcd_arch->idt_vectoring_info, 
