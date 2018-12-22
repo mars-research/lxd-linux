@@ -1135,7 +1135,9 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	vmcs_writel(GUEST_GDTR_BASE, (unsigned long)gdt);
 
 	/* No need to handle LDT, I assume Linux doesn't use it */
+	/* -- ldtr unusable (bit 16 = 1) */
 	//vmcs_writel(GUEST_LDTR_BASE, __segmentbase(gdtr.base, ldt));
+	vmcs_writel(GUEST_LDTR_AR_BYTES, (1 << 16));
 
 	/*
 	 * %fs and %gs are also per-cpu
