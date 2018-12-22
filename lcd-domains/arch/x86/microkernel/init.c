@@ -675,11 +675,13 @@ int lcd_arch_init(void)
 	}
 
 #if defined(LCD_VMM)
-	if (on_each_cpu(vmm_enter, NULL, 1)) {
-		LCD_ERR("timeout waiting for VMM enter on CPU.\n");
-		ret = -EIO;
-		goto failed2; 
-	}
+	vmm_enter(NULL);
+
+	//if (on_each_cpu(vmm_enter, NULL, 1)) {
+	//	LCD_ERR("timeout waiting for VMM enter on CPU.\n");
+	//	ret = -EIO;
+	//	goto failed2; 
+	//}
 #endif
 
 
