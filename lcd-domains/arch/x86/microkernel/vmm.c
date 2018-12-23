@@ -1213,7 +1213,7 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	u16 tmps;
 
 	struct gdtr gdtr;
-	struct gdtr idtr;
+	//struct gdtr idtr;
 	gate_desc *idt;
 
 	/*
@@ -1273,29 +1273,15 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	vmcs_writel(GUEST_SYSENTER_ESP, tmpl);
 
 	/*
-	 * Linux uses per-cpu TSS and GDT, so we need to set these
-	 * in the host part of the vmcs when switching cpu's.
-	 */
-	gdt = vmx_host_gdt();
-	vmx_host_tss(&host_tss);
-	vmcs_writel(GUEST_TR_BASE, hva_val(host_tss));
-	vmcs_writel(GUEST_GDTR_BASE, (unsigned long)gdt);
-
-	/* No need to handle LDT, I assume Linux doesn't use it */
-	/* -- ldtr unusable (bit 16 = 1) */
-	//vmcs_writel(GUEST_LDTR_BASE, __segmentbase(gdtr.base, ldt));
-	vmcs_writel(GUEST_LDTR_AR_BYTES, (1 << 16));
-
-	/*
 	 * %fs and %gs are also per-cpu
 	 *
 	 * (MSRs are used to load / store %fs and %gs in 64-bit mode.
 	 * See Intel SDM V3 3.2.4 and 3.4.4.)
 	 */
-	rdmsrl(MSR_FS_BASE, tmpl);
-	vmcs_writel(GUEST_FS_BASE, tmpl);
-	rdmsrl(MSR_GS_BASE, tmpl);
-	vmcs_writel(GUEST_GS_BASE, tmpl);
+	//rdmsrl(MSR_FS_BASE, tmpl);
+	//vmcs_writel(GUEST_FS_BASE, tmpl);
+	//rdmsrl(MSR_GS_BASE, tmpl);
+	//vmcs_writel(GUEST_GS_BASE, tmpl);
 
 	/*
 	 * %rsp, %rip -- to be set by arch-independent code when guest address 
@@ -1320,7 +1306,8 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	 * Note: MSR's for %fs and %gs will be loaded with
 	 * the values in %fs.base and %gs.base; see Intel SDM V3 26.3.2.1.
 	 */
-	
+
+
 	/*
 	 * Guest segment selectors
 	 *
@@ -1333,9 +1320,9 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	savesegment(cs, tmps);
 	vmcs_write16(GUEST_CS_SELECTOR, tmps);
 	//vmcs_writel(GUEST_CS_LIMIT, __segmentlimit(tmps));
-	vmcs_write32(GUEST_CS_LIMIT, 0xFFFFFFFF);
+	vmcs_write32(GUEST_CS_LIMIT, 0xFFFF);
 	//vmcs_writel(GUEST_CS_AR_BYTES, __accessright(tmps));
-	vmcs_writel(GUEST_CS_AR_BYTES,   0xA09B);
+	vmcs_writel(GUEST_CS_AR_BYTES,  /* 0xA09B*/ 0x0009b);
 	vmcs_writel(GUEST_CS_BASE, 0);
 	//LCD_MSG("CS selector: 0x%x, base:0x%llx, limit:0x%llx, access rights:0x%llx\n", 
 	//	tmps, 0, __segmentlimit(tmps), __accessright(tmps));
@@ -1343,9 +1330,9 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	savesegment(ds, tmps);
 	vmcs_write16(GUEST_DS_SELECTOR, tmps);
 	//vmcs_writel(GUEST_DS_LIMIT, __segmentlimit(tmps));
-	vmcs_write32(GUEST_DS_LIMIT, 0xFFFFFFFF);
+	vmcs_write32(GUEST_DS_LIMIT, 0xFFFF);
 	//vmcs_writel(GUEST_DS_AR_BYTES, __accessright(tmps));
-	vmcs_writel(GUEST_DS_AR_BYTES,   0x8093);
+	vmcs_writel(GUEST_DS_AR_BYTES,   0x0093);
 	vmcs_writel(GUEST_DS_BASE, 0);
 	//LCD_MSG("DS selector: 0x%x, base:0x%llx, limit:0x%llx, access rights:0x%llx\n", 
 	//	tmps, 0, __segmentlimit(tmps), __accessright(tmps));
@@ -1353,9 +1340,9 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	savesegment(es, tmps);
 	vmcs_write16(GUEST_ES_SELECTOR, tmps);
 	//vmcs_writel(GUEST_ES_LIMIT, __segmentlimit(tmps));
-	vmcs_write32(GUEST_ES_LIMIT, 0xFFFFFFFF);
+	vmcs_write32(GUEST_ES_LIMIT, 0xFFFF);
 	//vmcs_writel(GUEST_ES_AR_BYTES, __accessright(tmps));
-	vmcs_writel(GUEST_ES_AR_BYTES,   0x8093);
+	vmcs_writel(GUEST_ES_AR_BYTES,   0x0093);
 	vmcs_writel(GUEST_ES_BASE, 0);
 	//LCD_MSG("ES selector: 0x%x, base:0x%llx, limit:0x%llx, access rights:0x%llx\n", 
 	//	tmps, 0, __segmentlimit(tmps), __accessright(tmps));
@@ -1363,9 +1350,9 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	savesegment(ss, tmps);
 	vmcs_write16(GUEST_SS_SELECTOR, tmps);
 	//vmcs_writel(GUEST_SS_LIMIT, __segmentlimit(tmps));
-	vmcs_write32(GUEST_SS_LIMIT, 0xFFFFFFFF);
+	vmcs_write32(GUEST_SS_LIMIT, 0xFFFF);
 	//vmcs_writel(GUEST_SS_AR_BYTES, __accessright(tmps));
-	vmcs_writel(GUEST_SS_AR_BYTES,   0x8093);
+	vmcs_writel(GUEST_SS_AR_BYTES,   0x0093);
 	vmcs_writel(GUEST_SS_BASE, 0);
 	//LCD_MSG("SS selector: 0x%x, base:0x%llx, limit:0x%llx, access rights:0x%llx\n", 
 	//	tmps, 0, __segmentlimit(tmps), __accessright(tmps));
@@ -1374,23 +1361,32 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	savesegment(fs, tmps);
 	vmcs_write16(GUEST_FS_SELECTOR, tmps);
 	//vmcs_writel(GUEST_FS_LIMIT, __segmentlimit(tmps));
-	vmcs_write32(GUEST_FS_LIMIT, 0xFFFFFFFF);
+	vmcs_write32(GUEST_FS_LIMIT, 0xFFFF);
 	//vmcs_writel(GUEST_FS_AR_BYTES, __accessright(tmps));
-	vmcs_writel(GUEST_FS_AR_BYTES,   0x8093);
+	vmcs_writel(GUEST_FS_AR_BYTES,   0x0093);
 	vmcs_writel(GUEST_FS_BASE, __readmsr(MSR_FS_BASE));
 	LCD_MSG("FS selector: 0x%x, base:0x%llx, limit:0x%llx, access rights:0x%llx\n", 
-		tmps, __readmsr(MSR_GS_BASE), 0xFFFFFFFF, 0x8093);
+		tmps, __readmsr(MSR_GS_BASE), 0xFFFFFFFF, 0x0093);
 
 	savesegment(gs, tmps);
 	vmcs_write16(GUEST_GS_SELECTOR, tmps);
 	//vmcs_writel(GUEST_GS_LIMIT, __segmentlimit(tmps));
-	vmcs_write32(GUEST_GS_LIMIT, 0xFFFFFFFF);
+	vmcs_write32(GUEST_GS_LIMIT, 0xFFFF);
 	//vmcs_writel(GUEST_GS_AR_BYTES, __accessright(tmps));
-	vmcs_writel(GUEST_GS_AR_BYTES,   0x8093);
+	vmcs_writel(GUEST_GS_AR_BYTES,   0x0093);
 	vmcs_writel(GUEST_GS_BASE, __readmsr(MSR_GS_BASE));
 	LCD_MSG("GS selector: 0x%x, base:0x%llx, limit:0x%llx, access rights:0x%llx\n", 
-		tmps, __readmsr(MSR_GS_BASE), 0xFFFFFFFF, 0x8093);
+		tmps, __readmsr(MSR_GS_BASE), 0xFFFFFFFF, 0x0093);
 
+
+	/*
+	 * Linux uses per-cpu TSS and GDT, so we need to set these
+	 * in the host part of the vmcs when switching cpu's.
+	 */
+
+	/* TSS */
+	vmx_host_tss(&host_tss);
+	vmcs_writel(GUEST_TR_BASE, hva_val(host_tss));
 
 	store_tr(tmps);
 	vmcs_write16(GUEST_TR_SELECTOR, tmps);
@@ -1400,28 +1396,44 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	LCD_MSG("TR selector: 0x%x, limit:0x%llx, access rights:0x%llx\n", 
 		tmps, __segmentlimit(tmps), 0x008B);
 
-
-	vmm_dbg_show_regs(); 
-//	vmm_execute_cont(&lcd_arch->cont); 
-
-	/* IDT and GDT */
+	/*
+	 *  GDT
+	 */
+	gdt = vmx_host_gdt();
+	vmcs_writel(GUEST_GDTR_BASE, (unsigned long)gdt);
 	__sgdt(&gdtr);
-	__sidt(&idtr);
-
 	vmcs_write32(GUEST_GDTR_LIMIT, gdtr.limit);
-	vmcs_write32(GUEST_IDTR_LIMIT, idtr.limit);
+
 	
 	/*
-	 * idtr
+	 * IDT
 	 */
 	idt = vmx_host_idt();
 	vmcs_writel(GUEST_IDTR_BASE, (unsigned long)idt);
+	vmcs_write32(GUEST_IDTR_LIMIT, vmx_host_idt_limit());
 
+	LCD_MSG("GDT limit:0x%x, IDT limit: 0x%x\n", 
+			gdtr.limit, vmx_host_idt_limit());	
+
+	/*
+	 * LDT
+	 */
+
+	/* No need to handle LDT, I assume Linux doesn't use it */
+	/* -- ldtr unusable (bit 16 = 1) */
+	//vmcs_writel(GUEST_LDTR_BASE, __segmentbase(gdtr.base, ldt));
+	vmcs_writel(GUEST_LDTR_AR_BYTES, (1 << 16));
+
+
+	
 	vmcs_writel(GUEST_DR7, __readdr(7));
 	
 	//err |= vmcs_write(GUEST_RSP, gsp);
 	//err |= vmcs_write(GUEST_RIP, gip);
 		
+	vmm_dbg_show_regs(); 
+	//vmm_execute_cont(&lcd_arch->cont); 
+
 
 
 
