@@ -1402,7 +1402,7 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 
 
 	vmm_dbg_show_regs(); 
-	vmm_execute_cont(&lcd_arch->cont); 
+//	vmm_execute_cont(&lcd_arch->cont); 
 
 	/* IDT and GDT */
 	__sgdt(&gdtr);
@@ -2008,7 +2008,8 @@ void vmm_enter(void *unused)
 	if (ret) 
 		goto failed; 
 
-	LCD_MSG("Entering VMM on a new stack:0x%llx\n", lcd_arch->vmm_stack);
+	LCD_MSG("Entering VMM on a new stack:0x%llx, CPU:%d, cpu_id:%p\n", 
+			lcd_arch->vmm_stack, raw_smp_processor_id(), raw_cpu_ptr(&cpu_number));
 
 	/* We enter the hypervisor and continue in the guest at vmm_enter_ack */
 	__vmm_enter(lcd_arch);	
