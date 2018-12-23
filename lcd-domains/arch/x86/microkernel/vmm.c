@@ -1540,12 +1540,6 @@ void vmm_loop(struct lcd_arch *lcd_arch)
 
 	LCD_MSG("Exiting VMM, handled exits: %d\n", entry_count); 
 
-	/*
-	 * If there was an error, dump the lcd's state.
-	 */
-	if (ret < 0)
-		lcd_arch_dump_lcd(lcd_arch);
-
 	return;
 }
 
@@ -1873,7 +1867,7 @@ static int vmm_arch_ept_init(struct lcd_arch *lcd_arch) {
 };
 
 /* Touch every phisical page */
-static int vmm_dbg_ept_test(struct lcd_arch *lcd_arch) {
+int vmm_dbg_ept_test(struct lcd_arch *lcd_arch) {
 	u64 addr, counter = 0;
 	int i; 
 	struct lcd_vmm * vmm = lcd_arch->vmm; 
@@ -1984,7 +1978,7 @@ void vmm_enter(void *unused)
 	if (ret) 
 		goto failed; 
 
-	vmm_dbg_ept_test(lcd_arch); 
+//	vmm_dbg_ept_test(lcd_arch); 
 
 	ret = vmm_alloc_stack(lcd_arch); 
 	if (ret) 
@@ -1995,7 +1989,7 @@ void vmm_enter(void *unused)
 	/* We enter the hypervisor and continue in the guest at vmm_enter_ack */
 	__vmm_enter(lcd_arch);	
 
-	vmm_dbg_ept_test(lcd_arch);
+//	vmm_dbg_ept_test(lcd_arch);
 
 	LCD_MSG("Entered VMM on CPU %d\n", raw_smp_processor_id());
 
