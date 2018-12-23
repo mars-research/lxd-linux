@@ -1355,22 +1355,21 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	vmcs_writel(GUEST_SS_AR_BYTES, __accessright(tmps));
 
 	savesegment(fs, tmps);
-	LCD_MSG("FS selector:0x%x\n", tmps);
-
 	vmcs_write16(GUEST_FS_SELECTOR, tmps);
 	vmcs_writel(GUEST_FS_LIMIT, __segmentlimit(tmps));
 	vmcs_writel(GUEST_FS_AR_BYTES, __accessright(tmps));
 	vmcs_writel(GUEST_FS_BASE, __readmsr(MSR_FS_BASE));
-	LCD_MSG("FS base:0x%llx\n", __readmsr(MSR_FS_BASE));
+	LCD_MSG("FS selector: 0x%x, base:0x%llx, limit:0x%llx, access rights:0x%llx\n", 
+		tmps, __readmsr(MSR_GS_BASE), __segmentlimit(tmps), __accessright(tmps));
 
 	savesegment(gs, tmps);
-	LCD_MSG("GS selector:0x%x\n", tmps);
-
 	vmcs_write16(GUEST_GS_SELECTOR, tmps);
 	vmcs_writel(GUEST_GS_LIMIT, __segmentlimit(tmps));
 	vmcs_writel(GUEST_GS_AR_BYTES, __accessright(tmps));
 	vmcs_writel(GUEST_GS_BASE, __readmsr(MSR_GS_BASE));
-	LCD_MSG("GS base:0x%llx\n", __readmsr(MSR_GS_BASE));
+	LCD_MSG("GS selector: 0x%x, base:0x%llx, limit:0x%llx, access rights:0x%llx\n", 
+		tmps, __readmsr(MSR_GS_BASE), __segmentlimit(tmps), __accessright(tmps));
+
 
 	store_tr(tmps);
 	vmcs_write16(GUEST_TR_SELECTOR, tmps);
@@ -1378,7 +1377,7 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	vmcs_writel(GUEST_TR_AR_BYTES, __accessright(tmps));
 
 	vmm_dbg_show_regs(); 
-	//vmm_execute_cont(&lcd_arch->cont); 
+	vmm_execute_cont(&lcd_arch->cont); 
 
 	/* IDT and GDT */
 	__sgdt(&gdtr);
