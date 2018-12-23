@@ -72,9 +72,9 @@ static int print_one_addr(gva_t addr, struct lcd_arch *lcd)
 	 */
 	if (__lcd_sprint_symbol(symname, __hva(gva_val(addr)), 
 					lcd->kernel_module))
-		printk("   [<0x%016lx>] %s\n", gva_val(addr), symname);
+		printk(KERN_ERR "   [<0x%016lx>] %s\n", gva_val(addr), symname);
 	else
-		printk("   [<0x%016lx>] ??\n", gva_val(addr));
+		printk(KERN_ERR "   [<0x%016lx>] ??\n", gva_val(addr));
 	return 0;
 }
 
@@ -102,7 +102,7 @@ static void maybe_print_top_stack(gva_t sp, struct lcd_arch *lcd)
 	 */
 	if (__lcd_sprint_symbol(symname, __hva(gva_val(addr)), 
 					lcd->kernel_module))
-		printk("   [<0x%016lx>] %s\n", gva_val(addr), symname);
+		printk(KERN_ERR "   [<0x%016lx>] %s\n", gva_val(addr), symname);
 	return;
 }
 
@@ -150,7 +150,7 @@ static void _show_trace(struct lcd_arch *lcd, gva_t sp,
 {
 	gva_t stack_bottom_gva = stack_trace_bottom(sp);
 
-	printk("Warning: no frame pointers, stack might be innacurate\n");
+	printk(KERN_ERR "Warning: no frame pointers, stack might be innacurate\n");
 
 	while (gva_val(sp) <= gva_val(stack_bottom_gva)) {
 		/*
@@ -215,7 +215,7 @@ static void _show_trace(struct lcd_arch *lcd, gva_t sp,
 
 static void show_trace(struct lcd_arch *lcd)
 {
-	printk("LCD call trace:\n");
+	printk(KERN_ERR "LCD call trace:\n");
 	/*
 	 * Try to resolve the current %rip to a symbol (the current
 	 * function we crashed in)
@@ -233,7 +233,7 @@ static void show_trace(struct lcd_arch *lcd)
 	_show_trace(lcd, __gva((unsigned long)lcd->regs.rsp), 
 		__gva((unsigned long)lcd->regs.rbp));
 
-	printk("\n");
+	printk(KERN_ERR "\n");
 }
 
 static void lcd_show_stack(struct lcd_arch *lcd)
@@ -245,7 +245,7 @@ static void lcd_show_stack(struct lcd_arch *lcd)
     
 	int i, ret;
 
-	printk("LCD stack from rsp=0x%lx:\n  ", gva_val(stack_gva));
+	printk(KERN_ERR "LCD stack from rsp=0x%lx:\n  ", gva_val(stack_gva));
 
 	for (i = 0; i < (debug_stack_lines * stack_words_per_line) &&
 		     (gva_val(stack_gva) <= gva_val(stack_bottom_gva)); i++ ) {
@@ -265,7 +265,7 @@ static void lcd_show_stack(struct lcd_arch *lcd)
 		 * Print the memory contents there
 		 */
 		data = *(unsigned long *)hva_val(stack_hva);
-		printk(" %016lx", data);
+		printk(KERN_ERR " %016lx", data);
 		/*
 		 * Go to next word-size slot on stack
 		 */
@@ -273,49 +273,49 @@ static void lcd_show_stack(struct lcd_arch *lcd)
 	}
 
 	if (i == 0)
-		printk("Stack empty.");
+		printk(KERN_ERR "Stack empty.");
 
-	printk("\n\n");
+	printk(KERN_ERR "\n\n");
 }
 
 
 static void show_registers(const struct lcd_arch_regs *regs)
 
 {
-	printk("RIP:    %04x:[<%016llx>]\n", regs->cs, regs->rip);
-	printk("RFLAGS: %016llx   \n", regs->rflags);
-	printk("rax: %016llx   rbx: %016llx\n",
+	printk(KERN_ERR "RIP:    %04x:[<%016llx>]\n", regs->cs, regs->rip);
+	printk(KERN_ERR "RFLAGS: %016llx   \n", regs->rflags);
+	printk(KERN_ERR "rax: %016llx   rbx: %016llx\n",
 		regs->rax, regs->rbx);
-	printk("rcx: %016llx   rdx: %016llx\n",
+	printk(KERN_ERR "rcx: %016llx   rdx: %016llx\n",
 		regs->rcx, regs->rdx);
-	printk("rsi: %016llx   rdi: %016llx\n",
+	printk(KERN_ERR "rsi: %016llx   rdi: %016llx\n",
 		regs->rsi, regs->rdi);
-	printk("rbp: %016llx   rsp: %016llx\n",
+	printk(KERN_ERR "rbp: %016llx   rsp: %016llx\n",
 		regs->rbp, regs->rsp);
-	printk("r8:  %016llx   r9:  %016llx\n",
+	printk(KERN_ERR "r8:  %016llx   r9:  %016llx\n",
 		regs->r8, regs->r9);
-	printk("r10: %016llx   r11: %016llx\n",
+	printk(KERN_ERR "r10: %016llx   r11: %016llx\n",
 		regs->r10, regs->r11);
-        printk("r12: %016llx   r13: %016llx\n",
+        printk(KERN_ERR "r12: %016llx   r13: %016llx\n",
 		regs->r12, regs->r13);
-        printk("r14: %016llx   r15: %016llx\n",
+        printk(KERN_ERR "r14: %016llx   r15: %016llx\n",
 		regs->r14, regs->r15);
-        printk("cr0: %016llx   cr4: %016llx\n",
+        printk(KERN_ERR "cr0: %016llx   cr4: %016llx\n",
 		regs->cr0, regs->cr4);
-	printk("cr3: %016llx   cr2: %016llx\n", 
+	printk(KERN_ERR "cr3: %016llx   cr2: %016llx\n", 
 		regs->cr3, regs->cr2);
-	printk("ds: %04x   es: %04x   fs: %04x\n",
+	printk(KERN_ERR "ds: %04x   es: %04x   fs: %04x\n",
 		regs->ds, regs->es, regs->fs);
-	printk("gs: %04x   ss: %04x   cs: %04x\n",
+	printk(KERN_ERR "gs: %04x   ss: %04x   cs: %04x\n",
 		regs->gs, regs->ss, regs->cs);
-	printk("tr: %04x\n", regs->tr);
-	printk("tr base:   %016llx   tr limit:   %08x\n",
+	printk(KERN_ERR "tr: %04x\n", regs->tr);
+	printk(KERN_ERR "tr base:   %016llx   tr limit:   %08x\n",
 		regs->tr_base, regs->tr_limit);
-	printk("gdtr base: %016llx   gdtr limit: %08x\n",
+	printk(KERN_ERR "gdtr base: %016llx   gdtr limit: %08x\n",
 		regs->gdtr_base, regs->gdtr_limit);
-	printk("idtr base: %016llx   idtr limit: %08x\n",
+	printk(KERN_ERR "idtr base: %016llx   idtr limit: %08x\n",
 		regs->idtr_base, regs->idtr_limit);
-	printk("\n");
+	printk(KERN_ERR "\n");
 }
 
 /**
