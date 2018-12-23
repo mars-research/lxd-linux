@@ -72,6 +72,22 @@ struct desc_struct * vmx_host_gdt(void)
 	return (struct desc_struct *)gdt_ptr.address;
 }
 
+unsigned short vmx_host_gdt_limit(void)
+{
+	struct desc_ptr gdt_ptr;
+	/*
+	 * I had trouble using get_cpu_gdt_table: Unknown symbol gdt_page
+	 * when inserting module. Couldn't figure out why it couldn't find
+	 * the gdt_page symbol (gdt_page was listed in /proc/kallsyms).
+	 *
+	 * Also, it looks like CONFIG_PARAVIRT is always set by default,
+	 * due to KVM being default? This means store_gdt in desc.h is
+	 * not visible, so need to use native_store_gdt.
+	 */
+	native_store_gdt(&gdt_ptr);
+	return gdt_ptr.size;
+}
+
 /**
  * Returns pointer to current idt (array of gate descriptors) on 
  * calling cpu.
@@ -81,6 +97,13 @@ gate_desc * vmx_host_idt(void)
 	struct desc_ptr idt_ptr;
 	native_store_idt(&idt_ptr);
 	return (gate_desc *)idt_ptr.address;
+}
+
+unsigned short vmx_host_idt_limit(void)
+{
+	struct desc_ptr idt_ptr;
+	native_store_idt(&idt_ptr);
+	return idt_ptr.size;
 }
 
 static int vmx_host_seg_base(u16 selector, hva_t *hva_out)
@@ -157,7 +180,18 @@ int vmx_host_tss(hva_t *hva_out)
 		LCD_ERR("error looking up host tss\n");
 	return ret;
 }	
-
+/*
+int vmx_host_tss_limit(unsigned short *size)
+{
+	u16 tr;
+	int ret;
+	store_tr(tr);
+	ret = vmx_host_seg_base_limit(tr, size);
+	if (ret)
+		LCD_ERR("error looking up host tss\n");
+	return ret;
+}
+*/
 /* VMCS INITIALIZATION -------------------------------------------------- */
 
 /**
