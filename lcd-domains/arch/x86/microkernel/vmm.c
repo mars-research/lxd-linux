@@ -1158,15 +1158,6 @@ static void vmm_setup_vmcs_guest_settings(struct lcd_arch *lcd_arch)
 	 * It looks like CR3 wil always cause an exit, no? 
 	 */
 	vmcs_write32(CR3_TARGET_COUNT, 0);
-	/* 
-	 * Intel SDM V3 24.6.6
-	 *
-	 * %cr0 and %cr4 guest accesses always cause vm exit: all bits 1s
-	 * %cr0 and %cr4 are accessible to the guest (no exits): all bits 0
-	 *
-	 */
-	vmcs_writel(CR0_GUEST_HOST_MASK, 0);
-	vmcs_writel(CR4_GUEST_HOST_MASK, 0);
 }
 
 /**
@@ -1222,15 +1213,22 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	 * -- ensure TS (Task Switched) in %cr0 is 0
 	 *
 	 * Intel SDM V3 2.5
+	 *
+	 * 
+	 * Intel SDM V3 24.6.6
+	 *
+	 * %cr0 and %cr4 guest accesses always cause vm exit: all bits 1s
+	 * %cr0 and %cr4 are accessible to the guest (no exits): all bits 0
+	 *
 	 */
 	vmcs_writel(GUEST_CR0, read_cr0());
-	vmcs_writel(CR0_READ_SHADOW, read_cr0());
-	vmcs_writel(CR0_GUEST_HOST_MASK, 0);
+	vmcs_writel(CR0_READ_SHADOW, read_cr0() & ~X86_CR0_TS);
+	vmcs_writel(CR0_GUEST_HOST_MASK, ~0);
 
 
 	vmcs_writel(GUEST_CR4, __read_cr4());
 	vmcs_writel(CR4_READ_SHADOW, __read_cr4());
-	vmcs_writel(CR4_GUEST_HOST_MASK, 0);
+	vmcs_writel(CR4_GUEST_HOST_MASK, ~0);
 
 	vmcs_writel(GUEST_CR3, read_cr3());
 
