@@ -656,6 +656,18 @@ static int vmm_nop(struct lcd_arch *lcd_arch)
 #define X86_TRAP_VE			20	/* 20, Virtualization Exception  */
 #define X86_TRAP_IRET			32	/* 32, IRET Exception */
 
+void dump_pt_page(u64 *page) {
+	u64 pte;
+	int i; 
+
+	for (i = 0; i < 512; i++) {
+		pte = page[i];
+		LCD_MSG("pte:0x%llx, va:0x%llx\n", pte, PAGE_PA(pte));
+
+	};
+	return; 
+};
+
 u64 *vmm_walk_page_table(u64 *gpa_pt_root, u64 gva)
 {
 	/* PML4 (512 GB) */
@@ -708,6 +720,9 @@ u64 *vmm_walk_page_table(u64 *gpa_pt_root, u64 gva)
 	/* PT (4 KB)  */
 	page = &pt[PTE_INDEX_P(gva)];
 	LCD_MSG("page pa:0x%llx\n", PAGE_PA(*page));
+	if(!PAGE_PA(*page)) {
+		dump_pt_page(pt);
+	};
 
 	return page;
 }
@@ -1575,7 +1590,6 @@ void vmm_loop(struct lcd_arch *lcd_arch)
 	int ret;
 	int entry_count = 0;
 	int local_entry_count = 0; 
-	u64 *gpa_pt_root;
 
 	LCD_MSG("Entering VMM loop, setting entry point: rsp: 0x%llx, rip: 0x%llx, rbp: 0x%llx\n", 
 		lcd_arch->cont.rsp, lcd_arch->cont.rip, lcd_arch->cont.rbp);
@@ -1610,10 +1624,6 @@ void vmm_loop(struct lcd_arch *lcd_arch)
 
 
 	LCD_MSG("Ready to disable IRQs and enter the runloop\n"); 
-
-	gpa_pt_root = (u64*)vmcs_readl(GUEST_CR3);
-
-	vmm_walk_page_table(gpa_pt_root, lcd_arch->exit_qualification);
 
 	/*
 	 * Interrupts off
