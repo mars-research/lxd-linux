@@ -1322,7 +1322,7 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	//vmcs_writel(GUEST_CS_LIMIT, __segmentlimit(tmps));
 	vmcs_write32(GUEST_CS_LIMIT, 0xFFFF);
 	//vmcs_writel(GUEST_CS_AR_BYTES, __accessright(tmps));
-	vmcs_writel(GUEST_CS_AR_BYTES,  /* 0xA09B*/ 0x0009b);
+	vmcs_writel(GUEST_CS_AR_BYTES,  0xA09B );
 	vmcs_writel(GUEST_CS_BASE, 0);
 	//LCD_MSG("CS selector: 0x%x, base:0x%llx, limit:0x%llx, access rights:0x%llx\n", 
 	//	tmps, 0, __segmentlimit(tmps), __accessright(tmps));
@@ -1332,7 +1332,7 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	//vmcs_writel(GUEST_DS_LIMIT, __segmentlimit(tmps));
 	vmcs_write32(GUEST_DS_LIMIT, 0xFFFF);
 	//vmcs_writel(GUEST_DS_AR_BYTES, __accessright(tmps));
-	vmcs_writel(GUEST_DS_AR_BYTES,   0x0093);
+	vmcs_writel(GUEST_DS_AR_BYTES,   0x8093);
 	vmcs_writel(GUEST_DS_BASE, 0);
 	//LCD_MSG("DS selector: 0x%x, base:0x%llx, limit:0x%llx, access rights:0x%llx\n", 
 	//	tmps, 0, __segmentlimit(tmps), __accessright(tmps));
@@ -1342,7 +1342,7 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	//vmcs_writel(GUEST_ES_LIMIT, __segmentlimit(tmps));
 	vmcs_write32(GUEST_ES_LIMIT, 0xFFFF);
 	//vmcs_writel(GUEST_ES_AR_BYTES, __accessright(tmps));
-	vmcs_writel(GUEST_ES_AR_BYTES,   0x0093);
+	vmcs_writel(GUEST_ES_AR_BYTES,   0x8093);
 	vmcs_writel(GUEST_ES_BASE, 0);
 	//LCD_MSG("ES selector: 0x%x, base:0x%llx, limit:0x%llx, access rights:0x%llx\n", 
 	//	tmps, 0, __segmentlimit(tmps), __accessright(tmps));
@@ -1352,7 +1352,7 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	//vmcs_writel(GUEST_SS_LIMIT, __segmentlimit(tmps));
 	vmcs_write32(GUEST_SS_LIMIT, 0xFFFF);
 	//vmcs_writel(GUEST_SS_AR_BYTES, __accessright(tmps));
-	vmcs_writel(GUEST_SS_AR_BYTES,   0x0093);
+	vmcs_writel(GUEST_SS_AR_BYTES,   0x8093);
 	vmcs_writel(GUEST_SS_BASE, 0);
 	//LCD_MSG("SS selector: 0x%x, base:0x%llx, limit:0x%llx, access rights:0x%llx\n", 
 	//	tmps, 0, __segmentlimit(tmps), __accessright(tmps));
@@ -1363,20 +1363,20 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	//vmcs_writel(GUEST_FS_LIMIT, __segmentlimit(tmps));
 	vmcs_write32(GUEST_FS_LIMIT, 0xFFFF);
 	//vmcs_writel(GUEST_FS_AR_BYTES, __accessright(tmps));
-	vmcs_writel(GUEST_FS_AR_BYTES,   0x0093);
+	vmcs_writel(GUEST_FS_AR_BYTES,   0x8093);
 	vmcs_writel(GUEST_FS_BASE, __readmsr(MSR_FS_BASE));
 	LCD_MSG("FS selector: 0x%x, base:0x%llx, limit:0x%llx, access rights:0x%llx\n", 
-		tmps, __readmsr(MSR_GS_BASE), 0xFFFFFFFF, 0x0093);
+		tmps, __readmsr(MSR_GS_BASE), 0xFFFF, 0x8093);
 
 	savesegment(gs, tmps);
 	vmcs_write16(GUEST_GS_SELECTOR, tmps);
 	//vmcs_writel(GUEST_GS_LIMIT, __segmentlimit(tmps));
 	vmcs_write32(GUEST_GS_LIMIT, 0xFFFF);
 	//vmcs_writel(GUEST_GS_AR_BYTES, __accessright(tmps));
-	vmcs_writel(GUEST_GS_AR_BYTES,   0x0093);
+	vmcs_writel(GUEST_GS_AR_BYTES,   0x8093);
 	vmcs_writel(GUEST_GS_BASE, __readmsr(MSR_GS_BASE));
 	LCD_MSG("GS selector: 0x%x, base:0x%llx, limit:0x%llx, access rights:0x%llx\n", 
-		tmps, __readmsr(MSR_GS_BASE), 0xFFFFFFFF, 0x0093);
+		tmps, __readmsr(MSR_GS_BASE), 0xFFFF, 0x8093);
 
 
 	/*
@@ -1902,6 +1902,23 @@ static int vmm_arch_ept_init(struct lcd_arch *lcd_arch) {
 	return 0; 
 };
 
+volatile u64 global_test_var = 44; 
+
+/* Touch one address  */
+int vmm_dbg_mem_test(struct lcd_arch *lcd_arch) {
+	u64 counter = 0;
+
+	counter = global_test_var;
+
+	LCD_MSG("Starting mem test, counter:%d\n", counter);
+	
+
+	counter = *(u64*) 0xffff88142f94a188; 	
+	LCD_MSG("Ending mem test, counter:%d\n", counter); 
+
+	return 0; 
+};
+
 /* Touch every phisical page */
 int vmm_dbg_ept_test(struct lcd_arch *lcd_arch) {
 	u64 addr, counter = 0;
@@ -2027,6 +2044,7 @@ void vmm_enter(void *unused)
 	__vmm_enter(lcd_arch);	
 
 //	vmm_dbg_ept_test(lcd_arch);
+	vmm_dbg_mem_test(lcd_arch);
 
 	LCD_MSG("Entered VMM on CPU %d\n", raw_smp_processor_id());
 
