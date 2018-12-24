@@ -156,6 +156,25 @@
         val;                                            \
 })
 
+static inline u64 mkepte(int access, u64 hpa)
+{
+	return (access & EPT_AR_MASK) | (hpa & PAGE_PA_MASK);
+}
+
+static inline u64 *ept_page_addr(u64 *pte)
+{
+	if (!pte || !(*pte & EPT_ACCESS_RWX))
+		return 0;
+
+	return __va(PAGE_PA(*pte));
+}
+
+static inline bool in_bounds(u64 gpa, u64 start, u64 end)
+{
+	return gpa >= start && gpa < end;
+}
+
+
 void vmm_execute_cont(struct cont *cont); 
 
 struct gdtr {
@@ -637,12 +656,67 @@ static int vmm_nop(struct lcd_arch *lcd_arch)
 #define X86_TRAP_VE			20	/* 20, Virtualization Exception  */
 #define X86_TRAP_IRET			32	/* 32, IRET Exception */
 
+u64 *vmm_walk_page_table(u64 *gpa_pt_root, u64 gva)
+{
+	/* PML4 (512 GB) */
+	u64 *pml4; 
+	u64 *pml4e;
+	u64 *pdpt;
+	u64 *pdpte;
+	u64 *pdt;
+	u64 *pdte;
+	u64 *pt;
+	u64 *page;
 
+	LCD_MSG("page table root, pa:0x%llx\n", gpa_pt_root);
+
+	pml4 = __va(gpa_pt_root);
+	if(!pml4) {
+		LCD_ERR("Can't get page table root, va:0x%llx, pa:0x%llx\n", 
+			pml4, gpa_pt_root);
+		return NULL; 
+	}
+
+	pml4e = &pml4[PGD_INDEX_P(gva)];
+
+	pdpt = ept_page_addr(pml4e);
+	LCD_MSG("page table directory pdpt (L2), pa:0x%llx, va:0x%llx\n", PAGE_PA(*pml4e), pdpt);
+	if(!pdpt) {
+		LCD_ERR("page table pdpt (L2), pa:0x%llx, va:0x%llx\n", PAGE_PA(*pml4e), pdpt);
+		return NULL; 
+	};
+
+	/* PDPT (1 GB)  */
+	pdpte = &pdpt[PUD_INDEX_P(gva)];
+	pdt = ept_page_addr(pdpte);
+
+	LCD_MSG("page table pdt (L3), pa:0x%llx, va:0x%llx\n", PAGE_PA(*pdpte), pdt);
+	if (!pdt) {
+		LCD_ERR("page table pdt (L3), pa:0x%llx, va:0x%llx\n", PAGE_PA(*pdpte), pdt);
+		return NULL; 
+	}
+
+	/* PDT (2 MB)  */
+	pdte = &pdt[PMD_INDEX_P(gva)];
+	pt = ept_page_addr(pdte);
+	LCD_MSG("page table pt (L4), pa:0x%llx, va:0x%llx\n", PAGE_PA(*pdte), pt);
+	if (!pt) {
+		LCD_ERR("page table pt (L4), pa:0x%llx, va:0x%llx\n", PAGE_PA(*pdte), pt);
+		return NULL; 
+	}
+
+	/* PT (4 KB)  */
+	page = &pt[PTE_INDEX_P(gva)];
+	LCD_MSG("page pa:0x%llx\n", PAGE_PA(*page));
+
+	return page;
+}
 
 static int  vcpu_handle_exception_nmi(struct lcd_arch *lcd_arch)
 {
 	u16 intr_type;
 	u8 vector;
+	u64 *gpa_pt_root;
 
 	LCD_ERR("Handling NMI/exception\n");
 
@@ -670,7 +744,9 @@ static int  vcpu_handle_exception_nmi(struct lcd_arch *lcd_arch)
 	if(lcd_arch->exit_intr_info & INTR_INFO_DELIVER_CODE_MASK)
 		LCD_MSG("intr has error, error_code: 0x%x\n", lcd_arch->error_code);
 	
-		
+	gpa_pt_root = (u64*)vmcs_readl(GUEST_CR3);
+
+	vmm_walk_page_table(gpa_pt_root, lcd_arch->exit_qualification);
 	return -1;
 }
 
@@ -1499,6 +1575,7 @@ void vmm_loop(struct lcd_arch *lcd_arch)
 	int ret;
 	int entry_count = 0;
 	int local_entry_count = 0; 
+	u64 *gpa_pt_root;
 
 	LCD_MSG("Entering VMM loop, setting entry point: rsp: 0x%llx, rip: 0x%llx, rbp: 0x%llx\n", 
 		lcd_arch->cont.rsp, lcd_arch->cont.rip, lcd_arch->cont.rbp);
@@ -1533,6 +1610,10 @@ void vmm_loop(struct lcd_arch *lcd_arch)
 
 
 	LCD_MSG("Ready to disable IRQs and enter the runloop\n"); 
+
+	gpa_pt_root = (u64*)vmcs_readl(GUEST_CR3);
+
+	vmm_walk_page_table(gpa_pt_root, lcd_arch->exit_qualification);
 
 	/*
 	 * Interrupts off
@@ -1697,24 +1778,6 @@ void __vmm_enter(struct lcd_arch * lcd_arch) {
 
 	CALL_CONT(&lcd_arch->cont, (void*) lcd_arch, vmm_enter_switch_stack); 
 	return; 
-}
-
-static inline u64 mkepte(int access, u64 hpa)
-{
-	return (access & EPT_AR_MASK) | (hpa & PAGE_PA_MASK);
-}
-
-static inline u64 *ept_page_addr(u64 *pte)
-{
-	if (!pte || !(*pte & EPT_ACCESS_RWX))
-		return 0;
-
-	return __va(PAGE_PA(*pte));
-}
-
-static inline bool in_bounds(u64 gpa, u64 start, u64 end)
-{
-	return gpa >= start && gpa < end;
 }
 
 u8 ept_memory_type(struct lcd_vmm *vmm, u64 gpa)
