@@ -668,7 +668,7 @@ void dump_pt_page(u64 *page) {
 	return; 
 };
 
-u64 *vmm_walk_page_table(u64 *gpa_pt_root, u64 gva)
+u64 vmm_walk_page_table(u64 *gpa_pt_root, u64 gva)
 {
 	/* PML4 (512 GB) */
 	u64 *pml4; 
@@ -686,7 +686,7 @@ u64 *vmm_walk_page_table(u64 *gpa_pt_root, u64 gva)
 	if(!pml4) {
 		LCD_ERR("Can't get page table root, va:0x%llx, pa:0x%llx\n", 
 			pml4, gpa_pt_root);
-		return NULL; 
+		return 0; 
 	}
 
 	pml4e = &pml4[PGD_INDEX_P(gva)];
@@ -695,7 +695,7 @@ u64 *vmm_walk_page_table(u64 *gpa_pt_root, u64 gva)
 	LCD_MSG("page table directory pdpt (L2), pa:0x%llx, va:0x%llx\n", PAGE_PA(*pml4e), pdpt);
 	if(!pdpt) {
 		LCD_ERR("page table pdpt (L2), pa:0x%llx, va:0x%llx\n", PAGE_PA(*pml4e), pdpt);
-		return NULL; 
+		return 0; 
 	};
 
 	/* PDPT (1 GB)  */
@@ -705,7 +705,7 @@ u64 *vmm_walk_page_table(u64 *gpa_pt_root, u64 gva)
 	LCD_MSG("page table pdt (L3), pa:0x%llx, va:0x%llx\n", PAGE_PA(*pdpte), pdt);
 	if (!pdt) {
 		LCD_ERR("page table pdt (L3), pa:0x%llx, va:0x%llx\n", PAGE_PA(*pdpte), pdt);
-		return NULL; 
+		return 0; 
 	}
 
 	/* PDT (2 MB)  */
@@ -714,17 +714,18 @@ u64 *vmm_walk_page_table(u64 *gpa_pt_root, u64 gva)
 	LCD_MSG("page table pt (L4), pa:0x%llx, va:0x%llx\n", PAGE_PA(*pdte), pt);
 	if (!pt) {
 		LCD_ERR("page table pt (L4), pa:0x%llx, va:0x%llx\n", PAGE_PA(*pdte), pt);
-		return NULL; 
+		return 0; 
 	}
 
 	/* PT (4 KB)  */
 	page = &pt[PTE_INDEX_P(gva)];
-	LCD_MSG("page pa:0x%llx\n", PAGE_PA(*page));
+	LCD_MSG("page pa:0x%llx (pte:0x%llx), va: 0x%llx, __va(pa): 0x%llx\n", 
+			PAGE_PA(*page), *page, gva, __va(PAGE_PA(*page)));
 	if(!PAGE_PA(*page)) {
 		dump_pt_page(pt);
 	};
 
-	return page;
+	return PAGE_PA(*page);
 }
 
 static int  vcpu_handle_exception_nmi(struct lcd_arch *lcd_arch)
@@ -732,6 +733,24 @@ static int  vcpu_handle_exception_nmi(struct lcd_arch *lcd_arch)
 	u16 intr_type;
 	u8 vector;
 	u64 *gpa_pt_root;
+	u64 *hpa_ept_root;
+	u64 gpa; 
+
+
+	/*
+	 * General page faults, exception error codes
+	 * 6.15 EXCEPTION AND INTERRUPT REFERENCE
+	 *
+	 * 25.2 OTHER CAUSES OF VM EXITS
+	 *
+	 * 27.2.1 Basic VM-Exit Information
+	 *
+	 * 24.9.1 Basic VM-Exit Information
+	 *
+	 * 24.9.2 Information for VM Exits Due to Vectored Events
+	 *
+	 * 32.3.5.2 Response to Page Faults
+	 */
 
 	LCD_ERR("Handling NMI/exception\n");
 
@@ -749,19 +768,34 @@ static int  vcpu_handle_exception_nmi(struct lcd_arch *lcd_arch)
 
 	if (intr_type & INTR_TYPE_HARD_EXCEPTION && vector == X86_TRAP_PF) {
 		//__writecr2(vmcs_read(EXIT_QUALIFICATION));
-		LCD_MSG("qualification: 0x%x\n", lcd_arch->exit_qualification);
+		LCD_MSG("page fault, faulting address: 0x%llx\n", lcd_arch->exit_qualification);
 	} else {
 		//instr_len = vmcs_read32(VM_EXIT_INSTRUCTION_LEN);
 		LCD_MSG("instr_len: 0x%x\n", lcd_arch->exit_instr_len);
 
 	}
 
-	if(lcd_arch->exit_intr_info & INTR_INFO_DELIVER_CODE_MASK)
-		LCD_MSG("intr has error, error_code: 0x%x\n", lcd_arch->error_code);
+	if(lcd_arch->exit_intr_info & INTR_INFO_DELIVER_CODE_MASK) {
+		LCD_MSG("error_code (normally pushed on the stack): 0x%x\n", 
+			lcd_arch->error_code);
+		
+	};
 	
 	gpa_pt_root = (u64*)vmcs_readl(GUEST_CR3);
 
-	vmm_walk_page_table(gpa_pt_root, lcd_arch->exit_qualification);
+	LCD_MSG("walk guest page table (gpa:0x%llx (__va(gpa):0x%llx)\n", 
+			gpa_pt_root, __va(gpa_pt_root)); 
+
+
+	gpa = vmm_walk_page_table(gpa_pt_root, lcd_arch->exit_qualification);
+
+	hpa_ept_root = (u64*)vmcs_readl(EPT_POINTER);
+
+	LCD_MSG("walk EPT (hpa:0x%llx (__va(hpa):0x%llx, ept.root: 0x%llx)\n", 
+			hpa_ept_root, __va(hpa_ept_root), lcd_arch->ept.root); 
+
+	gpa = vmm_walk_page_table(__va(hpa_ept_root), gpa);
+
 	return -1;
 }
 
@@ -1326,7 +1360,10 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	/*
 	 * MSR EFER (extended feature enable register)
 	 *
-	 * -- 64-bit mode (long mode enabled and active)
+	 *  4.1.1 Three Paging Modes
+	 *  The two flags below are required to enable paging
+	 *
+	 *  64-bit mode (long mode enabled and active)
 	 */
 	vmcs_writel(GUEST_IA32_EFER, EFER_LME | EFER_LMA);
 
@@ -2113,6 +2150,13 @@ void vmm_enter(void *unused)
 
 	/* We enter the hypervisor and continue in the guest at vmm_enter_ack */
 	__vmm_enter(lcd_arch);	
+
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
 
 //	vmm_dbg_ept_test(lcd_arch);
 	vmm_dbg_mem_test(lcd_arch);
