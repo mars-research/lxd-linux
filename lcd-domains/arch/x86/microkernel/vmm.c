@@ -789,12 +789,13 @@ static int  vcpu_handle_exception_nmi(struct lcd_arch *lcd_arch)
 
 	gpa = vmm_walk_page_table(gpa_pt_root, lcd_arch->exit_qualification);
 
+	/* 24.6.11 Extended-Page-Table Pointer (EPTP) */
 	hpa_ept_root = (u64*)vmcs_readl(EPT_POINTER);
 
 	LCD_MSG("walk EPT (hpa:0x%llx (__va(hpa):0x%llx, ept.root: 0x%llx)\n", 
 			hpa_ept_root, __va(hpa_ept_root), lcd_arch->ept.root); 
 
-	gpa = vmm_walk_page_table(__va(hpa_ept_root), gpa);
+	gpa = vmm_walk_page_table(lcd_arch->ept.root, gpa);
 
 	return -1;
 }
@@ -1255,6 +1256,7 @@ static void vmm_setup_vmcs_guest_settings(struct lcd_arch *lcd_arch)
 		lcd_global_vmcs_config.vmexit_controls);
 	/*
 	 * EPT
+	 * 24.6.11 Extended-Page-Table Pointer (EPTP)
 	 */
 	vmcs_write64(EPT_POINTER, lcd_arch->ept.vmcs_ptr);
 	/*
