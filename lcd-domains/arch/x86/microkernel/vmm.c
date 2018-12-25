@@ -795,7 +795,7 @@ static int  vcpu_handle_exception_nmi(struct lcd_arch *lcd_arch)
 	LCD_MSG("walk EPT (hpa:0x%llx (__va(hpa):0x%llx, ept.root: 0x%llx)\n", 
 			hpa_ept_root, __va(hpa_ept_root), lcd_arch->ept.root); 
 
-	gpa = vmm_walk_page_table(lcd_arch->ept.root, gpa);
+	gpa = vmm_walk_page_table((u64*)__pa((u64)lcd_arch->ept.root), gpa);
 
 	return -1;
 }
