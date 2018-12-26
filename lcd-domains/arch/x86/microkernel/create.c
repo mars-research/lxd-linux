@@ -882,6 +882,7 @@ void vmx_get_cpu(struct lcd_arch *lcd_arch)
 				 */
 				vmcs_clear(lcd_arch->vmcs);
 
+			LCD_MSG("Invalidate EPT mappings on CPU:%d\n", cur_cpu);  
 			/*
 			 * Invalidate any vpid or ept cache lines
 			 */

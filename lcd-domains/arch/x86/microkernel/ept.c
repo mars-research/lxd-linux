@@ -110,6 +110,8 @@ static inline void invvpid_single_context(u16 vpid)
 	/*
 	 * Don't invalidate host mappings
 	 */
+	LCD_MSG("Invalidate vpid:%d\n", vpid); 
+
 	if (vpid == 0)
 		return;
 
