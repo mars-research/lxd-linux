@@ -1649,13 +1649,14 @@ void vmm_loop(struct lcd_arch *lcd_arch)
 	vmx_get_cpu(lcd_arch);
 
 	vmm_setup_vmcs(lcd_arch);
-	vmx_enable_ept_switching(lcd_arch);
+
+	//vmx_enable_ept_switching(lcd_arch);
 
 	/* Set entry point for the host using vmm->cont */
 	vmm_set_entry_point(lcd_arch); 
 
 	/*
-	 * Make sure lcd_arch has valid state
+ * Make sure lcd_arch has valid state
 	 */
 	ret = lcd_arch_check(lcd_arch);
 	if (ret) {
