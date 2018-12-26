@@ -783,6 +783,8 @@ static int  vcpu_handle_exception_nmi(struct lcd_arch *lcd_arch)
 	
 	gpa_pt_root = (u64*)vmcs_readl(GUEST_CR3);
 
+	
+
 	LCD_MSG("walk guest page table (gpa:0x%llx (__va(gpa):0x%llx)\n", 
 			gpa_pt_root, __va(gpa_pt_root)); 
 
