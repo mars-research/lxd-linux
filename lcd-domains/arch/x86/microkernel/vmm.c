@@ -1331,6 +1331,7 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	u32 low32;
 	u32 high32;
 	u16 tmps;
+	u64 cr3; 
 
 	struct gdtr gdtr;
 	//struct gdtr idtr;
@@ -1359,7 +1360,9 @@ static void vmm_setup_vmcs_guest_regs(struct lcd_arch *lcd_arch)
 	vmcs_writel(CR4_READ_SHADOW, __read_cr4());
 	vmcs_writel(CR4_GUEST_HOST_MASK, ~0);
 
-	vmcs_writel(GUEST_CR3, read_cr3());
+	cr3 = read_cr3();
+	LCD_MSG("GUEST_CR3:0x%llx\n", cr3);
+	vmcs_writel(GUEST_CR3, cr3);
 
 	/*
 	 * MSR EFER (extended feature enable register)
@@ -1626,6 +1629,29 @@ void vmm_setup_vmcs(struct lcd_arch *lcd_arch)
 }
 
 
+void vmm_pre_entry_tests(struct lcd_arch *lcd_arch) {
+	u64 *gpa_pt_root;
+	u64 *hpa_ept_root;
+	u64 gpa; 	
+
+	gpa_pt_root = (u64*)vmcs_readl(GUEST_CR3);
+
+	LCD_MSG("walk guest page table (gpa:0x%llx (__va(gpa):0x%llx), va:0x%llx\n", 
+		gpa_pt_root, __va(gpa_pt_root), lcd_arch->cont.rsp); 
+
+
+	gpa = vmm_walk_page_table(gpa_pt_root, lcd_arch->cont.rsp);
+
+	/* 24.6.11 Extended-Page-Table Pointer (EPTP) */
+	hpa_ept_root = (u64*)vmcs_readl(EPT_POINTER);
+
+	LCD_MSG("walk EPT (hpa:0x%llx (__va(hpa):0x%llx, ept.root: 0x%llx)\n", 
+			hpa_ept_root, __va(hpa_ept_root), lcd_arch->ept.root); 
+
+	gpa = vmm_walk_page_table((u64*)__pa((u64)lcd_arch->ept.root), gpa);
+	return; 
+};
+
 void vmm_loop(struct lcd_arch *lcd_arch)
 {
 	int ret;
@@ -1656,7 +1682,7 @@ void vmm_loop(struct lcd_arch *lcd_arch)
 	vmm_set_entry_point(lcd_arch); 
 
 	/*
- * Make sure lcd_arch has valid state
+	 * Make sure lcd_arch has valid state
 	 */
 	ret = lcd_arch_check(lcd_arch);
 	if (ret) {
@@ -1664,6 +1690,8 @@ void vmm_loop(struct lcd_arch *lcd_arch)
 		return; 
 	}
 
+	LCD_MSG("Run last-minute tests\n");
+	vmm_pre_entry_tests(lcd_arch); 
 
 	LCD_MSG("Ready to disable IRQs and enter the runloop\n"); 
 
