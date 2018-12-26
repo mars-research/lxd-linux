@@ -332,7 +332,7 @@ static int setup_vmcs_config(struct lcd_vmcs_config *vmcs_conf)
 		SECONDARY_EXEC_XSAVES |
 		SECONDARY_EXEC_ENABLE_INVPCID |	
 #endif
-		SECONDARY_EXEC_ENABLE_VMFUNCTIONS;
+		/* SECONDARY_EXEC_ENABLE_VMFUNCTIONS */ 0;
 
 	if (adjust_vmx_controls(&secondary_proc_based_exec_controls,
 					SECONDARY_EXEC_RESERVED_MASK,
