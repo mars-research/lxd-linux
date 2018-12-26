@@ -2001,16 +2001,20 @@ static int vmm_arch_ept_init(struct lcd_arch *lcd_arch) {
 		for (addr = vmm->ranges[i].start; addr < vmm->ranges[i].end; addr += PAGE_SIZE) {
 			mt = ept_memory_type(vmm, addr);
 			if (!ept_alloc_page(lcd_arch->ept.root, 
-						EPT_ACCESS_ALL, mt, addr, addr))
+						EPT_ACCESS_ALL, mt, addr, addr)) {
+				LCD_ERR("Error allocating EPT entry for addr: 0x%llx\n", addr);
 				return -1;
+			}
 		}
 	}
 
 	/* Allocate APIC page  */
 	addr = __readmsr(MSR_IA32_APICBASE) & MSR_IA32_APICBASE_BASE;
 	mt = ept_memory_type(vmm, addr);
-	if (!ept_alloc_page(lcd_arch->ept.root, EPT_ACCESS_ALL, mt, addr, addr))
-		return false;
+	if (!ept_alloc_page(lcd_arch->ept.root, EPT_ACCESS_ALL, mt, addr, addr)) {
+		LCD_ERR("Error allocating EPT entry for addr: 0x%llx\n", addr);
+		return -1;
+	}
 
 	return 0; 
 };
@@ -2140,15 +2144,16 @@ void vmm_enter(void *unused)
 
 	lcd_arch = __this_cpu_read(vmm_lcd_arch);
 
-	ret = vmm_arch_ept_init(lcd_arch); 
-	if (ret) 
-		goto failed; 
-
 //	vmm_dbg_ept_test(lcd_arch); 
 
 	ret = vmm_alloc_stack(lcd_arch); 
 	if (ret) 
 		goto failed; 
+
+	ret = vmm_arch_ept_init(lcd_arch); 
+	if (ret) 
+		goto failed; 
+
 
 	LCD_MSG("Entering VMM on a new stack:0x%llx, CPU:%d, cpu_id:%p\n", 
 			lcd_arch->vmm_stack, raw_smp_processor_id(), raw_cpu_ptr(&cpu_number));
