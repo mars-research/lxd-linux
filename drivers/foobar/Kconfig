@@ -1,0 +1,17 @@
+menuconfig FOOBARDEVICES
+	depends on FOOBAR
+	bool "Foobar device support"
+	---help---
+	  Foobar device driver support
+	  If unsure, say Y.
+
+if FOOBARDEVICES
+
+config FOOBAR_DUMMY
+	tristate "Dummy foobar driver support"
+	---help---
+	  Foobar dummy device driver.
+	  To compile this driver as a module, choose M here: the module
+	  will be called dummy.
+
+endif # FOOBARDEVICES
