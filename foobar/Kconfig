@@ -1,0 +1,8 @@
+#
+# Foobar config
+#
+
+menuconfig FOOBAR
+	bool "Foobar support"
+	---help---
+	  Toy subsystem for working with kernel static analysis
