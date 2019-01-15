@@ -1,0 +1,30 @@
+
+module foobar() {
+	projection <struct foobar_device> foobar_device {
+		unsigned long [in,out] features
+		unsigned long [in,out] hw_features;
+		unsigned long [out] wanted_features;
+		unsigned int flags;
+		projection foobar_device_ops [alloc(callee)] *foobar_device_ops;
+	}
+
+	projection <struct foobar_device_ops> foobar_device_ops {
+	    rpc [in] int (*init)(projection foobar_device *dev);
+	    rpc [in] void (*uninit)(projection foobar_device *dev);
+	}
+	rpc int register_foobar(projection foobar_device *dev);
+
+	projection <struct foobar_device> foobar_device_unregister_foobar {
+	}
+	rpc void unregister_foobar(projection foobar_device_unregister_foobar *dev);
+
+	projection <struct foobar_device> foobar_device_alloc_foobardev {
+		int id;
+		char name[32];
+	}
+	rpc projection foobar_device_alloc_foobardev [alloc(caller)] *alloc_foobardev(int id, char *name);
+	
+	projection <struct foobar_device> foobar_device_free_foobardev {
+	}
+	rpc void free_foobardev(projection foobar_device_free_foobardev [dealloc(caller)] *dev);
+}
