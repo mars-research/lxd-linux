@@ -12,7 +12,7 @@ int register_foobar(struct foobar_device *dev)
 	dev->features |= FOOBAR_SOFTIRQ_ENABLE;
 	dev->wanted_features = dev->features & dev->hw_features;
 
-	if (!(dev->flags & FOO_LOOPBACK))
+	if (dev->flags & FOO_LOOPBACK)
 		dev->hw_features |= FOOBAR_ZERO_COPY;
 
 	/* Init, if this function is available */
@@ -55,4 +55,3 @@ void free_foobardev(struct foobar_device *dev)
 	kfree(dev);
 }
 EXPORT_SYMBOL(free_foobardev);
-

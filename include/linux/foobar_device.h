@@ -7,6 +7,7 @@ typedef u64 foobar_features_t;
 #define FOOBAR_IRQ_DELAY	(1 << 10)
 #define FOOBAR_SOFTIRQ_ENABLE	(1 << 11)
 #define FOOBAR_ZERO_COPY	(1 << 12)
+#define FOOBAR_PRIV_ALLOC	(1 << 13)
 
 /* flags */
 #define FOO_LOOPBACK		4
