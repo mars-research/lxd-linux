@@ -46,6 +46,10 @@ static int __init dummy_init_module(void)
 		return -ENOMEM;
 
 	dev_dummy->foobardev_ops = &dummy_foobardev_ops;
+
+	dev_dummy->features = FOOBAR_PRIV_ALLOC;
+	dev_dummy->flags = FOO_LOOPBACK;
+
 	err = register_foobar(dev_dummy);
 	if (err < 0)
 		goto err;
