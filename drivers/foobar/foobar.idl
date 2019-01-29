@@ -1,7 +1,14 @@
-
+		//For the following,
+		//	> caller fns are in the driver (the dummy foobar module - dummy.c)
+		//	> callee fns are in the foobar subsystem (the dummy subsystem that registers the module - dev.c)
 module foobar() {
 	projection <struct foobar_device> foobar_device {
-		unsigned long [in,out] features
+
+		// attribute info for features field:
+		//in - features undergoes a read in callee register_foobar (need caller to callee marshalling)
+		//out - features undergoes a write in caller register_foobar (need callee to caller marshalling)
+		unsigned long [in,out] features;  
+
 		unsigned long [in,out] hw_features;
 		unsigned long [out] wanted_features;
 		unsigned int flags;

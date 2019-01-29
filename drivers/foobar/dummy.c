@@ -36,7 +36,7 @@ MODULE_PARM_DESC(numdummies, "Number of dummy pseudo devices");
 
 struct foobar_device *dev_dummy;
 
-static int __init dummy_init_module(void)
+static int __init dummy_init_module(void)// the entry point to the dummy device driver
 {
 	int err;
 
@@ -50,13 +50,13 @@ static int __init dummy_init_module(void)
 	dev_dummy->features = FOOBAR_PRIV_ALLOC;
 	dev_dummy->flags = FOO_LOOPBACK;
 
-	err = register_foobar(dev_dummy);
+	err = register_foobar(dev_dummy);//the call to dev.c fn to register dummy
 	if (err < 0)
 		goto err;
 	return 0;
 
 err:
-	free_foobardev(dev_dummy);
+	free_foobardev(dev_dummy);// free the foobar device if an error code is received
 	return err;
 }
 

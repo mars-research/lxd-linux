@@ -8,6 +8,13 @@ int register_foobar(struct foobar_device *dev)
 {
 	int ret;
 
+	/*
+	Access info for members of foobar_device structure in this function:
+	hw_features : read and write
+	features : read and write
+	wanted_features: write
+	*/
+
 	dev->hw_features |= FOOBAR_IRQ_DELAY;
 	dev->features |= FOOBAR_SOFTIRQ_ENABLE;
 	dev->wanted_features = dev->features & dev->hw_features;
