@@ -156,6 +156,22 @@
         val;                                            \
 })
 
+static int vmm_arch_ept_init(struct lcd_arch *lcd_arch);
+
+#define OP(x)   __asm__ volatile ("nop");
+
+#define OP10(_x) OP( (_x *10 + 0) ); OP( (_x *10 + 1) ); OP( (_x *10 + 2) ); OP( (_x *10 + 3) ); \
+	                 OP( (_x *10 + 4) ); OP( (_x *10 + 5) ); OP( (_x *10 + 6) ); OP( (_x *10 + 7) ); \
+                 OP( (_x *10 + 8) ); OP( (_x *10 + 9) ); 
+
+#define OP100(_x) OP10( (_x *10 + 0) ); OP10( (_x *10 + 1) ); OP10( (_x *10 + 2) ); OP10( (_x *10 + 3) ); \
+	                  OP10( (_x *10 + 4) ); OP10( (_x *10 + 5) ); OP10( (_x *10 + 6) ); OP10( (_x *10 + 7) ); \
+                  OP10( (_x *10 + 8) ); OP10( (_x *10 + 9) ); 
+
+#define OP1000(_x) OP100( (_x *10 + 0) ); OP100( (_x *10 + 1) ); OP100( (_x *10 + 2) ); OP100( (_x *10 + 3) ); \
+	                   OP100( (_x *10 + 4) ); OP100( (_x *10 + 5) ); OP100( (_x *10 + 6) ); OP100( (_x *10 + 7) ); \
+                   OP100( (_x *10 + 8) ); OP100( (_x *10 + 9) ); 
+
 static inline u64 mkepte(int access, u64 hpa)
 {
 	return (access & EPT_AR_MASK) | (hpa & PAGE_PA_MASK);
@@ -1634,7 +1650,8 @@ void vmm_pre_entry_tests(struct lcd_arch *lcd_arch) {
 	u64 *hpa_ept_root;
 	u64 gpa; 	
 
-	gpa_pt_root = (u64*)vmcs_readl(GUEST_CR3);
+	//gpa_pt_root = (u64*)vmcs_readl(GUEST_CR3);
+	gpa_pt_root = (u64*)read_cr3();
 
 	LCD_MSG("walk guest page table (gpa:0x%llx (__va(gpa):0x%llx), va:0x%llx\n", 
 		gpa_pt_root, __va(gpa_pt_root), lcd_arch->cont.rsp); 
@@ -1661,7 +1678,15 @@ void vmm_loop(struct lcd_arch *lcd_arch)
 	LCD_MSG("Entering VMM loop, setting entry point: rsp: 0x%llx, rip: 0x%llx, rbp: 0x%llx\n", 
 		lcd_arch->cont.rsp, lcd_arch->cont.rip, lcd_arch->cont.rbp);
 
-	
+	LCD_MSG("Run EPT walk test before creating EPT\n");
+	vmm_pre_entry_tests(lcd_arch); 
+
+
+	ret = vmm_arch_ept_init(lcd_arch); 
+	if (ret) 
+		LCD_ERR("Failed to create EPT, ret:%d\n", ret); 
+
+
 	/*
 	 * Load vmcs pointer on this cpu
 	 */
@@ -1772,7 +1797,7 @@ __asm__ ("      .text \n\t"
          " mov %rsp, (%rdi)                 \n\t" // Save old ESP on new stack
          " mov %rdi, %rsp                   \n\t" // Set up new stack pointer
          " mov %rdx, %rdi                   \n\t" // Move args into rdi
-         " call *%rsi                    \n\t" // Call callee (args in rdi)
+         " call *%rsi                       \n\t" // Call callee (args in rdi)
          " pop %rsp                         \n\t" // Restore old ESP
          " ret                              \n\t");
 
@@ -1797,16 +1822,16 @@ __asm__ ("      .text \n\t"
          "      .align  16           \n\t"
          "      .globl  _vmm_call_cont_direct \n\t"
          "      .type   _vmm_call_cont_direct, @function \n\t"
-         "_vmm_call_cont_direct:             \n\t"
-         " mov  0(%rsp), %rax        \n\t" // return address into RAX
-         " mov  %rax,  0(%rdi)       \n\t" // EIP (our return address)
-         " mov  %rbp,  8(%rdi)       \n\t" // EBP
-         " mov  %rsp, 16(%rdi)       \n\t" // ESP+8 (after return)
-         " addq $8,   16(%rdi)       \n\t"
-         // cont now initialized.  Call the function
-         // rdi : cont , rsi : args , rdx : fn
-         " jmpq  *%rdx            \n\t"
-         " int3\n\t");
+         "_vmm_call_cont_direct:           \n\t"
+         "       mov  0(%rsp), %rax        \n\t" // return address into RAX
+         "       mov  %rax,  0(%rdi)       \n\t" // EIP (our return address)
+         "       mov  %rbp,  8(%rdi)       \n\t" // EBP
+         "       mov  %rsp, 16(%rdi)       \n\t" // ESP+8 (after return)
+         "       addq $8,   16(%rdi)       \n\t"
+                 // cont now initialized.  Call the function
+                 // rdi : cont , rsi : args , rdx : fn
+         "       jmpq  *%rdx            \n\t"
+         "       int3\n\t");
 
 
 void vmm_enter_switch_stack(void *cont, void *args) {
@@ -1848,7 +1873,7 @@ void __vmm_enter(struct lcd_arch * lcd_arch) {
 	 * the VMM to come back to guest and continue its execution at 
 	 * the point after _vmm_callcont_direct() returns. 
 	 *
-	 * Second, inside vmm_enter_swotch_stack() we use __vmm_loop() 
+	 * Second, inside vmm_enter_switch_stack() we use __vmm_loop() 
 	 * to switch execution to the new stack. 
 	 */
 
@@ -2178,10 +2203,6 @@ void vmm_enter(void *unused)
 	if (ret) 
 		goto failed; 
 
-	ret = vmm_arch_ept_init(lcd_arch); 
-	if (ret) 
-		goto failed; 
-
 
 	LCD_MSG("Entering VMM on a new stack:0x%llx, CPU:%d, cpu_id:%p\n", 
 			lcd_arch->vmm_stack, raw_smp_processor_id(), raw_cpu_ptr(&cpu_number));
@@ -2195,6 +2216,12 @@ void vmm_enter(void *unused)
 	__asm__ volatile ("nop");
 	__asm__ volatile ("nop");
 	__asm__ volatile ("nop");
+
+	OP1000(0);
+	OP1000(1);
+	OP1000(2);
+	OP1000(3);
+
 
 //	vmm_dbg_ept_test(lcd_arch);
 	vmm_dbg_mem_test(lcd_arch);

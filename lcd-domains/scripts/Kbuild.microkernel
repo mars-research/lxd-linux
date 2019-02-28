@@ -35,6 +35,7 @@ lcd_domains-y += $(addprefix arch/$(ARCH)/microkernel/, \
               run.o \
               check.o \
               dump_stack.o \
+	      vmm.o \
               )
 
 # kliblcd (built into microkernel .ko)
