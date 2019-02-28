@@ -1686,7 +1686,6 @@ void vmm_loop(struct lcd_arch *lcd_arch)
 	if (ret) 
 		LCD_ERR("Failed to create EPT, ret:%d\n", ret); 
 
-
 	/*
 	 * Load vmcs pointer on this cpu
 	 */
