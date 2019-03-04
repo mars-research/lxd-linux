@@ -80,7 +80,7 @@ module foobar() {
 	// len(...)]*buf  
 	//
 	// - Return values are "out", i.e., we assume an implicit [out] below, e.g., 
-	//   [out, alloc(caller)], but we don't have to write it since it's a retun 
+	//   [out, alloc(caller)], but we don't have to write it since it's a return 
 	//   value and we can derive the "out"
 	//
 	// - [alloc(caller)] we cannot derive since it can be "bind"
@@ -92,8 +92,9 @@ module foobar() {
 	}
 	rpc void free_foobardev(projection foobar_device_free_foobardev [dealloc(caller)] *dev);
 
-	// We also want to support scopes 
-	//
+	// We also want to support scopes - in this way you can conveniently
+	// use the same variable names  that would be invisible to the rest of
+	// the idl.
 	//{
 	//	projection <struct foobar_device> foobar_device {};
 	//	rpc void free_foobardev(projection foobar_device [dealloc(caller)] *dev);

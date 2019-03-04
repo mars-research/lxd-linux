@@ -17,7 +17,7 @@ int register_foobar(struct foobar_device *dev)
 
 	dev->hw_features |= FOOBAR_IRQ_DELAY;
 	dev->features |= FOOBAR_SOFTIRQ_ENABLE;
-	dev->wanted_features = dev->features & dev->hw_features;
+	dev->wanted_features = dev->features & dev->hw_features; //Initial val of wanted_features does not matter.
 
 	if (dev->flags & FOO_LOOPBACK)
 		dev->hw_features |= FOOBAR_ZERO_COPY;
