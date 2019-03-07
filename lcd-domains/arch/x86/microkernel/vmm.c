@@ -172,6 +172,8 @@ static int vmm_arch_ept_init(struct lcd_arch *lcd_arch);
 	                   OP100( (_x *10 + 4) ); OP100( (_x *10 + 5) ); OP100( (_x *10 + 6) ); OP100( (_x *10 + 7) ); \
                    OP100( (_x *10 + 8) ); OP100( (_x *10 + 9) ); 
 
+unsigned long foobar = 1; 
+
 static inline u64 mkepte(int access, u64 hpa)
 {
 	return (access & EPT_AR_MASK) | (hpa & PAGE_PA_MASK);
@@ -2216,10 +2218,65 @@ void vmm_enter(void *unused)
 	__asm__ volatile ("nop");
 	__asm__ volatile ("nop");
 
-	OP1000(0);
-	OP1000(1);
-	OP1000(2);
-	OP1000(3);
+//	OP1000(0);
+//	OP1000(1);
+//	OP1000(2);
+//	OP1000(3);
+
+	/*
+	__asm__ volatile (
+		"mov %c[rax](%0), %%rax \n\t"
+: : "c"(lcd_arch),
+		  [host_rsp_field]"i"(HOST_RSP),
+		  [launched]"i"(offsetof(struct lcd_arch, launched)),
+		  [fail]"i"(offsetof(struct lcd_arch, fail)),
+		  [host_rsp]"i"(offsetof(struct lcd_arch, host_rsp)),
+		  [rax]"i"(offsetof(struct lcd_arch, 
+					  regs.rax))
+		: "cc", "memory"
+		  , "rax", "rdx", "rbx", "rdi", "rsi"
+		  , "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
+		);
+ lcd_arch->cont.rsp)
+
+ 	*/
+	__asm__ volatile ("mov 0x0(%%rip), %%rax"
+		        :	
+			: 
+			: "rax"); 
+
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
+
+
+	__asm__ volatile ("mov %0, %%eax"
+		        :
+			: "r"(cpu_khz)
+			: "memory", "eax"); 
+
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
+
+
+	__asm__ volatile ("mov %0, %%rax"
+		        :	
+			: "r"((unsigned long *)lcd_arch->cont.rsp) 
+			: "memory", "rax"); 
+
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
+	__asm__ volatile ("nop");
 
 
 //	vmm_dbg_ept_test(lcd_arch);
