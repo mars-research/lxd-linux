@@ -9,9 +9,10 @@ lcd_test_mod_foobar_dummy_lcd-y		+= dummy.o
 lcd_test_mod_foobar_dummy_lcd-y		+= $(LIBLCD)
 
 # glue code
-lcd_test_mod_foobar_dummy_lcd-y		+= $(addprefix glue/, foobar.o)
+lcd_test_mod_foobar_dummy_lcd-y		+= $(addprefix glue/, foobar_caller.o \
+						foobar_caller_dispatch.o )
 
-lcd_test_mod_foobar_dummy_lcd-y		+= $(addprefix ../, cap.o)
+lcd_test_mod_foobar_dummy_lcd-y		+= $(addprefix ../, foobar_cap.o)
 
 ccflags-y += $(ISOLATED_CFLAGS)
 

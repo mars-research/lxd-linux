@@ -2,5 +2,5 @@ obj-$(LCD_CONFIG_BUILD_FOOBAR_BOOT)	+= boot/
 
 obj-$(LCD_CONFIG_BUILD_FOOBAR_DUMMY_LCD) += dummy_lcd/
 
-obj-$(LCD_CONFIG_BUILD_FOOBAR_NET_KLCD) += net_klcd/
+obj-$(LCD_CONFIG_BUILD_FOOBAR_FOOBAR_KLCD) += foobar_klcd/
 

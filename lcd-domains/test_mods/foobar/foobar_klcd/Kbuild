@@ -1,0 +1,18 @@
+obj-m += lcd_test_mod_foobar_foobar_klcd.o
+
+lcd_test_mod_foobar_foobar_klcd-y		+= main.o
+
+# glue code
+lcd_test_mod_foobar_foobar_klcd-y		+= $(addprefix glue/, foobar_callee.o \
+						foobar_callee_dispatch.o )
+
+lcd_test_mod_foobar_foobar_klcd-y		+= $(addprefix ../, foobar_cap.o)
+
+cppflags-y += $(NONISOLATED_CFLAGS)
+
+extra-y += glue/foobar_callee.lds
+
+ldflags-y += -T $(LCD_TEST_MODULES_BUILD_DIR)/foobar/foobar_klcd/glue/foobar_callee.lds
+
+ccflags-y += $(NONISOLATED_CFLAGS)
+
