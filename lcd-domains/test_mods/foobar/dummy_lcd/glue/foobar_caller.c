@@ -1,9 +1,9 @@
 #include "../foobar_caller.h"
 
 __maybe_unused static struct cptr c;
-static struct glue_cspace *c_cspace;
+struct glue_cspace *foobar_cspace;
 extern struct thc_channel *foobar_async;
-__maybe_unused static struct lcd_sync_channel_group *foobar_group;
+extern struct lcd_sync_channel_group *ch_grp;
 
 int dummy_dev_init(struct foobar_device *dev);
 void dummy_dev_uninit(struct foobar_device *dev);
@@ -16,7 +16,7 @@ int glue_foobar_init(void)
 		LIBLCD_ERR("cap init");
 		goto fail1;
 	}
-	ret = glue_cap_create(&c_cspace);
+	ret = glue_cap_create(&foobar_cspace);
 	if (ret) {
 		LIBLCD_ERR("cap create");
 		goto fail2;
@@ -31,7 +31,7 @@ fail1:
 
 void glue_foobar_exit(void)
 {
-	glue_cap_destroy(c_cspace);
+	glue_cap_destroy(foobar_cspace);
 	glue_cap_exit();
 
 }
@@ -115,7 +115,7 @@ struct foobar_device *alloc_foobardev(int id,
 		goto fail_alloc;
 	}
 	func_ret = &func_ret_container->foobar_device;
-	ret = glue_cap_insert_foobar_device_type(c_cspace,
+	ret = glue_cap_insert_foobar_device_type(foobar_cspace,
 		func_ret_container,
 		&func_ret_container->my_ref);
 	if (ret) {
