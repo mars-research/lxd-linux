@@ -12,7 +12,7 @@ lcd_test_mod_foobar_dummy_lcd-y		+= $(LIBLCD)
 lcd_test_mod_foobar_dummy_lcd-y		+= $(addprefix glue/, foobar_caller.o \
 						foobar_caller_dispatch.o )
 
-lcd_test_mod_foobar_dummy_lcd-y		+= $(addprefix ../, foobar_cap.o)
+lcd_test_mod_foobar_dummy_lcd-y		+= $(addprefix ../, foobar_glue_helper.o)
 
 ccflags-y += $(ISOLATED_CFLAGS)
 

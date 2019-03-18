@@ -1,6 +1,8 @@
 #ifndef _FOOBAR_DEVICE_H
 #define _FOOBAR_DEVICE_H
 
+#include <linux/types.h>
+
 typedef u64 foobar_features_t;
 
 /* features */

@@ -1,7 +1,13 @@
 #include "../foobar_caller.h"
-static struct cptr c;
+
+__maybe_unused static struct cptr c;
 static struct glue_cspace *c_cspace;
-static struct lcd_sync_channel_group *foobar_group;
+extern struct thc_channel *foobar_async;
+__maybe_unused static struct lcd_sync_channel_group *foobar_group;
+
+int dummy_dev_init(struct foobar_device *dev);
+void dummy_dev_uninit(struct foobar_device *dev);
+
 int glue_foobar_init(void)
 {
 	int ret;
@@ -36,7 +42,7 @@ int register_foobar(struct foobar_device *dev)
 	struct fipc_message *_request;
 	struct fipc_message *_response;
 	int func_ret;
-	ret = async_msg_blocking_send_start(net_async,
+	ret = async_msg_blocking_send_start(foobar_async,
 		&_request);
 	if (ret) {
 		LIBLCD_ERR("failed to get a send slot");
@@ -44,13 +50,13 @@ int register_foobar(struct foobar_device *dev)
 	}
 	async_msg_set_fn_type(_request,
 			REGISTER_FOOBAR);
-	fipc_set_reg5(_request,
+	fipc_set_reg4(_request,
 			dev->features);
-	fipc_set_reg6(_request,
+	fipc_set_reg5(_request,
 			dev->hw_features);
-	fipc_set_reg7(_request,
+	fipc_set_reg6(_request,
 			dev->flags);
-	ret = thc_ipc_call(net_async,
+	ret = thc_ipc_call(foobar_async,
 		_request,
 		&_response);
 	if (ret) {
@@ -58,12 +64,12 @@ int register_foobar(struct foobar_device *dev)
 		goto fail_ipc;
 	}
 	func_ret = fipc_get_reg1(_response);
-	fipc_recv_msg_end(thc_channel_to_fipc(net_async),
+	fipc_recv_msg_end(thc_channel_to_fipc(foobar_async),
 			_response);
 	return func_ret;
 fail_async:
 fail_ipc:
-
+	return ret;
 }
 
 void unregister_foobar(struct foobar_device *dev)
@@ -71,7 +77,7 @@ void unregister_foobar(struct foobar_device *dev)
 	int ret;
 	struct fipc_message *_request;
 	struct fipc_message *_response;
-	ret = async_msg_blocking_send_start(net_async,
+	ret = async_msg_blocking_send_start(foobar_async,
 		&_request);
 	if (ret) {
 		LIBLCD_ERR("failed to get a send slot");
@@ -79,35 +85,36 @@ void unregister_foobar(struct foobar_device *dev)
 	}
 	async_msg_set_fn_type(_request,
 			UNREGISTER_FOOBAR);
-	ret = thc_ipc_call(net_async,
+	ret = thc_ipc_call(foobar_async,
 		_request,
 		&_response);
 	if (ret) {
 		LIBLCD_ERR("thc_ipc_call");
 		goto fail_ipc;
 	}
-	fipc_recv_msg_end(thc_channel_to_fipc(net_async),
+	fipc_recv_msg_end(thc_channel_to_fipc(foobar_async),
 			_response);
 	return;
 fail_async:
 fail_ipc:
-
+	return;
 }
 
-struct foobar_device *alloc_foobardev(int idsd,
-		char *name)
+struct foobar_device *alloc_foobardev(int id,
+		const char *name)
 {
 	struct foobar_device_container *func_ret_container;
 	int ret;
 	struct fipc_message *_request;
 	struct fipc_message *_response;
-	struct foobar_device *func_ret;
+	struct foobar_device *func_ret = NULL;
 	func_ret_container = kzalloc(sizeof( struct foobar_device_container   ),
 		GFP_KERNEL);
 	if (!func_ret_container) {
 		LIBLCD_ERR("kzalloc");
 		goto fail_alloc;
 	}
+	func_ret = &func_ret_container->foobar_device;
 	ret = glue_cap_insert_foobar_device_type(c_cspace,
 		func_ret_container,
 		&func_ret_container->my_ref);
@@ -115,7 +122,7 @@ struct foobar_device *alloc_foobardev(int idsd,
 		LIBLCD_ERR("lcd insert");
 		goto fail_insert;
 	}
-	ret = async_msg_blocking_send_start(net_async,
+	ret = async_msg_blocking_send_start(foobar_async,
 		&_request);
 	if (ret) {
 		LIBLCD_ERR("failed to get a send slot");
@@ -124,29 +131,31 @@ struct foobar_device *alloc_foobardev(int idsd,
 	async_msg_set_fn_type(_request,
 			ALLOC_FOOBARDEV);
 	fipc_set_reg1(_request,
-			idsd);
-	fipc_set_reg2(_request,
-			name);
+			id);
+//	fipc_set_reg2(_request,
+//			name);
 	fipc_set_reg4(_request,
 			func_ret_container->my_ref.cptr);
-	fipc_set_reg5(_request,
-			func_ret->id);
-	fipc_set_reg6(_request,
-			func_ret->name);
-	ret = thc_ipc_call(net_async,
+//	fipc_set_reg5(_request,
+//			func_ret->id);
+//	fipc_set_reg6(_request,
+//			func_ret->name);
+	ret = thc_ipc_call(foobar_async,
 		_request,
 		&_response);
 	if (ret) {
 		LIBLCD_ERR("thc_ipc_call");
 		goto fail_ipc;
 	}
-	func_ret_container->other_ref.cptr = fipc_get_reg7(_response);
-	fipc_recv_msg_end(thc_channel_to_fipc(net_async),
+	func_ret_container->other_ref.cptr = fipc_get_reg2(_response);
+	fipc_recv_msg_end(thc_channel_to_fipc(foobar_async),
 			_response);
 	return func_ret;
+fail_alloc:
+fail_insert:
 fail_async:
 fail_ipc:
-
+	return func_ret;
 }
 
 void free_foobardev(struct foobar_device *dev)
@@ -154,7 +163,7 @@ void free_foobardev(struct foobar_device *dev)
 	int ret;
 	struct fipc_message *_request;
 	struct fipc_message *_response;
-	ret = async_msg_blocking_send_start(net_async,
+	ret = async_msg_blocking_send_start(foobar_async,
 		&_request);
 	if (ret) {
 		LIBLCD_ERR("failed to get a send slot");
@@ -162,47 +171,19 @@ void free_foobardev(struct foobar_device *dev)
 	}
 	async_msg_set_fn_type(_request,
 			FREE_FOOBARDEV);
-	ret = thc_ipc_call(net_async,
+	ret = thc_ipc_call(foobar_async,
 		_request,
 		&_response);
 	if (ret) {
 		LIBLCD_ERR("thc_ipc_call");
 		goto fail_ipc;
 	}
-	fipc_recv_msg_end(thc_channel_to_fipc(net_async),
+	fipc_recv_msg_end(thc_channel_to_fipc(foobar_async),
 			_response);
 	return;
 fail_async:
 fail_ipc:
-
-}
-
-void free_foobardev(struct foobar_device *dev)
-{
-	int ret;
-	struct fipc_message *_request;
-	struct fipc_message *_response;
-	ret = async_msg_blocking_send_start(net_async,
-		&_request);
-	if (ret) {
-		LIBLCD_ERR("failed to get a send slot");
-		goto fail_async;
-	}
-	async_msg_set_fn_type(_request,
-			FREE_FOOBARDEV);
-	ret = thc_ipc_call(net_async,
-		_request,
-		&_response);
-	if (ret) {
-		LIBLCD_ERR("thc_ipc_call");
-		goto fail_ipc;
-	}
-	fipc_recv_msg_end(thc_channel_to_fipc(net_async),
-			_response);
 	return;
-fail_async:
-fail_ipc:
-
 }
 
 int init_callee(struct fipc_message *_request,
@@ -224,7 +205,7 @@ int init_callee(struct fipc_message *_request,
 		LIBLCD_ERR("kzalloc");
 		goto fail_alloc;
 	}
-	func_ret = init(dev);
+	func_ret = dummy_dev_init(dev);
 	if (async_msg_blocking_send_start(_channel,
 		&_response)) {
 		LIBLCD_ERR("error getting response msg");
@@ -235,8 +216,8 @@ int init_callee(struct fipc_message *_request,
 	thc_ipc_reply(_channel,
 			request_cookie,
 			_response);
+fail_alloc:
 	return ret;
-
 }
 
 int uninit_callee(struct fipc_message *_request,
@@ -257,7 +238,7 @@ int uninit_callee(struct fipc_message *_request,
 		LIBLCD_ERR("kzalloc");
 		goto fail_alloc;
 	}
-	uninit(dev);
+	dummy_dev_uninit(dev);
 	if (async_msg_blocking_send_start(_channel,
 		&_response)) {
 		LIBLCD_ERR("error getting response msg");
@@ -266,7 +247,6 @@ int uninit_callee(struct fipc_message *_request,
 	thc_ipc_reply(_channel,
 			request_cookie,
 			_response);
+fail_alloc:
 	return ret;
-
 }
-

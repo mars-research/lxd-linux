@@ -2,6 +2,9 @@
 #include <liblcd/liblcd.h>
 #include "../foobar_caller.h"
 #include <lcd_config/post_hook.h>
+
+#define trace(x)	LIBLCD_MSG(#x)
+
 int dispatch_async_loop(struct thc_channel *_channel,
 		struct fipc_message *message,
 		struct glue_cspace *cspace,

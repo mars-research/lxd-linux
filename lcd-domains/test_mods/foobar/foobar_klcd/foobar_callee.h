@@ -1,17 +1,8 @@
 #ifndef __FOOBAR_CALLEE_H__
 #define __FOOBAR_CALLEE_H__
 
-#include "../glue_helper.h"
-enum dispatch_t {
-	REGISTER_FOOBAR,
-	UNREGISTER_FOOBAR,
-	ALLOC_FOOBARDEV,
-	FREE_FOOBARDEV,
-	FREE_FOOBARDEV,
-	INIT,
-	UNINIT,
+#include "../foobar_glue_helper.h"
 
-};
 int register_foobar_callee(struct fipc_message *_request,
 		struct thc_channel *_channel,
 		struct glue_cspace *cspace,
@@ -39,3 +30,5 @@ int dispatch_async_loop(struct thc_channel *_channel,
 		struct cptr sync_ep);
 int glue_foobar_init(void);
 void glue_foobar_exit(void);
+
+#endif

@@ -6,7 +6,7 @@ lcd_test_mod_foobar_foobar_klcd-y		+= main.o
 lcd_test_mod_foobar_foobar_klcd-y		+= $(addprefix glue/, foobar_callee.o \
 						foobar_callee_dispatch.o )
 
-lcd_test_mod_foobar_foobar_klcd-y		+= $(addprefix ../, foobar_cap.o)
+lcd_test_mod_foobar_foobar_klcd-y		+= $(addprefix ../, foobar_glue_helper.o)
 
 cppflags-y += $(NONISOLATED_CFLAGS)
 

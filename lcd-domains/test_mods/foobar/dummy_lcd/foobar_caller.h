@@ -1,6 +1,8 @@
 #ifndef __FOOBAR_CALLER_H__
 #define __FOOBAR_CALLER_H__
 
+#include "../foobar_glue_helper.h"
+
 void dispatch_sync_loop(void);
 int dispatch_async_loop(struct thc_channel *_channel,
 		struct fipc_message *message,
@@ -16,3 +18,5 @@ int uninit_callee(struct fipc_message *_request,
 		struct thc_channel *_channel,
 		struct glue_cspace *cspace,
 		struct cptr sync_ep);
+
+#endif
