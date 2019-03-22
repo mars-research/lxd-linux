@@ -128,13 +128,6 @@ int alloc_foobardev_callee(struct fipc_message *_request,
 		LIBLCD_ERR("kzalloc");
 		lcd_exit(-1);
 	}
-	func_ret_container = kzalloc(sizeof( *func_ret_container ),
-		GFP_KERNEL);
-	if (!func_ret_container) {
-		LIBLCD_ERR("kzalloc");
-		goto fail_alloc;
-	}
-
 	id = fipc_get_reg1(_request);
 	//name = fipc_get_reg2(_request);
 	func_ret_container->other_ref.cptr = fipc_get_reg4(_request);
