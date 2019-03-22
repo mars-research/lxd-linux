@@ -37,11 +37,11 @@ int register_foobar_callee(struct fipc_message *_request,
 		struct glue_cspace *cspace,
 		struct cptr sync_ep)
 {
-	struct foobar_device *dev;
-	int ret;
+	struct foobar_device *dev = NULL;
+	int ret = 0;
 	struct fipc_message *_response;
 	unsigned 	int request_cookie;
-	int func_ret;
+	int func_ret = 0;
 	request_cookie = thc_get_request_cookie(_request);
 	fipc_recv_msg_end(thc_channel_to_fipc(_channel),
 			_request);
@@ -81,8 +81,8 @@ int unregister_foobar_callee(struct fipc_message *_request,
 		struct glue_cspace *cspace,
 		struct cptr sync_ep)
 {
-	struct foobar_device *dev;
-	int ret;
+	struct foobar_device *dev = NULL;
+	int ret = 0;
 	struct fipc_message *_response;
 	unsigned 	int request_cookie;
 	request_cookie = thc_get_request_cookie(_request);
@@ -112,13 +112,13 @@ int alloc_foobardev_callee(struct fipc_message *_request,
 		struct glue_cspace *cspace,
 		struct cptr sync_ep)
 {
-	int id;
-	char *name;
+	int id = 0;
+	char *name = 0;
 	int ret = 0;
 	struct fipc_message *_response;
 	unsigned int request_cookie;
-	struct foobar_device_container *func_ret_container;
-	struct foobar_device *func_ret;
+	struct foobar_device_container *func_ret_container = NULL;
+	struct foobar_device *func_ret = NULL;
 	request_cookie = thc_get_request_cookie(_request);
 	fipc_recv_msg_end(thc_channel_to_fipc(_channel),
 			_request);
@@ -164,8 +164,8 @@ int free_foobardev_callee(struct fipc_message *_request,
 		struct glue_cspace *cspace,
 		struct cptr sync_ep)
 {
-	struct foobar_device *dev;
-	int ret;
+	struct foobar_device *dev = NULL;
+	int ret = 0;
 	struct fipc_message *_response;
 	unsigned 	int request_cookie;
 	request_cookie = thc_get_request_cookie(_request);
@@ -194,10 +194,10 @@ fail_alloc:
 int init_user(struct foobar_device *dev,
 		struct trampoline_hidden_args *hidden_args)
 {
-	int ret;
+	int ret = 0;
 	struct fipc_message *_request;
 	struct fipc_message *_response;
-	int func_ret;
+	int func_ret = 0;
 	thc_init();
 	ret = async_msg_blocking_send_start(hidden_args->async_chnl,
 		&_request);
