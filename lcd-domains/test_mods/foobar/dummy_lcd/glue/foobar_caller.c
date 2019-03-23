@@ -41,7 +41,7 @@ int register_foobar(struct foobar_device *dev)
 	int ret;
 	struct fipc_message *_request;
 	struct fipc_message *_response;
-	int func_ret;
+	int func_ret = 0;
 	ret = async_msg_blocking_send_start(foobar_async,
 		&_request);
 	if (ret) {
@@ -103,7 +103,7 @@ fail_ipc:
 struct foobar_device *alloc_foobardev(int id,
 		const char *name)
 {
-	struct foobar_device_container *func_ret_container;
+	struct foobar_device_container *func_ret_container = NULL;
 	int ret;
 	struct fipc_message *_request;
 	struct fipc_message *_response;
@@ -191,11 +191,11 @@ int init_callee(struct fipc_message *_request,
 		struct glue_cspace *cspace,
 		struct cptr sync_ep)
 {
-	struct foobar_device *dev;
-	int ret;
+	struct foobar_device *dev = NULL;
+	int ret = 0;
 	struct fipc_message *_response;
 	unsigned 	int request_cookie;
-	int func_ret;
+	int func_ret = 0;
 	request_cookie = thc_get_request_cookie(_request);
 	fipc_recv_msg_end(thc_channel_to_fipc(_channel),
 			_request);
@@ -225,8 +225,8 @@ int uninit_callee(struct fipc_message *_request,
 		struct glue_cspace *cspace,
 		struct cptr sync_ep)
 {
-	struct foobar_device *dev;
-	int ret;
+	struct foobar_device *dev = NULL;
+	int ret = 0;
 	struct fipc_message *_response;
 	unsigned 	int request_cookie;
 	request_cookie = thc_get_request_cookie(_request);
