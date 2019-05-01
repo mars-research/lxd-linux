@@ -254,7 +254,22 @@ static int wait_for_transmit(struct lcd *lcd, struct cnode *ep_cnode,
 		/*
 		 * Get ready to sleep 
 		 */
-		set_current_state(TASK_INTERRUPTIBLE);
+		/*
+		 * XXX: Network drivers, when isolated, does not have a way to
+		 * create buffers by calling a function such as `open` before
+		 * sending packets. They start sending packets right away. So,
+		 * we need to setup private per-thread async buffers. However,
+		 * `dev_queue_xmit` calls `rcu_read_lock_bh()` which increments
+		 * the `preempt_count`. Sleeping here would cause the scheduler
+		 * to emit 'BUG: scheduling while atomic'.
+		 * There are a couple of fixes:
+		 * 1) easy fix - pre-create a set of ring buffers (say 10 per LCD)
+		 * 2) proper fix - Do a synchronous thread migration: Create a
+		 * VMCS for the LCD, pick a stack and vmenter to launch the VM
+		 * to setup ring buffers. Tear down the VMCS and return once we
+		 * are done.
+		 */
+		/* set_current_state(TASK_INTERRUPTIBLE); */
 		/*
 		 * Check if transmit activity
 		 */
@@ -293,7 +308,10 @@ static int wait_for_transmit(struct lcd *lcd, struct cnode *ep_cnode,
 			 * We weren't signaled, and message still not sent;
 			 * go back to schleep
 			 */
-			schedule();
+			/*
+			 * XXX: We can possibly be here in an atomic context
+			 */
+			/* schedule(); */
 			continue;
 		}
 		/*
@@ -304,7 +322,10 @@ static int wait_for_transmit(struct lcd *lcd, struct cnode *ep_cnode,
 		break;
 	}
 out:
-	set_current_state(TASK_RUNNING);
+	/*
+	 * XXX: We can possibly be here in an atomic context
+	 */
+	/* set_current_state(TASK_RUNNING); */
 	/*
 	 * Unset our flag
 	 */
