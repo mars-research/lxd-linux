@@ -697,7 +697,7 @@ int lcd_create_module_lcd(char *mdir, char *mname, cptr_t *lcd_out,
 	 * Initialize empty LCD
 	 */
 create_lcd:
-	ret = lcd_create(&lcd, is_child);
+	ret = lcd_create(&lcd, lcd_id);
 	if (ret) {
 		LIBLCD_ERR("error creating empty LCD");
 		goto fail4;

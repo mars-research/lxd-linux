@@ -288,14 +288,14 @@ int __lcd_create_no_vm_no_thread(struct lcd **out);
  * which we need a new kthread to run the LCD's code, but we don't want
  * the code to run inside an isolated VM.
  */
-int __lcd_create_no_vm(struct lcd **out, const char *name, bool is_child);
+int __lcd_create_no_vm(struct lcd **out, const char *name, int lcd_id);
 /**
  * __lcd_create -- Create an empty isolated LCD
  * @caller: the LCD doing the creating
  * @slot: the slot in the @caller's cspace where the LCD capability should
  *        be stored
  */
-int __lcd_create(struct lcd *caller, cptr_t slot, bool is_child);
+int __lcd_create(struct lcd *caller, cptr_t slot, int lcd_id);
 /**
  * __lcd_create_klcd -- Create an empty non-isolated LCD (kLCD)
  * @caller: the LCD doing the creating

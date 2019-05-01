@@ -38,7 +38,7 @@
  * Creates a bare LCD with an empty cspace and address space (nothing is
  * mapped it - except the dedicated page for the LCD's UTCB - see sync_ipc.h).
  */
-int lcd_create(cptr_t *lcd, bool is_child);
+int lcd_create(cptr_t *lcd, int lcd_id);
 
 /**
  * lcd_create_klcd -- Create an LCD that runs in the non-isolated host

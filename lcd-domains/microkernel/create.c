@@ -169,14 +169,14 @@ fail1:
 	return ret;
 }
 
-int __lcd_create_no_vm(struct lcd **out, const char *name, bool is_child)
+int __lcd_create_no_vm(struct lcd **out, const char *name, int lcd_id)
 {
 	struct lcd *lcd;
 	int ret;
 	/*
 	 * More basic init
 	 */
-	if (is_child) {
+	if (lcd_id > 0) {
 		ret = __lcd_create_child_no_vm_no_thread(&lcd);
 		printk("%s, creating child LCD: %p\n", __func__, lcd);
 		if (ret) {
@@ -218,14 +218,25 @@ fail1:
 	return ret;
 }
 
-int __lcd_create(struct lcd *caller, cptr_t slot, bool is_child)
+#define LCD_KTHREAD_NAME_SZ	32
+int __lcd_create(struct lcd *caller, cptr_t slot, int lcd_id)
 {
 	struct lcd *lcd;
-	int ret;
+	int ret = 0;
+	char *lcd_name;
 	/*
 	 * Basic init of lcd
 	 */
-	ret = __lcd_create_no_vm(&lcd, "lcd", is_child);
+	lcd_name = kzalloc(LCD_KTHREAD_NAME_SZ, GFP_KERNEL);
+
+	if (!lcd_name) {
+		LCD_ERR("cannot alloc memory");
+		goto fail1;
+	}
+
+	snprintf(lcd_name, LCD_KTHREAD_NAME_SZ, "lcd/%d", lcd_id);
+
+	ret = __lcd_create_no_vm(&lcd, lcd_name, lcd_id);
 	if (ret) {
 		LCD_ERR("lcd create");
 		goto fail1;
@@ -233,7 +244,7 @@ int __lcd_create(struct lcd *caller, cptr_t slot, bool is_child)
 	/*
 	 * Alloc vm / arch-dependent part
 	 */
-	ret = lcd_arch_create(&lcd->lcd_arch, is_child);
+	ret = lcd_arch_create(&lcd->lcd_arch, lcd_id > 0);
 	if(ret) {
 		LCD_ERR("error creating lcd_arch");
 		goto fail2;
