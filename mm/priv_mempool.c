@@ -11,39 +11,15 @@
 #undef pr_fmt
 #define pr_fmt(fmt)	"%s:%d : " fmt, __func__, smp_processor_id()
 
-//#define CMA_ALLOC
-static priv_pool_t pool_array[POOL_MAX];
-
-static unsigned long pool_cma_size = 1024 * 1024 * 50;
-static struct cma *pool_cma;
-
-static int __init early_parse_pool_cma(char *p)
-{
-	pool_cma_size = ALIGN(memparse(p, NULL), PAGE_SIZE);
-	return 0;
-}
-early_param("pool_cma", early_parse_pool_cma);
-
-static priv_pool_t *get_pool(pool_type_t type)
-{
-
-	if (type < 0 || type > POOL_MAX) {
-		printk("%s, unknown type requested %d\n", __func__, type);
-		return NULL;
-	}
-	return &pool_array[type];
-}
-
 #define CACHE_SIZE	0x80
 
 void construct_global_pool(priv_pool_t *p)
 {
 	unsigned int obj_size = p->obj_size;
 	unsigned int gpool_objs = p->total_objs;
-
-	char *gpool = p->gpool;
 	int i, b;
-	char *bpool = gpool;
+	char *bpool = p->base;
+	char *gpool = p->base;
 	unsigned int bundles;
 	struct object *objs;
 	struct bundle *prev_bund = NULL, *bund = NULL;
@@ -53,18 +29,17 @@ void construct_global_pool(priv_pool_t *p)
 	 */
 	bundles = gpool_objs / CACHE_SIZE;
 
-	printk("%s, gpool_objs %d | bundles %u\n",
-		__func__, gpool_objs, bundles);
+	pr_info("gpool_objs %d | bundles %u\n", gpool_objs, bundles);
 
 	for (b = 0; b < bundles; b++) {
-		//printk("bundle ===> %d\n", b);
+		pr_debug("bundle ===> %d\n", b);
 		for (i = 0; i < CACHE_SIZE; i++) {
 			objs = (struct object*)((char*)bpool + (i * obj_size));
 			/* the last object's next is just null */
 			if (i == CACHE_SIZE - 1)
 				break;
 			objs->next = (struct object*)((char*)bpool + (i + 1) * obj_size);
-	//		printk("\tobj %p | obj->next %p\n", objs, objs->next);
+			pr_debug("\tobj %p | obj->next %p\n", objs, objs->next);
 		}
 		/* break the last object's chain */
 		objs->next = NULL;
@@ -76,8 +51,8 @@ void construct_global_pool(priv_pool_t *p)
 		/* assign the list we created to this bundle */
 		bund->list = (struct object *)objs->next;
 
-		printk("prev_bund %p | bund %p\n",
-			prev_bund, bund);
+		pr_info("prev_bund %p | bund %p\n", prev_bund, bund);
+
 		/* if prev_bundle is constructed, chain it */
 		if (prev_bund)
 			prev_bund->next = bund;
@@ -93,7 +68,7 @@ void construct_global_pool(priv_pool_t *p)
 
 	/* our top bundle is at bpool */
 	p->stack.head = (struct bundle *)gpool;
-	printk("stak head %p | head->list %p | head->next %p\n",
+	pr_info("stack head %p | head->list %p | head->next %p\n",
 		p->stack.head, p->stack.head->list, p->stack.head->next);
 }
 
@@ -121,16 +96,6 @@ void priv_pool_destroy(priv_pool_t *p)
 	if (!p)
 		return;
 
-	if (p->pool)
-		free_pages((unsigned long)p->pool, p->pool_order);
-
-#ifdef PBUF
-	if (p->buf)
-		free_percpu(p->buf);
-
-	if (p->bufend)
-		free_percpu(p->bufend);
-#endif
 	if (p->head)
 		free_percpu(p->head);
 
@@ -143,7 +108,7 @@ void priv_pool_destroy(priv_pool_t *p)
 EXPORT_SYMBOL(priv_pool_destroy);
 
 #if 0
-priv_pool_t *priv_pool_init(pool_type_t type, unsigned int num_objs,
+priv_pool_t *priv_pool_init(priv_pool_t type, unsigned int num_objs,
             unsigned int obj_size)
 {
 	priv_pool_t *p;
@@ -261,58 +226,48 @@ priv_pool_t *priv_pool_init(pool_type_t type, unsigned int num_objs,
 EXPORT_SYMBOL(priv_pool_init);
 #endif
 
-priv_pool_t *priv_pool_init(pool_type_t type, void *pool_base,
+priv_pool_t *priv_pool_init(void *pool_base,
 			size_t pool_size,
-			unsigned int obj_size)
+			unsigned int obj_size,
+			const char *name)
 {
-	priv_pool_t *p;
-	char *pool, *global_pool;
+	priv_pool_t *p = NULL;
 	int cpu;
 
 	if (!obj_size) {
-		printk("%s, invalid objsize (%u) requested\n",
-		            __func__, obj_size);
+		pr_err("Invalid objsize %u\n", obj_size);
+		goto exit;
+	}
+
+	if (!pool_size) {
+		pr_err("Invalid pool_size %zu\n", pool_size);
+		goto exit;
+	}
+
+	if (!pool_base) {
+		pr_err("Invalid pool_base %p\n", pool_base);
+		goto exit;
+	}
+
+	p = kzalloc(sizeof(*p), GFP_KERNEL);
+
+	if (!p) {
+		pr_err("unable to allocate pool struct\n");
 		return NULL;
 	}
 
-	p = get_pool(type);
-
-	if (!p)
-		return NULL;
-
-	memset(p, 0, sizeof(priv_pool_t));
+	/* align obj_size to 32 bit boundary */
+	p->obj_size = obj_size = ALIGN(obj_size, 32);
 
 	p->head = alloc_percpu(struct object *);
 	p->marker = alloc_percpu(struct object *);
 	p->cached = alloc_percpu(int);
 
-	/* align obj_size to 32 bit boundary */
-	p->obj_size = obj_size = ALIGN(obj_size, 32);
-
-	p->num_cpus = num_online_cpus() * 2;
-
-	p->pool_order = 10;
-
-	if (!pool_base) {
-		/* alloc total_size pages */
-		pool = p->pool = (char*) __get_free_pages(GFP_KERNEL | __GFP_ZERO,
-	                            p->pool_order);
-		p->total_objs = ((1 << p->pool_order) * PAGE_SIZE)
-						/ p->obj_size;
-		printk("Memory %p | size %lx\n", pool, (1 << p->pool_order) * PAGE_SIZE);
-	} else {
-		pool = p->pool = pool_base;
-		p->total_objs = pool_size / p->obj_size;
-		printk("Memory %p | size %lx\n", pool, pool_size);
-		p->total_pages = pool_size >> PAGE_SHIFT;
-	}
-
-	if (!pool) {
-		printk("No memory %p\n", pool);
-		return NULL;
-	}
-	/* split the total pages between pcpu pool and the global pool */
-	p->gpool = global_pool = pool;
+	p->base = pool_base;
+	p->total_objs = pool_size / p->obj_size;
+	p->total_pages = pool_size >> PAGE_SHIFT;
+	pr_info("Initilaizing mempool, base: %p size: %lx objsize:%u\n",
+				pool_base, pool_size, obj_size);
 
 	/* update percpu vars */
 	for_each_online_cpu(cpu) {
@@ -322,11 +277,13 @@ priv_pool_t *priv_pool_init(pool_type_t type, void *pool_base,
 
 	construct_global_pool(p);
 	spin_lock_init(&p->pool_spin_lock);
+exit:
 	return p;
 }
+
 EXPORT_SYMBOL(priv_pool_init);
 
-void *priv_alloc(pool_type_t type)
+void *priv_alloc(priv_pool_t *p)
 {
 	void *m = NULL;
 #ifdef PBUF
@@ -334,13 +291,13 @@ void *priv_alloc(pool_type_t type)
 	char *pbufend;
 #endif
 	struct object *head;
-	priv_pool_t *p = get_pool(type);
+	unsigned long flags;
 
 	if (!p)
 		return NULL;
 
-	/* disable preempt until we manipulate all percpu pointers */
-	preempt_disable();
+	/* disable irqs until we manipulate all percpu pointers */
+	local_irq_save(flags);
 
 	head = (struct object*) *this_cpu_ptr(p->head);
 
@@ -350,11 +307,18 @@ void *priv_alloc(pool_type_t type)
 		m = head;
 		*this_cpu_ptr(p->head) = head->next;
 		this_cpu_dec(*p->cached);
-		goto out;
+
+		/*
+		 * An object is served from local per-cpu cache.
+		 */
+		local_irq_restore(flags);
+		return m;
 	} else {
 		pr_debug("reset cached\n");
 		this_cpu_write(*(p->cached), 0);
 	}
+
+	local_irq_restore(flags);
 
 #ifdef PBUF
 	pbuf = (char*)*this_cpu_ptr(p->buf);
@@ -436,29 +400,29 @@ void *priv_alloc(pool_type_t type)
 #endif
 	}
 out:
-	/* enable preemption */
-	preempt_enable();
 	return m;
 }
 
 EXPORT_SYMBOL(priv_alloc);
 
-void priv_free(void *addr, pool_type_t type)
+void priv_free(priv_pool_t *pool, void *obj)
 {
 	struct object *p, *head;
-	priv_pool_t *pool;
-	if (!addr)
+	unsigned long flags;
+
+	if (!obj) {
+		pr_err("Object pointer %p\n", obj);
 		return;
+	}
 
-	pool = get_pool(type);
-
-	if (!pool)
+	if (!pool) {
+		pr_err("Pool pointer %p\n", pool);
 		return;
+	}
 
-	p = (struct object*) addr;
+	p = (struct object*) obj;
 
-	/* disable preempt until we manipulate all percpu pointers */
-	preempt_disable();
+	local_irq_save(flags);
 
 	head = (struct object*)*this_cpu_ptr(pool->head);
 	p->next = (struct object*)head;
@@ -473,16 +437,19 @@ void priv_free(void *addr, pool_type_t type)
 #endif
 		*this_cpu_ptr(pool->marker) = *this_cpu_ptr(pool->head);
 		pr_debug("set marker @ %p\n", *this_cpu_ptr(pool->marker));
-		if ((void*)(*this_cpu_ptr(pool->marker))->next < (void*)pool->pool ||
-				(void*)(*this_cpu_ptr(pool->marker))->next > (void*)(pool->pool + (pool->total_pages << PAGE_SHIFT))) {
+		if ((void*)(*this_cpu_ptr(pool->marker))->next < (void*)pool->base ||
+				(void*)(*this_cpu_ptr(pool->marker))->next > (void*)(pool->base + (pool->total_pages << PAGE_SHIFT))) {
 			printk("marker->next is corrupted!! marker %p | marker->next %p\n",
 						*this_cpu_ptr(pool->marker), (*this_cpu_ptr(pool->marker))->next);
 			dump_stack();
 		}
+
+		local_irq_restore(flags);
 	} else if (*this_cpu_ptr(pool->cached) == (CACHE_SIZE << 1)) {
 		struct bundle *donation = (struct bundle *)*this_cpu_ptr(pool->head);
 		struct atom snapshot, new;
 
+		local_irq_restore(flags);
 #ifdef SPINLOCK
 		/* lock global pool */
 		spin_lock(&pool->pool_spin_lock);
@@ -491,8 +458,8 @@ void priv_free(void *addr, pool_type_t type)
 		new.head = donation;
 		donation->list = ((struct object*)*this_cpu_ptr(pool->head))->next;
 
-		if ((void*)(*this_cpu_ptr(pool->marker))->next < (void*)pool->pool ||
-				(void*)(*this_cpu_ptr(pool->marker))->next > (void*)(pool->pool + (pool->total_pages << PAGE_SHIFT))) {
+		if ((void*)(*this_cpu_ptr(pool->marker))->next < (void*)pool->base ||
+				(void*)(*this_cpu_ptr(pool->marker))->next > (void*)(pool->base + (pool->total_pages << PAGE_SHIFT))) {
 			printk("update pool->head with corrupted marker %p | marker->next %p\n",
 						*this_cpu_ptr(pool->marker), (*this_cpu_ptr(pool->marker))->next);
 			dump_stack();
@@ -528,10 +495,9 @@ void priv_free(void *addr, pool_type_t type)
 				donation, snapshot.head,
 				snapshot.head, snapshot.version,
 				new.head, new.version);
+	} else {
+		local_irq_restore(flags);
 	}
-
-	/* enable preemption */
-	preempt_enable();
 }
 EXPORT_SYMBOL(priv_free);
 

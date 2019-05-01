@@ -84,6 +84,8 @@ struct kmem_cache *skbuff_head_cache __read_mostly;
 static struct kmem_cache *skbuff_fclone_cache __read_mostly;
 int sysctl_max_skb_frags __read_mostly = MAX_SKB_FRAGS;
 EXPORT_SYMBOL(sysctl_max_skb_frags);
+priv_pool_t *skb_pool;
+EXPORT_SYMBOL(skb_pool);
 
 /**
  *	skb_panic - private function for out-of-line support
@@ -153,6 +155,8 @@ out:
 
 	return obj;
 }
+
+
 
 /* 	Allocate a new skbuff. We do this ourselves so we can fill in a few
  *	'private' fields and also do memory statistics to find all the
@@ -235,7 +239,7 @@ struct sk_buff *__alloc_skb(unsigned int size, gfp_t gfp_mask,
 	 */
 	if (unlikely(privpool)) {
 		/* private pool */
-		data = priv_alloc(SKB_DATA_POOL);
+		data = priv_alloc(skb_pool);
 		size = SKB_DATA_SIZE;
 	} else {
 		size = SKB_DATA_ALIGN(size);
@@ -602,7 +606,7 @@ static void skb_free_head(struct sk_buff *skb)
 		skb_free_frag(head);
 	else {
 		if (skb->private)
-			priv_free(head, SKB_DATA_POOL);
+			priv_free(skb_pool, head);
 		else
 			kfree(head);
 	}
