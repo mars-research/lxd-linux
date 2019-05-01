@@ -298,6 +298,9 @@ int lcd_arch_ept_map(struct lcd_arch *lcd, gpa_t ga, hpa_t ha,
 	/*
 	 * Walk ept
 	 */
+#ifdef CONFIG_LCD_SINGLE_EPT
+	mutex_lock(&g_ept_lock);
+#endif
 	ret = lcd_arch_ept_walk(lcd, ga, create, &ept_entry);
 	if (ret)
 		return ret;
@@ -309,6 +312,9 @@ int lcd_arch_ept_map(struct lcd_arch *lcd, gpa_t ga, hpa_t ha,
 		LCD_ERR("would overwrite hpa %lx with hpa %lx\n",
 			hpa_val(lcd_arch_ept_hpa(ept_entry)), 
 			hpa_val(ha));
+#ifdef CONFIG_LCD_SINGLE_EPT
+		mutex_unlock(&g_ept_lock);
+#endif
 		return -EINVAL;
 	}
 
@@ -316,6 +322,10 @@ int lcd_arch_ept_map(struct lcd_arch *lcd, gpa_t ga, hpa_t ha,
 	 * Map the guest physical addr to the host physical addr.
 	 */
 	lcd_arch_ept_set(ept_entry, ha);
+
+#ifdef CONFIG_LCD_SINGLE_EPT
+	mutex_unlock(&g_ept_lock);
+#endif
 
 	return 0;
 }
@@ -327,6 +337,7 @@ int lcd_arch_ept_map_range(struct lcd_arch *lcd, gpa_t ga_start,
 	unsigned long len;
 
 	len = npages * PAGE_SIZE;
+
 	for (off = 0; off < len; off += PAGE_SIZE) {
 		if (lcd_arch_ept_map(lcd,
 					/* gpa */
@@ -355,6 +366,9 @@ int lcd_arch_ept_unmap(struct lcd_arch *lcd, gpa_t a)
 	/*
 	 * Walk ept
 	 */
+#ifdef CONFIG_LCD_SINGLE_EPT
+	mutex_lock(&g_ept_lock);
+#endif
 	ret = lcd_arch_ept_walk(lcd, a, 0, &ept_entry);
 	if (ret)
 		return ret;
@@ -364,6 +378,9 @@ int lcd_arch_ept_unmap(struct lcd_arch *lcd, gpa_t a)
 	 */
 	lcd_arch_ept_unset(ept_entry);
 
+#ifdef CONFIG_LCD_SINGLE_EPT
+	mutex_unlock(&g_ept_lock);
+#endif
 	return 0;
 }
 
@@ -375,6 +392,9 @@ int lcd_arch_ept_unmap2(struct lcd_arch *lcd, gpa_t a, hpa_t *hpa_out)
 	/*
 	 * Walk ept
 	 */
+#ifdef CONFIG_LCD_SINGLE_EPT
+	mutex_lock(&g_ept_lock);
+#endif
 	ret = lcd_arch_ept_walk(lcd, a, 0, &ept_entry);
 	if (ret)
 		return ret;
@@ -388,6 +408,9 @@ int lcd_arch_ept_unmap2(struct lcd_arch *lcd, gpa_t a, hpa_t *hpa_out)
 	 */
 	lcd_arch_ept_unset(ept_entry);
 
+#ifdef CONFIG_LCD_SINGLE_EPT
+	mutex_unlock(&g_ept_lock);
+#endif
 	return 0;
 }
 
@@ -418,6 +441,10 @@ int lcd_arch_ept_gpa_to_hpa(struct lcd_arch *lcd, gpa_t ga, hpa_t *ha_out, bool 
 	/*
 	 * Walk ept
 	 */
+#ifdef CONFIG_LCD_SINGLE_EPT
+	mutex_lock(&g_ept_lock);
+#endif
+
 	ret = lcd_arch_ept_walk(lcd, ga, 0, &ept_entry);
 	if (ret)
 		return ret;
@@ -428,6 +455,9 @@ int lcd_arch_ept_gpa_to_hpa(struct lcd_arch *lcd, gpa_t ga, hpa_t *ha_out, bool 
 	if (!vmx_epte_present(*ept_entry) && verbose) {
 		LCD_ERR("gpa %lx is not mapped\n",
 			gpa_val(ga));
+#ifdef CONFIG_LCD_SINGLE_EPT
+		mutex_unlock(&g_ept_lock);
+#endif
 		return -EINVAL;
 	}
 
@@ -438,6 +468,9 @@ int lcd_arch_ept_gpa_to_hpa(struct lcd_arch *lcd, gpa_t ga, hpa_t *ha_out, bool 
 	hpa = hpa_add(hpa, vmx_ept_offset(ga));
 	*ha_out = hpa;
 
+#ifdef CONFIG_LCD_SINGLE_EPT
+	mutex_unlock(&g_ept_lock);
+#endif
 	return 0;
 }
 EXPORT_SYMBOL(lcd_arch_ept_gpa_to_hpa);
