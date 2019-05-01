@@ -22,7 +22,15 @@
 #include <lcd_config/post_hook.h>
 
 #define NUM_PACKETS	(1000000)
-#define VMALLOC_SZ	(NUM_PACKETS * sizeof(uint64_t))
+
+#define CONFIG_VMALLOC_SHARED_POOL
+
+#ifdef CONFIG_VMALLOC_SHARED_POOL
+#define SKB_DATA_POOL_SIZE	(256UL << 20)
+#define SKB_DATA_POOL_PAGES	(SKB_DATA_POOL_SIZE >> PAGE_SHIFT)
+#define SKB_DATA_POOL_ORDER	ilog2(roundup_pow_of_two(SKB_DATA_POOL_PAGES))
+#endif
+
 
 #define CORRECTION_VALUE	44
 //#define NDO_XMIT_TS
@@ -183,14 +191,12 @@ int pool_pick(void)
 			__func__, best_diff, best_idx, pools[best_idx].start_idx, pools[best_idx].end_idx);
        	return best_idx;
 }
-
-
+extern priv_pool_t *skb_pool;
 void skb_data_pool_init(void)
 {
-	//pool = priv_pool_init(SKB_DATA_POOL, 10, SKB_DATA_SIZE);
-	pool_base = base_pools[pools[pool_pick()].start_idx];
-	pool_size = best_diff * ((1 << pool_order) * PAGE_SIZE);
-	pool = priv_pool_init(SKB_DATA_POOL, (void*) pool_base, pool_size, 2048);
+	pool_base = vzalloc(SKB_DATA_POOL_SIZE);
+	pool_size = SKB_DATA_POOL_SIZE;
+	skb_pool = pool = priv_pool_init((void*) pool_base, pool_size, 2048, "skb_data_pool");
 
 #ifdef SKBC_PRIVATE_POOL
 	skbc_pool = priv_pool_init(SKB_CONTAINER_POOL, 10,
@@ -200,6 +206,8 @@ void skb_data_pool_init(void)
 
 void skb_data_pool_free(void)
 {
+	if (pool_base)
+		vfree(pool_base);
 	if (pool)
 		priv_pool_destroy(pool);
 #ifdef SKBC_PRIVATE_POOL
@@ -1534,8 +1542,8 @@ void setup_device_ops_trampolines(struct net_device_ops_container *netdev_ops_co
 	ndo_start_xmit_hidden_args->t_handle->hidden_args = ndo_start_xmit_hidden_args;
 	ndo_start_xmit_hidden_args->struct_container = netdev_ops_container;
 	ndo_start_xmit_hidden_args->cspace = c_cspace;
-	ndo_start_xmit_hidden_args->lcds[1].lcd_async_chnl = lcd_channels[1];
-	ndo_start_xmit_hidden_args->lcds[1].lcd_sync_ep = new_sync_eps[1];
+	//ndo_start_xmit_hidden_args->lcds[1].lcd_async_chnl = lcd_channels[1];
+	//ndo_start_xmit_hidden_args->lcds[1].lcd_sync_ep = new_sync_eps[1];
 
 	netdev_ops_container->net_device_ops.ndo_start_xmit = LCD_HANDLE_TO_TRAMPOLINE(ndo_start_xmit_hidden_args->t_handle);
 	ndo_validate_addr_hidden_args = kzalloc(sizeof( *ndo_validate_addr_hidden_args ), GFP_KERNEL);
@@ -1723,7 +1731,9 @@ void setup(struct net_device *dev, struct trampoline_hidden_args *hidden_args)
 	struct setup_container *setup_container;
 	struct net_device_container *net_dev_container;
 	struct net_device_ops_container *netdev_ops_container;
+#ifndef CONFIG_VMALLOC_SHARED_POOL
 	struct page *p;
+#endif
 	unsigned int pool_ord;
 	cptr_t pool_cptr;
 	uint32_t request_cookie;
@@ -1780,20 +1790,25 @@ void setup(struct net_device *dev, struct trampoline_hidden_args *hidden_args)
 		goto fail_ipc;
 	}
 
-	p = virt_to_head_page(pool->pool);
+#ifdef CONFIG_VMALLOC_SHARED_POOL
+	ret = lcd_volunteer_vmalloc_mem(__gva((unsigned long)pool->base), SKB_DATA_POOL_SIZE >> PAGE_SHIFT, &pool_cptr);
+	pool_ord = SKB_DATA_POOL_ORDER;
+#else
+	p = virt_to_head_page(pool->base);
 
         pool_ord = ilog2(roundup_pow_of_two((
 				pool->total_pages * PAGE_SIZE)
 				>> PAGE_SHIFT));
 
         ret = lcd_volunteer_pages(p, pool_ord, &pool_cptr);
+#endif
 
 	if (ret) {
 		LIBLCD_ERR("volunteer shared data pool");
 		goto fail_vol;
 	}	
 
-	pool_pfn_start = (unsigned long)pool->pool >> PAGE_SHIFT;
+	pool_pfn_start = (unsigned long)pool->base >> PAGE_SHIFT;
 	pool_pfn_end = pool_pfn_start + pool->total_pages;
 
 	printk("%s, pool pfn start %lu | end %lu\n", __func__,
@@ -2155,10 +2170,11 @@ int register_child(void)
 		LIBLCD_ERR("error adding to dispatch loop");
 		goto fail2;
 	}
-	LIBLCD_MSG("%s, child %d registration complete\n",
-			__func__, lcd_r1());
 
 	lcd_channels[lcd_r1()] = chnl;
+
+	LIBLCD_MSG("%s, child %d registration complete!\n", __func__, lcd_r1());
+	printk("%s, chnl: %p lcd_channels[%lu]: %p\n", __func__, chnl, lcd_r1(), lcd_channels[lcd_r1()]);
 
 	g_ndo_start_xmit_hidden_args->lcds[lcd_r1()].lcd_async_chnl = lcd_channels[lcd_r1()];
 	g_ndo_start_xmit_hidden_args->lcds[lcd_r1()].lcd_sync_ep = new_sync_eps[lcd_r1()];
@@ -2431,6 +2447,7 @@ int prep_channel(struct trampoline_hidden_args *hidden_args, int queue)
 	if (queue) {
 		from_sync_end = hidden_args->lcds[queue].lcd_sync_ep;
 		async_chnl = hidden_args->lcds[queue].lcd_async_chnl;
+		current->ptstate->queue_mapping = queue;
 	} else {
 		from_sync_end = hidden_args->sync_ep;
 		async_chnl = hidden_args->async_chnl;
@@ -2735,33 +2752,57 @@ fail_async:
 }
 #endif /* CONSUME_SKB_NO_HASHING */
 
-int trigger_exit_to_lcd(struct thc_channel *_channel, enum dispatch_t disp)
+int trigger_exit_to_lcd(struct thc_channel *_channel)
+{
+	struct fipc_message *_request;
+	int ret;
+	unsigned int request_cookie;
+
+	ret = async_msg_blocking_send_start(_channel, &_request);
+
+	if (ret) {
+		LIBLCD_ERR("failed to get a send slot");
+		goto fail_async;
+	}
+
+	async_msg_set_fn_type(_request, TRIGGER_EXIT);
+
+	/* No need to wait for a response here */
+	printk("%s, sending EXIT to %p\n", __func__, _channel);
+
+	ret = thc_ipc_send_request(_channel, _request, &request_cookie);
+
+	awe_mapper_remove_id(request_cookie);
+
+fail_async:
+	return ret;
+}
+
+int cleanup_channels(struct thc_channel *_channel)
 {
 	struct fipc_message *_request;
 	int ret;
 	int i;
 	unsigned int request_cookie;
 
-	ret = async_msg_blocking_send_start(_channel,
-		&_request);
-	if (ret) {
-		LIBLCD_ERR("failed to get a send slot");
-		goto fail_async;
+	for (i = 0; i < NUM_LCDS; i++) {
+		ret = async_msg_blocking_send_start(lcd_channels[i], &_request);
+
+		if (ret) {
+			LIBLCD_ERR("failed to get a send slot");
+			goto fail_async;
+		}
+		async_msg_set_fn_type(_request, TRIGGER_CLEAN);
+
+		/* No need to wait for a response here */
+		printk("%s, sending CLEANUP to %p\n", __func__,
+					lcd_channels[i]);
+		ret = thc_ipc_send_request(lcd_channels[i], _request,
+					&request_cookie);
+
+		awe_mapper_remove_id(request_cookie);
 	}
-	async_msg_set_fn_type(_request,
-			disp);
 
-	/* No need to wait for a response here */
-	ret = thc_ipc_send_request(_channel,
-			_request,
-			&request_cookie);
-
-
-	// free the pointers
-	// there is a race if get_stats try to operate on this data at the same time
-	// but quite unlikely.
-	if (disp == TRIGGER_CLEAN) {
-	thread = 0;
 	for (i = 0; i < NUM_CORES; i++) {
 		if (ptrs[i]) {
 			if (ptrs[i]->exited) {
@@ -2771,15 +2812,7 @@ int trigger_exit_to_lcd(struct thc_channel *_channel, enum dispatch_t disp)
 			}
 		}
 	}
-	}
 
-	if (ret) {
-		LIBLCD_ERR("thc_ipc send");
-		goto fail_ipc;
-	}
-	awe_mapper_remove_id(request_cookie);
 fail_async:
-fail_ipc:
 	return ret;
 }
-

@@ -41,7 +41,6 @@ static void main_and_loop(void)
 	unsigned long long disp_loop_cycles = 0, percent = 0;
 #endif
 	struct fipc_message *msg;
-	int _local_lcd_id = current_lcd_id;
 
 	DO_FINISH(
 
@@ -88,9 +87,12 @@ static void main_and_loop(void)
 					percent = 0;
 				}
 #endif
-				if (disp_loop_cycles)
-					LIBLCD_MSG("total_time: %llu | disp_loop %llu | percent %llu",
-						diff_g, disp_loop_cycles, percent);
+				if (disp_loop_cycles) {
+					u64 div = diff_g / disp_loop_cycles;
+					percent = 100;
+					LIBLCD_MSG("total_time: %llu | disp_loop %llu | div: %llu percent: %llu",
+						diff_g, disp_loop_cycles, div, percent/div);
+				}
 				start_g = lcd_RDTSC_START();
 				// reset disp_loop_cycles
 				disp_loop_cycles = 0;
@@ -100,7 +102,7 @@ static void main_and_loop(void)
 			/*
 			 * Do RR async receive
 			 */
-			list_for_each_entry(curr_item, &(ch_grp[_local_lcd_id].head), list) {
+			list_for_each_entry(curr_item, &(ch_grp[current_lcd_id].head), list) {
 				if (curr_item->xmit_channel) {
 					ret = fipc_nonblocking_recv_start_if(
 						thc_channel_to_fipc(

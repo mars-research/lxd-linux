@@ -35,7 +35,8 @@ struct net_info {
 };
 static LIST_HEAD(net_infos);
 
-extern int trigger_exit_to_lcd(struct thc_channel *_channel, enum dispatch_t);
+extern int trigger_exit_to_lcd(struct thc_channel *_channel);
+extern int cleanup_channels(struct thc_channel *_channel);
 
 int register_child(void);
 
@@ -250,12 +251,12 @@ static void loop(cptr_t register_chnl)
 			if (unload_lcd || clean_up) {
 				if (__get_net(&net)) {
 					if (unload_lcd) {
-						trigger_exit_to_lcd(net->chnl, TRIGGER_EXIT);
+						trigger_exit_to_lcd(net->chnl);
 						unload_lcd ^= unload_lcd;
 					}
 					if (clean_up) {
 						LIBLCD_MSG("cleanup triggered"); 
-						trigger_exit_to_lcd(net->chnl, TRIGGER_CLEAN);
+						cleanup_channels(net->chnl);
 						clean_up ^= clean_up;
 					}
 				}

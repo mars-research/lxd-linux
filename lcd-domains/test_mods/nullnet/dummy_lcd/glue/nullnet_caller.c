@@ -451,6 +451,8 @@ int create_async_channel(void)
 	xmit_ch_item->xmit_channel = true;
 
 	thc_channel_group_item_add(&ch_grp[current_lcd_id], xmit_ch_item);
+	printk("%s:%d adding chnl: %p to group: %p", __func__, current_lcd_id,
+				xmit_ch_item, &ch_grp[current_lcd_id]);
 
 	return ret;
 fail3:
@@ -462,12 +464,12 @@ fail1:
 	return ret;
 }
 
-struct thc_channel_group_item *ptrs[32];
+struct thc_channel_group_item *ptrs[NUM_LCDS][32];
+static int idx[NUM_LCDS] = {0};
 
 int create_one_async_channel(struct thc_channel **chnl, cptr_t *tx, cptr_t *rx)
 {
 	int ret;
-	static int idx = 0;
 	struct thc_channel_group_item *xmit_ch_item;
 #ifdef ONE_SLOT
 	ret = setup_async_channel_0(tx, rx, chnl);
@@ -487,7 +489,10 @@ int create_one_async_channel(struct thc_channel **chnl, cptr_t *tx, cptr_t *rx)
 
 	thc_channel_group_item_add(&ch_grp[current_lcd_id], xmit_ch_item);
 
-	ptrs[idx++%32] = xmit_ch_item;
+	printk("%s:%d adding chnl: %p to group: %p", __func__, current_lcd_id,
+				xmit_ch_item, &ch_grp[current_lcd_id]);
+
+	ptrs[current_lcd_id][idx[current_lcd_id]++%32] = xmit_ch_item;
 
 	return 0;
 }
@@ -1653,11 +1658,11 @@ int cleanup_channel_group(struct fipc_message *request, struct thc_channel *chan
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 
 	for (i = 0; i < 32; i++) {
-		if (ptrs[i]) {
-			thc_channel_group_item_remove(&ch_grp[current_lcd_id], ptrs[i]);
-			destroy_async_channel(ptrs[i]->channel);
-			kfree(ptrs[i]);
-			ptrs[i] = NULL;
+		if (ptrs[current_lcd_id][i]) {
+			thc_channel_group_item_remove(&ch_grp[current_lcd_id], ptrs[current_lcd_id][i]);
+			destroy_async_channel(ptrs[current_lcd_id][i]->channel);
+			kfree(ptrs[current_lcd_id][i]);
+			ptrs[current_lcd_id][i] = NULL;
 		} //if
 	} //for
 

@@ -22,8 +22,11 @@ struct lcd_create_ctx **dummy_ctxs;
 cptr_t *dummy_lcds;
 cptr_t net_chnl;
 cptr_t net_chnl_domain_cptr, dummy_chnl_domain_cptr;
-int num_lcds = NUM_LCDS;
 cptr_t *dummy_chnl_domain_cptrs;
+
+static int num_lcds = NUM_LCDS;
+module_param(num_lcds, int, 0);
+MODULE_PARM_DESC(num_lcds, "Number of LCDs to launch");
 
 static int boot_main(void)
 {
@@ -142,6 +145,8 @@ static int boot_main(void)
 		goto fail8;
 	}
 	
+	msleep_interruptible(3000);
+
 	LIBLCD_MSG("starting dummy ethernet...\n");
 	for (i = 0; i < num_lcds; i++) {
 		LIBLCD_MSG("Starting LCD %d ", i);
@@ -150,6 +155,7 @@ static int boot_main(void)
 			LIBLCD_ERR("failed to start dummy lcd");
 			goto fail9;
 		}
+		msleep_interruptible(3000);
 	}
 	/*
 	 * Wait for 4 seconds
