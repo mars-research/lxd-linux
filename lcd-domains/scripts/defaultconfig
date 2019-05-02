@@ -57,3 +57,7 @@ ixgbe/net_klcd nonisolated
 nullnet/boot nonisolated
 nullnet/dummy_lcd isolated
 nullnet/net_klcd nonisolated
+
+nullb/boot nonisolated
+nullb/nullb_lcd isolated
+nullb/blk_klcd nonisolated

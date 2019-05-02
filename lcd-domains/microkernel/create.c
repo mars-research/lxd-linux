@@ -237,6 +237,7 @@ int __lcd_create(struct lcd *caller, cptr_t slot, int lcd_id)
 	snprintf(lcd_name, LCD_KTHREAD_NAME_SZ, "lcd/%d", lcd_id);
 
 	ret = __lcd_create_no_vm(&lcd, lcd_name, lcd_id);
+
 	if (ret) {
 		LCD_ERR("lcd create");
 		goto fail1;
@@ -281,6 +282,7 @@ int __lcd_create_klcd(struct lcd *caller, cptr_t slot)
 	 * Basic init of lcd
 	 */
 	ret = __lcd_create_no_vm(&lcd, "klcd", 0);
+
 	if (ret) {
 		LCD_ERR("lcd create");
 		goto fail1;

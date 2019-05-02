@@ -46,6 +46,51 @@
 #include <linux/buffer_head.h> /* for try_to_free_buffers */
 
 #include <asm/mman.h>
+#include <linux/blk-bench.h>
+#include <linux/bdump.h>
+
+extern struct request_queue *queue_nullb;
+//INIT_BENCHMARK_DATA(fpwrite_range);
+//INIT_BENCHMARK_DATA(do_generic_r);
+//INIT_BENCHMARK_DATA(directIO);
+
+static bool __always_inline check_fio(void) {
+	if(strcmp(current->comm, "fio") == 0) {
+		return true;
+	}
+	return false;
+}
+
+
+//static void __always_inline bench_start_fp(void) {
+//	BENCH_BEGIN(fpwrite_range);
+//}
+
+//static void __always_inline bench_end_fp(void) {
+//	BENCH_END(fpwrite_range);
+//}
+
+//static void __always_inline bench_start_gr(void) {
+//	BENCH_BEGIN(do_generic_r);
+//}
+
+//static void __always_inline bench_end_gr(void) {
+//	BENCH_END(do_generic_r);
+//}
+
+//static void __always_inline bench_start_di(void) {
+//	BENCH_BEGIN(directIO);
+//}
+
+//static void __always_inline bench_end_di(void) {
+//	BENCH_END(directIO);
+//}
+
+//void bdump_data(void) {
+//	BENCH_COMPUTE_STAT(fpwrite_range);
+//	BENCH_COMPUTE_STAT(do_generic_r);
+//	BENCH_COMPUTE_STAT(directIO);
+//}
 
 /*
  * Shared mappings implemented 30.11.1994. It's not fully working yet,
@@ -1920,7 +1965,8 @@ generic_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 	struct file *file = iocb->ki_filp;
 	ssize_t retval = 0;
 	size_t count = iov_iter_count(iter);
-
+	
+	//(check_fio() == true) ? printk("[%s:%s] entering read_iter \n", __FILE__, __func__) : -1;
 	if (!count)
 		goto out; /* skip atime */
 
@@ -1930,11 +1976,21 @@ generic_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 		loff_t size;
 
 		size = i_size_read(inode);
+
+		////(check_fio() == true) ? printk("[%s:%s] calling filemap_write_and_wait_range \n",__FILE__, __func__) : -1;
+
+		//(check_fio() == true) ? bench_start_fp() : -1;
+		
 		retval = filemap_write_and_wait_range(mapping, iocb->ki_pos,
 					iocb->ki_pos + count - 1);
+		//(check_fio() == true) ? bench_end_fp() : -1;
+		
 		if (!retval) {
 			struct iov_iter data = *iter;
+			//(check_fio() == true) ? printk("[%s:%s] a_ops -> direct_IO \n", __FILE__, __func__) : -1;
+			//(check_fio() == true) ? bench_start_di() : -1;
 			retval = mapping->a_ops->direct_IO(iocb, &data);
+			//(check_fio() == true) ? bench_end_di() : -1;
 		}
 
 		if (retval > 0) {
@@ -1958,7 +2014,10 @@ generic_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 		}
 	}
 
+	//(check_fio() == true) ? printk("[%s:%s] doing generic_file_read \n", __FILE__, __func__) : -1;
+	//(check_fio() == true) ? bench_start_gr() : -1;
 	retval = do_generic_file_read(file, &iocb->ki_pos, iter, retval);
+	//(check_fio() == true) ? bench_end_gr() : -1;
 out:
 	return retval;
 }

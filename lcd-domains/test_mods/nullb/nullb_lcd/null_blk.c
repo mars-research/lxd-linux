@@ -1,3 +1,7 @@
+#ifdef LCD_ISOLATE
+#include <lcd_config/pre_hook.h>
+#endif
+
 #include <linux/module.h>
 
 #include <linux/moduleparam.h>
@@ -10,16 +14,15 @@
 #include <linux/hrtimer.h>
 #include <linux/lightnvm.h>
 
-#include <linux/cdev.h>
-#include <linux/device.h>
-#include <linux/slab.h>
-#include <linux/mm.h>
+#ifdef LCD_ISOLATE
+#include <lcd_config/post_hook.h>
+#endif
 
-#include <linux/blk-bench.h>
+/* Hack to use nullb around without 
+ * marshalling to the kernel, because the
+ * kernel doesn't use this */
+void *driver_data_g =  NULL;
 
-INIT_BENCHMARK_DATA(queue_rq);
-
-extern struct request_queue *queue_nullb;
 struct nullb_cmd {
 	struct list_head list;
 	struct llist_node ll_list;
@@ -28,7 +31,9 @@ struct nullb_cmd {
 	struct bio *bio;
 	unsigned int tag;
 	struct nullb_queue *nq;
+#ifndef LCD_ISOLATE
 	struct hrtimer timer;
+#endif
 };
 
 struct nullb_queue {
@@ -39,13 +44,26 @@ struct nullb_queue {
 	struct nullb_cmd *cmds;
 };
 
+struct blk_mq_tag_set_container {
+	struct blk_mq_tag_set set;
+	u64 ref1;
+	u64 ref2;
+};
+
 struct nullb {
 	struct list_head list;
 	unsigned int index;
 	struct request_queue *q;
 	struct gendisk *disk;
+#ifndef LCD_ISOLATE
 	struct blk_mq_tag_set tag_set;
+#else
+	struct blk_mq_tag_set_container 
+		 *tag_set_container;
+#endif
+#ifndef LCD_ISOLATE
 	struct hrtimer timer;
+#endif
 	unsigned int queue_depth;
 	spinlock_t lock;
 
@@ -58,19 +76,9 @@ static LIST_HEAD(nullb_list);
 static struct mutex lock;
 static int null_major;
 static int nullb_indexes;
+#ifndef LCD_ISOLATE
 static struct kmem_cache *ppa_cache;
-
-static struct class *drv_class;
-static struct cdev *cdev_local = NULL;
-static struct device *dev = NULL;
-dev_t dev_no = 0;
-
-#define MAX_INFO_ENTRIES 100
-struct lcd_user_info {
-	struct page *p[MAX_INFO_ENTRIES];
-        unsigned int order[MAX_INFO_ENTRIES];
-};
-
+#endif
 enum {
 	NULL_IRQ_NONE		= 0,
 	NULL_IRQ_SOFTIRQ	= 1,
@@ -83,16 +91,30 @@ enum {
 	NULL_Q_MQ		= 2,
 };
 
+#ifdef LCD_ISOLATE
+/*TODO have to hardcode a value that nr_online_cpus return 
+ * I doubt that nr_online_cpus will be accessible from here */
+static int submit_queues;
+#else
 static int submit_queues;
 module_param(submit_queues, int, S_IRUGO);
 MODULE_PARM_DESC(submit_queues, "Number of submission queues");
+#endif
 
+#ifdef LCD_ISOLATE
+static int home_node = NUMA_NO_NODE;
+#else
 static int home_node = NUMA_NO_NODE;
 module_param(home_node, int, S_IRUGO);
 MODULE_PARM_DESC(home_node, "Home node for the device");
+#endif
 
+#ifdef LCD_ISOLATE
+static int queue_mode = NULL_Q_MQ;
+#else
 static int queue_mode = NULL_Q_MQ;
 
+/* TODO revisit SYSFS operations  */
 static int null_param_store_val(const char *str, int *val, int min, int max)
 {
 	int ret, new_val;
@@ -120,25 +142,44 @@ static const struct kernel_param_ops null_queue_mode_param_ops = {
 
 device_param_cb(queue_mode, &null_queue_mode_param_ops, &queue_mode, S_IRUGO);
 MODULE_PARM_DESC(queue_mode, "Block interface to use (0=bio,1=rq,2=multiqueue)");
+#endif
 
+#ifdef LCD_ISOLATE
+static int gb = 250;
+#else
 static int gb = 250;
 module_param(gb, int, S_IRUGO);
 MODULE_PARM_DESC(gb, "Size in GB");
+#endif
 
+#ifdef LCD_ISOLATE
+static int bs = 512;
+#else
 static int bs = 512;
 module_param(bs, int, S_IRUGO);
 MODULE_PARM_DESC(bs, "Block size (in bytes)");
+#endif
 
+#ifdef LCD_ISOLATE
 static int nr_devices = 1;
+#else
+static int nr_devices = 2;
 module_param(nr_devices, int, S_IRUGO);
 MODULE_PARM_DESC(nr_devices, "Number of devices to register");
+#endif
 
+#ifdef LCD_ISOLATE
+static bool use_lightnvm = 0;
+#else
 static bool use_lightnvm;
 module_param(use_lightnvm, bool, S_IRUGO);
 MODULE_PARM_DESC(use_lightnvm, "Register as a LightNVM device");
+#endif
 
-//static int irqmode = NULL_IRQ_SOFTIRQ;
+#ifdef LCD_ISOLATE
 static int irqmode = NULL_IRQ_NONE;
+#else
+static int irqmode = NULL_IRQ_SOFTIRQ;
 
 static int null_set_irqmode(const char *str, const struct kernel_param *kp)
 {
@@ -153,27 +194,42 @@ static const struct kernel_param_ops null_irqmode_param_ops = {
 
 device_param_cb(irqmode, &null_irqmode_param_ops, &irqmode, S_IRUGO);
 MODULE_PARM_DESC(irqmode, "IRQ completion handler. 0-none, 1-softirq, 2-timer");
+#endif
 
+#ifndef LCD_ISOLATE
 static unsigned long completion_nsec = 10000;
 module_param(completion_nsec, ulong, S_IRUGO);
 MODULE_PARM_DESC(completion_nsec, "Time in ns to complete a request in hardware. Default: 10,000ns");
+#endif
 
+#ifdef LCD_ISOLATE
+static int hw_queue_depth = 64;
+#else
 static int hw_queue_depth = 64;
 module_param(hw_queue_depth, int, S_IRUGO);
 MODULE_PARM_DESC(hw_queue_depth, "Queue depth for each hardware queue. Default: 64");
+#endif
 
+#ifdef LCD_ISOLATE
+static bool use_per_node_hctx = false;
+#else
 static bool use_per_node_hctx = false;
 module_param(use_per_node_hctx, bool, S_IRUGO);
 MODULE_PARM_DESC(use_per_node_hctx, "Use per-node allocation for hardware context queues. Default: false");
+#endif
 
 static void put_tag(struct nullb_queue *nq, unsigned int tag)
 {
 	clear_bit_unlock(tag, nq->tag_map);
 
+#ifndef LCD_ISOLATE 
+	/* Used only in the case of BIOs */
 	if (waitqueue_active(&nq->wait))
 		wake_up(&nq->wait);
+#endif
 }
 
+#ifndef LCD_ISOLATE 
 static unsigned int get_tag(struct nullb_queue *nq)
 {
 	unsigned int tag;
@@ -186,87 +242,14 @@ static unsigned int get_tag(struct nullb_queue *nq)
 
 	return tag;
 }
+#endif
 
 static void free_cmd(struct nullb_cmd *cmd)
 {
 	put_tag(cmd->nq, cmd->tag);
 }
 
-#define DRV_MAX_DEVS    1
-int lcd_setup_chardev(const char* dev_name, const struct file_operations* fops)
-{
-        int ret = 0;
-
-        printk("mod init \n");
-        drv_class = class_create(THIS_MODULE, dev_name);
-        if (IS_ERR(drv_class)) {
-                printk(KERN_ERR "class_create failed \n");
-                ret = PTR_ERR(drv_class);
-                goto exit_no_class;
-        }
-
-        /* Dynamic registration of major number */
-        printk("alloc chardev \n");
-        ret = alloc_chrdev_region(&dev_no, 0, DRV_MAX_DEVS, dev_name);
-        if (ret < 0){
-                printk(KERN_ERR "Couldn't alloc chardev region \n");
-                goto exit_chrdev_reg;
-        }
-
-        printk("cdev alloc \n");
-        cdev_local = cdev_alloc();
-        if(!cdev_local) {
-                ret = -ENOMEM;
-                printk("cdev_alloc- not enough memory \n");
-                goto exit_cdev_alloc;
-        }
-
-        cdev_local->owner = THIS_MODULE;
-        cdev_local->ops = fops;
-
-        printk("cdev add \n");
-        ret = cdev_add(cdev_local, dev_no, 1);
-        if(ret) {
-                printk("Cannot add cdev device \n");
-                goto exit_dev_add;
-        }
-
-        printk("dev create \n");
-        dev = device_create(drv_class, NULL, dev_no, NULL, "%s", dev_name);
-        if(IS_ERR(dev)) {
-                ret = PTR_ERR(dev);
-                printk("Cannot create device node entry \n");
-                goto exit_dev_create;
-        }
-
-        printk("init done \n");
-        return 0;
-
-exit_dev_create:
-
-exit_dev_add:
-        cdev_del(cdev_local);
-
-exit_cdev_alloc:
-        unregister_chrdev_region(dev_no, DRV_MAX_DEVS);
-
-exit_chrdev_reg:
-        class_destroy(drv_class);
-
-exit_no_class:
-        return ret;
-
-}
-
-void lcd_teardown_chardev(void)
-{
-        cdev_del(cdev_local);
-        device_del(dev);
-        unregister_chrdev_region(dev_no, DRV_MAX_DEVS);
-        class_destroy(drv_class);
-}
-
-
+#ifndef LCD_ISOLATE 
 static enum hrtimer_restart null_cmd_timer_expired(struct hrtimer *timer);
 
 static struct nullb_cmd *__alloc_cmd(struct nullb_queue *nq)
@@ -311,31 +294,37 @@ static struct nullb_cmd *alloc_cmd(struct nullb_queue *nq, int can_wait)
 	finish_wait(&nq->wait, &wait);
 	return cmd;
 }
+#endif
 
 static void end_cmd(struct nullb_cmd *cmd)
 {
-	struct request_queue *q = NULL;
+	//struct request_queue *q = NULL;
 
-	if (cmd->rq)
-		q = cmd->rq->q;
+	//if (cmd->rq)
+	//	q = cmd->rq->q;
 
 	switch (queue_mode)  {
 	case NULL_Q_MQ:
-		//BENCH_BEGIN(queue_rq);
+		//printk("drv: calling end \n");
 		blk_mq_end_request(cmd->rq, 0);
-		//BENCH_END(queue_rq);
+		//printk("drv: calling end done \n");
 		return;
 	case NULL_Q_RQ:
+#ifndef LCD_ISOLATE
 		INIT_LIST_HEAD(&cmd->rq->queuelist);
 		blk_end_request_all(cmd->rq, 0);
+#endif
 		break;
 	case NULL_Q_BIO:
+#ifndef LCD_ISOLATE
 		bio_endio(cmd->bio);
+#endif
 		break;
 	}
 
 	free_cmd(cmd);
 
+#ifndef LCD_ISOLATE
 	/* Restart queue if needed, as we are freeing a tag */
 	if (queue_mode == NULL_Q_RQ && blk_queue_stopped(q)) {
 		unsigned long flags;
@@ -344,25 +333,27 @@ static void end_cmd(struct nullb_cmd *cmd)
 		blk_start_queue_async(q);
 		spin_unlock_irqrestore(q->queue_lock, flags);
 	}
+#endif
 }
 
+#ifndef LCD_ISOLATE 
 static enum hrtimer_restart null_cmd_timer_expired(struct hrtimer *timer)
 {
 	end_cmd(container_of(timer, struct nullb_cmd, timer));
 
 	return HRTIMER_NORESTART;
 }
-
 static void null_cmd_end_timer(struct nullb_cmd *cmd)
 {
+
 	ktime_t kt = ktime_set(0, completion_nsec);
 
 	hrtimer_start(&cmd->timer, kt, HRTIMER_MODE_REL);
 }
 
+#endif
 static void null_softirq_done_fn(struct request *rq)
 {
-	printk("calling sirq done function \n");
 	if (queue_mode == NULL_Q_MQ)
 		end_cmd(blk_mq_rq_to_pdu(rq));
 	else
@@ -374,9 +365,9 @@ static inline void null_handle_cmd(struct nullb_cmd *cmd)
 	/* Complete IO by inline, softirq or timer */
 	switch (irqmode) {
 	case NULL_IRQ_SOFTIRQ:
+		#ifndef LCD_ISOLATE 
 		switch (queue_mode)  {
 		case NULL_Q_MQ:
-			//printk("calling complete request \n");
 			blk_mq_complete_request(cmd->rq, cmd->rq->errors);
 			break;
 		case NULL_Q_RQ:
@@ -389,16 +380,20 @@ static inline void null_handle_cmd(struct nullb_cmd *cmd)
 			end_cmd(cmd);
 			break;
 		}
+		#endif
 		break;
 	case NULL_IRQ_NONE:
 		end_cmd(cmd);
 		break;
 	case NULL_IRQ_TIMER:
+		#ifndef LCD_ISOLATE 
 		null_cmd_end_timer(cmd);
+		#endif
 		break;
 	}
 }
 
+#ifndef LCD_ISOLATE 
 static struct nullb_queue *nullb_to_queue(struct nullb *nullb)
 {
 	int index = 0;
@@ -451,104 +446,63 @@ static void null_request_fn(struct request_queue *q)
 		spin_lock_irq(q->queue_lock);
 	}
 }
-
+#endif
 static int null_queue_rq(struct blk_mq_hw_ctx *hctx,
 			 const struct blk_mq_queue_data *bd)
 {
-	struct nullb_cmd *cmd = blk_mq_rq_to_pdu(bd->rq);
-	//static int count = 0;
-	
-	//count++;
-	//if(count == 100) {
-	//	printk("**** queue_rq -> current:%p pid: %d name:%s\n",current, current->pid, current->comm);
-	//	dump_stack();
-	//	count = 0;
+	//struct nullb_cmd *cmd = blk_mq_rq_to_pdu(bd->rq);
+	struct nullb_cmd cmd_l; 
+	struct nullb_cmd *cmd = &cmd_l; 
+	struct nullb *nullb = driver_data_g;
+	struct nullb_queue *nq = &nullb->queues[hctx->queue_num];
 
+	//cmd= kzalloc(sizeof(*cmd), GFP_KERNEL);
+	//if(!cmd) {
+	//	printk("alloc cmd failed in queue_rq \n");
+	//	return -ENOMEM;
 	//}
+
 	if (irqmode == NULL_IRQ_TIMER) {
+#ifndef LCD_ISOLATE
 		hrtimer_init(&cmd->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 		cmd->timer.function = null_cmd_timer_expired;
+#endif
 	}
 	cmd->rq = bd->rq;
-	cmd->nq = hctx->driver_data;
-
-	//BENCH_BEGIN(queue_rq);
-	//printk("**** start_req -> name:%p req:%p \n",current->comm, bd->rq);
-	blk_mq_start_request(bd->rq);
-	//BENCH_END(queue_rq);
+	//cmd->nq = hctx->driver_data;
+	//AB- handled differently!
+	cmd->nq = nq;
 	
+	
+	//printk("drv: calling start \n");
+	blk_mq_start_request(bd->rq);
+	//printk("drv: calling start done \n");
+
 	null_handle_cmd(cmd);
-	//BENCH_END(queue_rq);
+	
+	//kfree(cmd);
+	
+	//printk("queue_rq returing from driver \n");
 	return BLK_MQ_RQ_QUEUE_OK;
 }
-
-void queue_rq_async(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_async *bd_async)
-{
-
-	//BENCH_BEGIN(queue_rq);
-	while(!list_empty(bd_async->rq_list)) {
-		struct request *rq;
-		struct blk_mq_queue_data bd;
-		int ret; 
-	
-		rq = list_first_entry(bd_async->rq_list, struct request, queuelist);
-		list_del_init(&rq->queuelist);
-
-		bd.rq = rq;
-		bd.list = bd_async->list;
-		bd.last = list_empty(bd_async->rq_list);
-	
-		//call queue_rq handler
-		ret = null_queue_rq(ctx, &bd);
-
-		switch (ret) {
-		case BLK_MQ_RQ_QUEUE_OK:
-			bd_async->queued++;
-			break;
-		case BLK_MQ_RQ_QUEUE_BUSY:
-			list_add(&rq->queuelist, bd_async->rq_list);
-			__blk_mq_requeue_request(rq);
-			break;
-		default:
-			pr_err("blk-mq: bad return on queue: %d\n", ret);
-		case BLK_MQ_RQ_QUEUE_ERROR:
-			if(rq) {
-				rq->errors = -EIO;
-				blk_mq_end_request(rq, rq->errors);
-			}
-			break;
-		}
-
-		if (ret == BLK_MQ_RQ_QUEUE_BUSY)
-			break;
-
-		/*
-		 * We've done the first request. If we have more than 1
-		 * left in the list, set dptr to defer issue.
-		 */
-		if (!bd_async->list && bd_async->rq_list->next != bd_async->rq_list->prev)
-			bd_async->list = bd_async->drv_list;
-
-	}
-	//BENCH_END(queue_rq);
-
-	return;
-}
-
 
 static void null_init_queue(struct nullb *nullb, struct nullb_queue *nq)
 {
 	BUG_ON(!nullb);
 	BUG_ON(!nq);
 
-	init_waitqueue_head(&nq->wait);
+	/* TODO Commented for the moment, have to see if
+	 * init_hctx is invoked and nq->wait is useful for
+	 * MQ + IRQ_NONE combo! */
+	//init_waitqueue_head(&nq->wait);
 	nq->queue_depth = nullb->queue_depth;
 }
 
 static int null_init_hctx(struct blk_mq_hw_ctx *hctx, void *data,
 			  unsigned int index)
 {
-	struct nullb *nullb = data;
+	//struct nullb *nullb = data;
+	struct nullb *nullb = driver_data_g;
 	struct nullb_queue *nq = &nullb->queues[index];
 
 	hctx->driver_data = nq;
@@ -558,13 +512,29 @@ static int null_init_hctx(struct blk_mq_hw_ctx *hctx, void *data,
 	return 0;
 }
 
+#ifdef LCD_ISOLATE
+struct blk_mq_ops_container {
+	struct blk_mq_ops mq_ops;
+	u64 ref1;
+	u64 ref2;
+};
+
+static struct blk_mq_ops_container null_mq_ops_container = {
+	.mq_ops = {
+		.queue_rq       = null_queue_rq,
+		.map_queue      = blk_mq_map_queue,
+		.init_hctx	= null_init_hctx,
+		.complete	= null_softirq_done_fn,
+	}
+};
+#else
 static struct blk_mq_ops null_mq_ops = {
 	.queue_rq       = null_queue_rq,
-	//.queue_rq_async = queue_rq_async,
 	.map_queue      = blk_mq_map_queue,
 	.init_hctx	= null_init_hctx,
 	.complete	= null_softirq_done_fn,
 };
+#endif
 
 static void cleanup_queue(struct nullb_queue *nq)
 {
@@ -584,21 +554,26 @@ static void cleanup_queues(struct nullb *nullb)
 
 static void null_del_dev(struct nullb *nullb)
 {
+	printk("inside null del dev \n");
 	list_del_init(&nullb->list);
-
-	if (use_lightnvm)
+	if (use_lightnvm) {
+#ifndef LCD_ISOLATE
 		nvm_unregister(nullb->disk_name);
+#endif
+	}
 	else
 		del_gendisk(nullb->disk);
+	printk("calling blk_cleanup \n");
 	blk_cleanup_queue(nullb->q);
 	if (queue_mode == NULL_Q_MQ)
-		blk_mq_free_tag_set(&nullb->tag_set);
+		blk_mq_free_tag_set(&nullb->tag_set_container->set);
 	if (!use_lightnvm)
 		put_disk(nullb->disk);
 	cleanup_queues(nullb);
 	kfree(nullb);
 }
 
+#ifndef LCD_ISOLATE
 #ifdef CONFIG_NVM
 
 static void null_lnvm_end_io(struct request *rq, int error)
@@ -735,27 +710,48 @@ static struct nvm_dev_ops null_lnvm_dev_ops = {
 #else
 static struct nvm_dev_ops null_lnvm_dev_ops;
 #endif /* CONFIG_NVM */
+#endif /* LCD_ISOLATE */
 
 static int null_open(struct block_device *bdev, fmode_t mode)
 {
-	if(strcmp(current->comm, "systemd-udevd") == 0) {
-		return -ENODEV;
-	}
-	printk("^^^^ calling open current %p pid %d name %s \n", current, current->pid, current->comm);
 	return 0;
 }
 
 static void null_release(struct gendisk *disk, fmode_t mode)
 {
-	printk("^^^^ calling release current %p pid %d name %s \n", current, current->pid, current->comm);
 }
 
+#ifdef LCD_ISOLATE
+struct block_device_operations_container {
+	struct block_device_operations null_fops;
+	u64 ref1;
+	u64 ref2;
+};
+struct module_container {
+	struct module module;
+	u64 ref1;
+	u64 ref2;
+};
+
+static struct module_container module_container;
+
+static const struct block_device_operations_container null_ops_container = {
+	.null_fops = {
+		.owner =	&module_container.module,
+		.open =		null_open,
+		.release =	null_release,
+	}
+};
+
+#else
 static const struct block_device_operations null_fops = {
 	.owner =	THIS_MODULE,
 	.open =		null_open,
 	.release =	null_release,
 };
+#endif
 
+#ifndef LCD_ISOLATE
 static int setup_commands(struct nullb_queue *nq)
 {
 	struct nullb_cmd *cmd;
@@ -766,6 +762,7 @@ static int setup_commands(struct nullb_queue *nq)
 		return -ENOMEM;
 
 	tag_size = ALIGN(nq->queue_depth, BITS_PER_LONG) / BITS_PER_LONG;
+	printk("setup_commands - tag_size %d \n",tag_size);
 	nq->tag_map = kzalloc(tag_size * sizeof(unsigned long), GFP_KERNEL);
 	if (!nq->tag_map) {
 		kfree(nq->cmds);
@@ -781,6 +778,7 @@ static int setup_commands(struct nullb_queue *nq)
 
 	return 0;
 }
+#endif
 
 static int setup_queues(struct nullb *nullb)
 {
@@ -795,6 +793,7 @@ static int setup_queues(struct nullb *nullb)
 	return 0;
 }
 
+#ifndef LCD_ISOLATE
 static int init_driver_queues(struct nullb *nullb)
 {
 	struct nullb_queue *nq;
@@ -812,6 +811,7 @@ static int init_driver_queues(struct nullb *nullb)
 	}
 	return 0;
 }
+#endif
 
 static int null_add_dev(void)
 {
@@ -826,26 +826,62 @@ static int null_add_dev(void)
 		goto out;
 	}
 
+	/* TODO AB - There is a clean way of doing this by having a container for
+	 * nullb, but for now I am going to live with this hack */
+	driver_data_g = nullb;
+	
+#ifdef LCD_ISOLATE	
+	/* tag_set  */
+	nullb->tag_set_container = kzalloc_node(sizeof(*nullb->tag_set_container),
+					GFP_KERNEL, home_node);
+ 	if (!nullb->tag_set_container) {
+		rv = -ENOMEM;
+		goto out_free_nullb;
+	}
+#endif
 	spin_lock_init(&nullb->lock);
 
 	if (queue_mode == NULL_Q_MQ && use_per_node_hctx)
 		submit_queues = nr_online_nodes;
 
-	printk("submit_queues %d, nr_online_nodes %d \n",submit_queues, nr_online_nodes);
 	rv = setup_queues(nullb);
 	if (rv)
 		goto out_free_nullb;
 
 	if (queue_mode == NULL_Q_MQ) {
-		nullb->tag_set.ops = &null_mq_ops;
+#ifdef LCD_ISOLATE	
+		nullb->tag_set_container->set.ops = &null_mq_ops_container.mq_ops;
+		nullb->tag_set_container->set.nr_hw_queues = submit_queues;
+		printk("submit_queues %d \n",submit_queues);
+		nullb->tag_set_container->set.queue_depth = hw_queue_depth;
+		nullb->tag_set_container->set.numa_node = home_node;
+		nullb->tag_set_container->set.cmd_size	= sizeof(struct nullb_cmd);
+		nullb->tag_set_container->set.flags = BLK_MQ_F_SHOULD_MERGE;
+		/* TODO allocate memory for nullb in the klcd glue, exchange my_ref 
+			and other_ref */
+		nullb->tag_set_container->set.driver_data = nullb;
+
+		rv = blk_mq_alloc_tag_set(&nullb->tag_set_container->set);
+		printk("blk_mq alloc tag set retruns %d \n",rv);
+		if (rv)
+			goto out_cleanup_queues;
+
+		/*TODO AB - allocate request_queue container in the glue. IDL doesn't 
+			create container for ptr returned! */	
+		nullb->q = blk_mq_init_queue(&nullb->tag_set_container->set);
+		if (IS_ERR(nullb->q)) {
+			rv = -ENOMEM;
+			printk("blk_mq_init_queue returns NULL! \n");
+			goto out_cleanup_tags;
+		}
+#else
+		nullb->tag_set.ops = &null_mq_ops_container.mq_ops;
 		nullb->tag_set.nr_hw_queues = submit_queues;
 		nullb->tag_set.queue_depth = hw_queue_depth;
 		nullb->tag_set.numa_node = home_node;
 		nullb->tag_set.cmd_size	= sizeof(struct nullb_cmd);
 		nullb->tag_set.flags = BLK_MQ_F_SHOULD_MERGE;
 		nullb->tag_set.driver_data = nullb;
-
-		printk("using block MQ layer \n");
 		rv = blk_mq_alloc_tag_set(&nullb->tag_set);
 		if (rv)
 			goto out_cleanup_queues;
@@ -855,8 +891,12 @@ static int null_add_dev(void)
 			rv = -ENOMEM;
 			goto out_cleanup_tags;
 		}
-		queue_nullb = nullb->q;
-	} else if (queue_mode == NULL_Q_BIO) {
+#endif
+	} 
+
+#ifndef LCD_ISOLATE	
+	else if (queue_mode == NULL_Q_BIO) {
+
 		nullb->q = blk_alloc_queue_node(GFP_KERNEL, home_node);
 		if (!nullb->q) {
 			rv = -ENOMEM;
@@ -878,7 +918,8 @@ static int null_add_dev(void)
 		if (rv)
 			goto out_cleanup_blk_queue;
 	}
-
+#endif
+	printk("blk-mq-init queue returned from glue \n");
 	nullb->q->queuedata = nullb;
 	queue_flag_set_unlocked(QUEUE_FLAG_NONROT, nullb->q);
 	queue_flag_clear_unlocked(QUEUE_FLAG_ADD_RANDOM, nullb->q);
@@ -886,13 +927,14 @@ static int null_add_dev(void)
 	mutex_lock(&lock);
 	nullb->index = nullb_indexes++;
 	mutex_unlock(&lock);
+	
 
-	printk("---------------------------> block size: %d \n", bs);
 	blk_queue_logical_block_size(nullb->q, bs);
 	blk_queue_physical_block_size(nullb->q, bs);
 
 	sprintf(nullb->disk_name, "nullb%d", nullb->index);
 
+#ifndef LCD_ISOLATE
 	if (use_lightnvm) {
 		rv = nvm_register(nullb->q, nullb->disk_name,
 							&null_lnvm_dev_ops);
@@ -900,7 +942,7 @@ static int null_add_dev(void)
 			goto out_cleanup_blk_queue;
 		goto done;
 	}
-
+#endif
 	disk = nullb->disk = alloc_disk_node(1, home_node);
 	if (!disk) {
 		rv = -ENOMEM;
@@ -912,14 +954,23 @@ static int null_add_dev(void)
 	disk->flags |= GENHD_FL_EXT_DEVT | GENHD_FL_SUPPRESS_PARTITION_INFO;
 	disk->major		= null_major;
 	disk->first_minor	= nullb->index;
-	disk->fops		= &null_fops;
+	disk->fops		= &null_ops_container.null_fops;
+	/* TODO Nullb's memory will be allocated in the klcd glue, so my_ref for nullb
+		should be marshalled here */
 	disk->private_data	= nullb;
 	disk->queue		= nullb->q;
 	strncpy(disk->disk_name, nullb->disk_name, DISK_NAME_LEN);
 
-	add_disk(disk);
+	//add_disk(disk);
+	/* AB - add_disk is defined as a static inline in genhd.h 
+	 * so redefinition of the same symbol in the glue creates 
+	 * problems. Instead, I call the function what add_disk calls 
+	 * directly from here! */
+	device_add_disk(NULL, disk);
 
+#ifndef LCD_ISOLATE
 done:
+#endif
 	mutex_lock(&lock);
 	list_add_tail(&nullb->list, &nullb_list);
 	mutex_unlock(&lock);
@@ -927,174 +978,36 @@ done:
 	return 0;
 
 out_cleanup_lightnvm:
+#ifndef LCD_ISOLATE
+out_cleanup_lightnvm:
 	if (use_lightnvm)
 		nvm_unregister(nullb->disk_name);
 out_cleanup_blk_queue:
 	blk_cleanup_queue(nullb->q);
+#endif
+
 out_cleanup_tags:
 	if (queue_mode == NULL_Q_MQ)
-		blk_mq_free_tag_set(&nullb->tag_set);
+		blk_mq_free_tag_set(&nullb->tag_set_container->set);
+
 out_cleanup_queues:
 	cleanup_queues(nullb);
+
 out_free_nullb:
+#ifdef LCD_ISOLATE
+	if(nullb->tag_set_container)
+		kfree(nullb->tag_set_container);
+#endif
 	kfree(nullb);
 out:
 	return rv;
 }
 
-static int nullbu_open(struct inode *inode, struct file *filp)
-{
-        struct lcd_user_info *info;
-
-        printk("dev opened \n");
-
-        info = kzalloc(sizeof(*info), GFP_KERNEL);
-        if(!info) {
-                printk("cannot create user info \n");
-                return -ENOMEM;
-        }
-
-        filp->private_data = info;
-
-        return 0;
-}
-
-static int nullbu_close (struct inode *inode, struct file *filp)
-{
-        struct lcd_user_info *info;
-        int i = 0;
-
-        info = (struct lcd_user_info *)filp->private_data;
-
-        printk("dev closed \n");
-
-        for (i = 0; i < MAX_INFO_ENTRIES; i++) {
-                if (info->p[i]) {
-                        free_pages((unsigned long)page_address(info->p[i]), info->order[i]);
-                }
-        }
-
-        kfree(info);
-
-        return 0;
-}
-
-static int nullbu_mmap(struct file *filp, struct vm_area_struct *vma)
-{
-        int ret = 0;
-        struct lcd_user_info *info;
-        struct page *p;
-        unsigned long size = PAGE_ALIGN(vma->vm_end - vma->vm_start);
-        //unsigned long order = ilog2(roundup_pow_of_two(size >> PAGE_SHIFT));
-        unsigned long order = get_order(size);
-        unsigned long new_order = 0;
-        unsigned long rem_order = 0;
-        unsigned long vma_start = vma->vm_start;
-        //void *addr;
-        int i = 0;
-        int j = 0;
-
-	printk("**** vma->flags: %x \n", vma->vm_flags);
-        info = (struct lcd_user_info *)filp->private_data;
-        printk("[MMAP_DEV] begin: %lx end: %lx mmap_size: %ld pgoff: %ld order: %ld\n", vma->vm_start, vma->vm_end, size, vma->vm_pgoff, order);
-	
-/*	for(i = 0; i < (1 << order); i++) {
-		
-                printk("Begin mapping\n");
-		p = alloc_pages(GFP_KERNEL | __GFP_ZERO, 0);
-		if(!p) {
-			printk("alloc_page failed \n");
-			ret = -ENOMEM;
-			goto fail_alloc;
-		}
-
-		info->p[i] = p;
-		info->order[i] = 0;
-		
-		printk("vma->flags before: %lx \n", vma->vm_flags);
-		ret = vm_insert_page(vma, vma->vm_start, p);
-		if (ret < 0) {
-			printk("insert page failed ***************************** \n");
-			goto fail_alloc;
-		}
-		vma->vm_flags &= ~(VM_IO | VM_PFNMAP);
-		vma->vm_start += PAGE_SIZE;
-		printk("vma->flags cleared: %lx \n", vma->vm_flags);
-                printk("mapping done! \n");
-	}
-
-*/	
-	if(order >= MAX_ORDER) {
-                new_order = MAX_ORDER - 1;
-                rem_order = order - new_order;
-        } else {
-                new_order = order;
-                rem_order = 0;
-        }
-
-        
-	
-	for (i = 0; i < (1 << rem_order); i++) {
-		
-		//unsigned long va = 0;
-                
-                //Allocate physical pages for the requested size
-                printk("alloc_pages \n");
-                p = alloc_pages(GFP_KERNEL | __GFP_ZERO, new_order);
-                if(!p) {
-                        printk("alloc_page failed \n");
-                        ret = -ENOMEM;
-                        goto fail_alloc;
-                }
-
-                info->p[i] = p;
-                info->order[i] = new_order;
-		//va = (unsigned long) page_to_virt(p);
-
-                printk("remapping range \n");
-		for(j = 0; j < (1 << new_order); j++) {
-
-			printk("vma->flags before: %lx \n", vma->vm_flags);
-
-			//va += PAGE_SIZE * j;
-			page_ref_inc(p+j);
-
-			ret = vm_insert_page(vma, vma->vm_start, p+j);
-			//ret = vm_insert_page(vma, vma->vm_start, virt_to_page(va));
-			if (ret < 0) {
-				printk("insert page failed ***************************** %d \n", ret);
-				goto fail_alloc;
-			}
-			vma->vm_flags &= ~(VM_IO | VM_PFNMAP);
-			vma->vm_start += PAGE_SIZE;
-			printk("vma->flags cleared: %lx \n", vma->vm_flags);
-			printk("mapping done! \n");
-		}
-
-                printk("mapping done! \n");
-        }
-
-        vma->vm_start = vma_start;
-        printk("[MMAP_DONE] start: %lx end: %lx \n",vma->vm_start, vma->vm_end);
-        return 0;
-
-fail_alloc:
-	for(i = 0; i < MAX_INFO_ENTRIES; i++) {
-        	if(p) {
-                	free_pages((unsigned long)page_address(p), order);
-        	}
-	}
-        return ret;
-}
-
-struct file_operations nullb_user_fops = {
-        .owner  = THIS_MODULE,
-        .open   = nullbu_open,
-        .release = nullbu_close,
-        .mmap = nullbu_mmap,
-};
-
+#ifndef LCD_ISOLATE
 static int __init null_init(void)
+#else
+int null_init(void)
+#endif
 {
 	int ret = 0;
 	unsigned int i;
@@ -1135,6 +1048,7 @@ static int __init null_init(void)
 	if (null_major < 0)
 		return null_major;
 
+	#ifndef LCD_ISOLATE
 	if (use_lightnvm) {
 		ppa_cache = kmem_cache_create("ppa_cache", 64 * sizeof(u64),
 								0, 0, NULL);
@@ -1144,6 +1058,7 @@ static int __init null_init(void)
 			goto err_ppa;
 		}
 	}
+#endif
 
 	for (i = 0; i < nr_devices; i++) {
 		ret = null_add_dev();
@@ -1151,51 +1066,51 @@ static int __init null_init(void)
 			goto err_dev;
 	}
 
-        /* setup char dev region */
-        ret = lcd_setup_chardev("nullb_user", &nullb_user_fops);
-        if(ret) {
-                printk("setting up chardev failed \n");
-                ret = -ENODEV;
-                goto fail_setup;
-        }
-
-
-	pr_info("null: module loaded\n");
+	printk("null: module loaded\n");
 	return 0;
 
-fail_setup:
 err_dev:
 	while (!list_empty(&nullb_list)) {
 		nullb = list_entry(nullb_list.next, struct nullb, list);
 		null_del_dev(nullb);
 	}
+#ifndef LCD_ISOLATE
+	/* This should have been guarded around use_lightnvm 
+	 * in original code */
 	kmem_cache_destroy(ppa_cache);
 err_ppa:
+#endif
 	unregister_blkdev(null_major, "nullb");
 	return ret;
 }
 
+#ifndef LCD_ISOLATE
 static void __exit null_exit(void)
+#else
+void null_exit(void)
+#endif
 {
-	struct nullb *nullb;
-
-	//BENCH_COMPUTE_STAT(queue_rq);
+	//struct nullb *nullb;
 	
-	unregister_blkdev(null_major, "nullb");
-	lcd_teardown_chardev();
-	mutex_lock(&lock);
-	while (!list_empty(&nullb_list)) {
-		nullb = list_entry(nullb_list.next, struct nullb, list);
-		null_del_dev(nullb);
-	}
-	mutex_unlock(&lock);
+	//printk("calling unregister_blkdev \n");
+	//unregister_blkdev(null_major, "nullb");
 
+	//mutex_lock(&lock);
+	//while (!list_empty(&nullb_list)) {
+	//	nullb = list_entry(nullb_list.next, struct nullb, list);
+	//	null_del_dev(nullb);
+	//}
+	//mutex_unlock(&lock);
+
+#ifndef LCD_ISOLATE
 	kmem_cache_destroy(ppa_cache);
-	queue_nullb = NULL;
+#endif
 }
 
+#ifndef LCD_ISOLATE
 module_init(null_init);
 module_exit(null_exit);
 
 MODULE_AUTHOR("Jens Axboe <jaxboe@fusionio.com>");
 MODULE_LICENSE("GPL");
+#endif

@@ -33,12 +33,58 @@
 #include <linux/ratelimit.h>
 #include <linux/pm_runtime.h>
 #include <linux/blk-cgroup.h>
+#include <linux/blk-bench.h>
+#include <linux/bdump.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/block.h>
 
 #include "blk.h"
 #include "blk-mq.h"
+#include <linux/blk-lcd.h>
+
+//static bool __always_inline check_fio(void) {
+//	if(strcmp(current->comm, "fio") == 0) {
+//		return true;
+//	}
+//	return false;
+//}
+
+//INIT_BENCHMARK_DATA(plug);
+//INIT_BENCHMARK_DATA(plug_ot);
+//INIT_BENCHMARK_DATA(plug_ots);
+
+//static void __always_inline bench_start_plos(void) {
+//	BENCH_BEGIN(plug_ots);
+//}
+
+//static void __always_inline bench_end_plos(void) {
+//	BENCH_END(plug_ots);
+//}
+
+//static void __always_inline bench_start_plo(void) {
+//	BENCH_BEGIN(plug_ot);
+//}
+
+//static void __always_inline bench_end_plo(void) {
+//	BENCH_END(plug_ot);
+//}
+
+//static void __always_inline bench_start_pl(void) {
+//	BENCH_BEGIN(plug);
+//}
+
+//static void __always_inline bench_end_pl(void) {
+//	BENCH_END(plug);
+//}
+//void bdump_data(void) {
+//	BENCH_COMPUTE_STAT(plug);
+///	BENCH_COMPUTE_STAT(plug_ot);
+//	BENCH_COMPUTE_STAT(plug_ots);
+//}
+
+struct request_queue *queue_nullb = NULL;
+EXPORT_SYMBOL(queue_nullb);
 
 EXPORT_TRACEPOINT_SYMBOL_GPL(block_bio_remap);
 EXPORT_TRACEPOINT_SYMBOL_GPL(block_rq_remap);
@@ -148,11 +194,17 @@ static void req_bio_endio(struct request *rq, struct bio *bio,
 	if (unlikely(rq->cmd_flags & REQ_QUIET))
 		bio_set_flag(bio, BIO_QUIET);
 
+	//queue_nullb ? printk("bio_advance: %d \n",nbytes) : queue_nullb = NULL;
 	bio_advance(bio, nbytes);
 
 	/* don't actually finish bio if it's part of flush sequence */
-	if (bio->bi_iter.bi_size == 0 && !(rq->cmd_flags & REQ_FLUSH_SEQ))
+	if (bio->bi_iter.bi_size == 0 && !(rq->cmd_flags & REQ_FLUSH_SEQ)) {
+		//queue_nullb ? printk("calling bio_endio \n") : queue_nullb = NULL;
+		//BENCH_BEGIN(io_complete);
 		bio_endio(bio);
+		//BENCH_END(io_complete);
+
+	}
 }
 
 void blk_dump_rq_flags(struct request *rq, char *msg)
@@ -545,6 +597,12 @@ void blk_cleanup_queue(struct request_queue *q)
 {
 	spinlock_t *lock = q->queue_lock;
 
+	//if(queue_nullb) {
+	//	BENCH_COMPUTE_STAT(io_complete);
+	//	bdump_data();
+	//}
+	
+
 	/* mark @q DYING, no new request or merges will be allowed afterwards */
 	mutex_lock(&q->sysfs_lock);
 	blk_set_queue_dying(q);
@@ -691,13 +749,17 @@ static void blk_rq_timed_out_timer(unsigned long data)
 
 struct request_queue *blk_alloc_queue_node(gfp_t gfp_mask, int node_id)
 {
+
+	struct request_queue_container *rq_cnt;
 	struct request_queue *q;
 	int err;
 
-	q = kmem_cache_alloc_node(blk_requestq_cachep,
+	rq_cnt = kmem_cache_alloc_node(blk_requestq_cachep,
 				gfp_mask | __GFP_ZERO, node_id);
-	if (!q)
+	if (!rq_cnt)
 		return NULL;
+
+	q = &rq_cnt->rq;
 
 	q->id = ida_simple_get(&blk_queue_ida, 0, 0, gfp_mask);
 	if (q->id < 0)
@@ -773,7 +835,8 @@ fail_split:
 fail_id:
 	ida_simple_remove(&blk_queue_ida, q->id);
 fail_q:
-	kmem_cache_free(blk_requestq_cachep, q);
+	//kmem_cache_free(blk_requestq_cachep, q);
+	kmem_cache_free(blk_requestq_cachep, rq_cnt);
 	return NULL;
 }
 EXPORT_SYMBOL(blk_alloc_queue_node);
@@ -1997,6 +2060,8 @@ blk_qc_t generic_make_request(struct bio *bio)
 	struct bio_list bio_list_on_stack;
 	blk_qc_t ret = BLK_QC_T_NONE;
 
+	//(check_fio() == true) ? printk("[%s:%s] --> in \n",__FILE__,__func__) : -1;
+
 	if (!generic_make_request_checks(bio))
 		goto out;
 
@@ -2011,6 +2076,7 @@ blk_qc_t generic_make_request(struct bio *bio)
 	 * should be added at the tail
 	 */
 	if (current->bio_list) {
+		//(check_fio() == true) ? printk("adding bio to the current->bio_list \n") : -1;
 		bio_list_add(current->bio_list, bio);
 		goto out;
 	}
@@ -2036,20 +2102,25 @@ blk_qc_t generic_make_request(struct bio *bio)
 		struct request_queue *q = bdev_get_queue(bio->bi_bdev);
 
 		if (likely(blk_queue_enter(q, false) == 0)) {
+			//(check_fio() == true) ? printk("calling make_request_fn \n") : -1;
+			//(check_fio() == true) ? bench_start_pl() : -1;
 			ret = q->make_request_fn(q, bio);
+			//(check_fio() == true) ? bench_end_pl() : -1;
 
 			blk_queue_exit(q);
 
 			bio = bio_list_pop(current->bio_list);
 		} else {
 			struct bio *bio_next = bio_list_pop(current->bio_list);
+			//(check_fio() == true) ? printk("pop bio list \n") : -1;
 
 			bio_io_error(bio);
 			bio = bio_next;
 		}
 	} while (bio);
 	current->bio_list = NULL; /* deactivate */
-
+	
+	//(check_fio() == true) ? printk("[%s:%s] <-- out \n",__FILE__,__func__) : -1;
 out:
 	return ret;
 }
@@ -2066,13 +2137,16 @@ EXPORT_SYMBOL(generic_make_request);
  */
 blk_qc_t submit_bio(struct bio *bio)
 {
+	//blk_qc_t ret;
 	/*
 	 * If it's a regular read/write or a barrier with data attached,
 	 * go through the normal accounting stuff before submission.
 	 */
+	//(check_fio() == true) ? printk("[%s:%s] --> in \n",__FILE__,__func__) : -1;
 	if (bio_has_data(bio)) {
 		unsigned int count;
 
+		//(check_fio() == true) ? printk("bio has data \n") : -1;
 		if (unlikely(bio_op(bio) == REQ_OP_WRITE_SAME))
 			count = bdev_logical_block_size(bio->bi_bdev) >> 9;
 		else
@@ -2081,6 +2155,7 @@ blk_qc_t submit_bio(struct bio *bio)
 		if (op_is_write(bio_op(bio))) {
 			count_vm_events(PGPGOUT, count);
 		} else {
+			//(check_fio() == true) ? printk("task_io_account \n") : -1;
 			task_io_account_read(bio->bi_iter.bi_size);
 			count_vm_events(PGPGIN, count);
 		}
@@ -2096,7 +2171,10 @@ blk_qc_t submit_bio(struct bio *bio)
 		}
 	}
 
+	//(check_fio() == true) ? bench_start_pl() : -1;
 	return generic_make_request(bio);
+	//(check_fio() == true) ? bench_end_pl() : -1;
+	//return ret;
 }
 EXPORT_SYMBOL(submit_bio);
 
@@ -2593,22 +2671,34 @@ bool blk_update_request(struct request *req, int error, unsigned int nr_bytes)
 
 	blk_account_io_completion(req, nr_bytes);
 
+	//if(queue_nullb) {
+		//BENCH_BEGIN(io_complete);
+		//printk("----> into while \n");
+	//}
 	total_bytes = 0;
 	while (req->bio) {
 		struct bio *bio = req->bio;
 		unsigned bio_bytes = min(bio->bi_iter.bi_size, nr_bytes);
-
-		if (bio_bytes == bio->bi_iter.bi_size)
+		
+		if (bio_bytes == bio->bi_iter.bi_size) {
+		//	queue_nullb ? printk("hitting here \n") : queue_nullb = NULL;
 			req->bio = bio->bi_next;
-
+		}
+		
+		//queue_nullb ? printk("calling req_bio_endio: %d \n", bio_bytes) : queue_nullb= NULL;
 		req_bio_endio(req, bio, bio_bytes, error);
 
 		total_bytes += bio_bytes;
 		nr_bytes -= bio_bytes;
+		//queue_nullb ? printk("nr_bytes: %d, total_bytes: %d \n", nr_bytes, total_bytes) : queue_nullb = NULL;
 
 		if (!nr_bytes)
 			break;
 	}
+	//if(queue_nullb) {
+		//printk("<--- out of while \n");
+		//BENCH_END(io_complete);
+	//}
 
 	/*
 	 * completely done
@@ -3224,17 +3314,24 @@ void blk_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 	LIST_HEAD(list);
 	unsigned int depth;
 
+	//(check_fio() == true) ? printk("[%s:%s] --> in \n",__FILE__,__func__) : -1;
 	flush_plug_callbacks(plug, from_schedule);
 
-	if (!list_empty(&plug->mq_list))
+	if (!list_empty(&plug->mq_list)) {
+		//(check_fio() == true) ? printk("calling flush plug list \n") : -1;
+		//(check_fio() == true) ? bench_start_pl() : -1;
 		blk_mq_flush_plug_list(plug, from_schedule);
+		//(check_fio() == true) ? bench_end_pl() : -1;
+	}
 
 	if (list_empty(&plug->list))
 		return;
 
 	list_splice_init(&plug->list, &list);
 
+	//(check_fio() == true) ? bench_start_plos() : -1;
 	list_sort(NULL, &list, plug_rq_cmp);
+	//(check_fio() == true) ? bench_end_plos() : -1;
 
 	q = NULL;
 	depth = 0;
@@ -3243,6 +3340,7 @@ void blk_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 	 * Save and disable interrupts here, to avoid doing it for every
 	 * queue lock we have to take.
 	 */
+	//(check_fio() == true) ? bench_start_plo() : -1;
 	local_irq_save(flags);
 	while (!list_empty(&list)) {
 		rq = list_entry_rq(list.next);
@@ -3285,6 +3383,8 @@ void blk_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 		queue_unplugged(q, depth, from_schedule);
 
 	local_irq_restore(flags);
+	//(check_fio() == true) ? bench_end_plo() : -1;
+	//(check_fio() == true) ? printk("[%s:%s] <-- in \n",__FILE__,__func__) : -1;
 }
 
 void blk_finish_plug(struct blk_plug *plug)
@@ -3532,8 +3632,12 @@ int __init blk_dev_init(void)
 	request_cachep = kmem_cache_create("blkdev_requests",
 			sizeof(struct request), 0, SLAB_PANIC, NULL);
 
+	//blk_requestq_cachep = kmem_cache_create("request_queue",
+	//		sizeof(struct request_queue), 0, SLAB_PANIC, NULL);
+
+	/* AB - This is for LCD */	
 	blk_requestq_cachep = kmem_cache_create("request_queue",
-			sizeof(struct request_queue), 0, SLAB_PANIC, NULL);
+			sizeof(struct request_queue_container), 0, SLAB_PANIC, NULL);
 
 	return 0;
 }

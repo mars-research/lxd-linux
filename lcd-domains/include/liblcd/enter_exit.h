@@ -113,6 +113,9 @@ int lcd_enter(void);
  * regular user-level exit).
  */
 void LCD_MAYBE_NORETURN lcd_exit(int retval);
+
+struct task_struct;
+void LCD_MAYBE_NORETURN lcd_exit_info(struct task_struct *info);
 #define LCD_EXIT() ({							\
 	*((volatile void**)__builtin_frame_address(0) + 1) = NULL;	\
 	lcd_enter();							\

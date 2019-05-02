@@ -87,7 +87,15 @@ struct blk_mq_queue_data {
 	bool last;
 };
 
+struct blk_mq_queue_data_async {
+	struct list_head *rq_list;
+	struct list_head *list;
+	struct list_head *drv_list;
+	int *queued;
+};
+
 typedef int (queue_rq_fn)(struct blk_mq_hw_ctx *, const struct blk_mq_queue_data *);
+typedef void (queue_rq_fn_async)(struct blk_mq_hw_ctx *, struct blk_mq_queue_data_async *);
 typedef struct blk_mq_hw_ctx *(map_queue_fn)(struct request_queue *, const int);
 typedef enum blk_eh_timer_return (timeout_fn)(struct request *, bool);
 typedef int (init_hctx_fn)(struct blk_mq_hw_ctx *, void *, unsigned int);
@@ -105,6 +113,10 @@ typedef int (poll_fn)(struct blk_mq_hw_ctx *, unsigned int);
 
 
 struct blk_mq_ops {
+	/*
+	 * Queue request asynchronously
+	 */
+	queue_rq_fn_async	*queue_rq_async;
 	/*
 	 * Queue request
 	 */
@@ -229,6 +241,7 @@ void blk_mq_end_request(struct request *rq, int error);
 void __blk_mq_end_request(struct request *rq, int error);
 
 void blk_mq_requeue_request(struct request *rq);
+void __blk_mq_requeue_request(struct request *rq);
 void blk_mq_add_to_requeue_list(struct request *rq, bool at_head);
 void blk_mq_cancel_requeue_work(struct request_queue *q);
 void blk_mq_kick_requeue_list(struct request_queue *q);

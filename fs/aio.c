@@ -46,9 +46,62 @@
 
 #include "internal.h"
 
+#include <linux/blk-bench.h>
+#include <linux/bdump.h>
+
 #define AIO_RING_MAGIC			0xa10a10a1
 #define AIO_RING_COMPAT_FEATURES	1
 #define AIO_RING_INCOMPAT_FEATURES	0
+
+extern struct request_queue *queue_nullb;
+//INIT_BENCHMARK_DATA(io_sub);
+//INIT_BENCHMARK_DATA(io_gu);
+//INIT_BENCHMARK_DATA(io_cu);
+
+//static void __always_inline bench_start(void) {
+//	BENCH_BEGIN(io_sub);
+//}
+
+//static void __always_inline bench_end(void) {
+//	BENCH_END(io_sub);
+//}
+
+//static void __always_inline bench_start_gu(void) {
+//	BENCH_BEGIN(io_gu);
+//}
+//static void __always_inline bench_end_gu(void) {
+//	BENCH_END(io_gu);
+//}
+
+//static void __always_inline bench_start_cu(void) {
+//	BENCH_BEGIN(io_cu);
+//}
+//static void __always_inline bench_end_cu(void) {
+//	BENCH_END(io_cu);
+//}
+
+//void bdump_data(void) {
+//	BENCH_COMPUTE_STAT(io_sub);
+	//BENCH_COMPUTE_STAT(io_gu);
+	//BENCH_COMPUTE_STAT(io_cu);
+//}
+
+static bool __always_inline check_fio(void) {
+	if(strcmp(current->comm, "fio") == 0) {
+		return true;
+	}
+	return false;
+}
+
+//static inline void bbegin(void) {
+//	BENCH_BEGIN(aio_complete);
+//	return;
+//}
+//static inline void bend(void) {
+//	BENCH_END(aio_complete);
+//	return;
+//}
+
 struct aio_ring {
 	unsigned	id;	/* kernel internal index number */
 	unsigned	nr;	/* number of io_events */
@@ -1074,7 +1127,8 @@ static void aio_complete(struct kiocb *kiocb, long res, long res2)
 	struct io_event	*ev_page, *event;
 	unsigned tail, pos, head;
 	unsigned long	flags;
-
+	
+	//(queue_nullb != NULL) ? bbegin() : -1;
 	/*
 	 * Special case handling for sync iocbs:
 	 *  - events go directly into the iocb for fast handling
@@ -1145,8 +1199,11 @@ static void aio_complete(struct kiocb *kiocb, long res, long res2)
 	 * eventfd. The eventfd_signal() function is safe to be called
 	 * from IRQ context.
 	 */
-	if (iocb->ki_eventfd != NULL)
+	if (iocb->ki_eventfd != NULL) {
+	
+		//(queue_nullb != NULL) ? printk("eventfd?\n") : -1;
 		eventfd_signal(iocb->ki_eventfd, 1);
+	}
 
 	/* everything turned out well, dispose of the aiocb. */
 	kiocb_free(iocb);
@@ -1159,11 +1216,18 @@ static void aio_complete(struct kiocb *kiocb, long res, long res2)
 	 */
 	smp_mb();
 
-	if (waitqueue_active(&ctx->wait))
+	if (waitqueue_active(&ctx->wait)) {
+		//(queue_nullb != NULL) ? printk("wakeup wait?\n") : -1;
 		wake_up(&ctx->wait);
+	}
 
 	percpu_ref_put(&ctx->reqs);
+	//(queue_nullb != NULL) ? bend() : -1;
 }
+
+//void bdump_data(void) {
+//	BENCH_COMPUTE_STAT(aio_complete);
+//}
 
 /* aio_read_events_ring
  *	Pull an event off of the ioctx's event ring.  Returns the number of
@@ -1280,7 +1344,9 @@ static long read_events(struct kioctx *ctx, long min_nr, long nr,
 		if (unlikely(copy_from_user(&ts, timeout, sizeof(ts))))
 			return -EFAULT;
 
+		//(queue_nullb != NULL) ? printk("us ts.sec: %lld \n", ts.tv_sec) : -1;
 		until = timespec_to_ktime(ts);
+		//(queue_nullb != NULL) ? printk("reset timer: until.tv64: %lld \n", until.tv64) : -1;
 	}
 
 	/*
@@ -1297,13 +1363,18 @@ static long read_events(struct kioctx *ctx, long min_nr, long nr,
 	 * the ringbuffer empty. So in practice we should be ok, but it's
 	 * something to be aware of when touching this code.
 	 */
-	if (until.tv64 == 0)
+	if (until.tv64 == 0) {
+		//(queue_nullb != NULL) ? printk("regular read_ev \n") : -1;
+		//(check_fio() == true) ? printk("regular read min: %d nr: %d \n",min_nr, nr) : -1;
 		aio_read_events(ctx, min_nr, nr, event, &ret);
-	else
+	}
+	else {
+		//(queue_nullb != NULL) ? printk("waited read_ev \n") : -1;
+		//(check_fio() == true) ? printk("waited read min: %d nr: %d \n",min_nr, nr) : -1;
 		wait_event_interruptible_hrtimeout(ctx->wait,
 				aio_read_events(ctx, min_nr, nr, event, &ret),
 				until);
-
+	}
 	if (!ret && signal_pending(current))
 		ret = -EINTR;
 
@@ -1446,6 +1517,7 @@ rw_common:
 			ret = aio_setup_vectored_rw(rw, buf, len,
 						&iovec, compat, &iter);
 		else {
+			//(check_fio() == true) ? printk("calling ISR -> len:%d \n", len) : -1;
 			ret = import_single_range(rw, buf, len, iovec, &iter);
 			iovec = NULL;
 		}
@@ -1460,7 +1532,10 @@ rw_common:
 		if (rw == WRITE)
 			file_start_write(file);
 
+		//(check_fio() == true) ? printk("calling read/write op \n") : -1;
+		//(check_fio() == true) ? bench_start() : -1;
 		ret = iter_op(req, &iter);
+		//(check_fio() == true) ? bench_end() : -1;
 
 		if (rw == WRITE)
 			file_end_write(file);
@@ -1495,6 +1570,7 @@ rw_common:
 			     ret == -ERESTARTNOHAND ||
 			     ret == -ERESTART_RESTARTBLOCK))
 			ret = -EINTR;
+		//(check_fio() == true) ? printk("***** Failing IO with EINTR \n") : -1;
 		aio_complete(req, ret, 0);
 	}
 
@@ -1562,10 +1638,14 @@ static int io_submit_one(struct kioctx *ctx, struct iocb __user *user_iocb,
 	req->ki_user_iocb = user_iocb;
 	req->ki_user_data = iocb->aio_data;
 
+	//(check_fio() == true) ? printk("-> aio_run_iocb \n") : -1;
+	//(check_fio() == true) ? bench_start() : -1;
 	ret = aio_run_iocb(&req->common, iocb->aio_lio_opcode,
 			   (char __user *)(unsigned long)iocb->aio_buf,
 			   iocb->aio_nbytes,
 			   compat);
+	//(check_fio() == true) ? bench_end() : -1;
+
 	if (ret)
 		goto out_put_req;
 
@@ -1594,12 +1674,13 @@ long do_io_submit(aio_context_t ctx_id, long nr,
 	if (unlikely(!access_ok(VERIFY_READ, iocbpp, (nr*sizeof(*iocbpp)))))
 		return -EFAULT;
 
+	//(check_fio() == true) ? bench_start() : -1;
 	ctx = lookup_ioctx(ctx_id);
 	if (unlikely(!ctx)) {
 		pr_debug("EINVAL: invalid context id\n");
 		return -EINVAL;
 	}
-
+	//(check_fio() == true) ? bench_end() : -1;
 	blk_start_plug(&plug);
 
 	/*
@@ -1610,23 +1691,36 @@ long do_io_submit(aio_context_t ctx_id, long nr,
 		struct iocb __user *user_iocb;
 		struct iocb tmp;
 
+
+		//(check_fio() == true) ? bench_start_gu() : -1;
 		if (unlikely(__get_user(user_iocb, iocbpp + i))) {
 			ret = -EFAULT;
 			break;
 		}
+		//(check_fio() == true) ? bench_end_gu() : -1;
 
+		//(check_fio() == true) ? bench_start_cu() : -1;
 		if (unlikely(copy_from_user(&tmp, user_iocb, sizeof(tmp)))) {
 			ret = -EFAULT;
 			break;
 		}
+		//(check_fio() == true) ? bench_end_cu() : -1;
 
+		//(check_fio() == true) ? printk("io_submit_one: --> %d \n", i) : -1;
+		//(check_fio() == true) ? bench_start_gu() : -1;
 		ret = io_submit_one(ctx, user_iocb, &tmp, compat);
+		//(check_fio() == true) ? bench_end_gu() : -1;
 		if (ret)
 			break;
 	}
+	//(check_fio() == true) ? printk(" -------> finish plug %d \n", i) : -1;
+	//(check_fio() == true) ? bench_start() : -1;
 	blk_finish_plug(&plug);
+	//(check_fio() == true) ? bench_end() : -1;
 
+	//(check_fio() == true) ? bench_start_gu() : -1;
 	percpu_ref_put(&ctx->users);
+	//(check_fio() == true) ? bench_end_gu() : -1;
 	return i ? i : ret;
 }
 
@@ -1645,7 +1739,13 @@ long do_io_submit(aio_context_t ctx_id, long nr,
 SYSCALL_DEFINE3(io_submit, aio_context_t, ctx_id, long, nr,
 		struct iocb __user * __user *, iocbpp)
 {
-	return do_io_submit(ctx_id, nr, iocbpp, 0);
+	long ret = 0;
+	//(check_fio() == true) ? printk("--------------> syscall enter \n") : -1;
+	//(check_fio() == true) ? bench_start() : -1;
+	ret =  do_io_submit(ctx_id, nr, iocbpp, 0);
+	//(check_fio() == true) ? printk("<-------------- syscall enter \n") : -1;
+	//(check_fio() == true) ? bench_end() : -1;
+	return ret;
 }
 
 /* lookup_kiocb
