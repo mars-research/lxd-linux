@@ -13,6 +13,7 @@
 #include <linux/blk-mq.h>
 #include <linux/hrtimer.h>
 #include <linux/lightnvm.h>
+#include <liblcd/spinlock.h>
 
 #ifdef LCD_ISOLATE
 #include <lcd_config/post_hook.h>
@@ -839,7 +840,7 @@ static int null_add_dev(void)
 		goto out_free_nullb;
 	}
 #endif
-	spin_lock_init(&nullb->lock);
+	//spin_lock_init(&nullb->lock);
 
 	if (queue_mode == NULL_Q_MQ && use_per_node_hctx)
 		submit_queues = nr_online_nodes;

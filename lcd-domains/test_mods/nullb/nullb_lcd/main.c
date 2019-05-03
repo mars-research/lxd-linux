@@ -12,16 +12,18 @@
 #include "../benchmark.h"
 #include <lcd_config/post_hook.h>
 
-cptr_t blk_register_chnl;
-cptr_t blk_sync_endpoint;
-struct thc_channel *blk_async_chl;
+cptr_t blk_register_chnls[NUM_LCDS];
+cptr_t blk_sync_endpoints[NUM_LCDS];
+
+struct thc_channel *blk_async_chnls[NUM_LCDS];
 struct glue_cspace *blk_cspace;
 cptr_t blk_sync_ep;
 int nullb_done = 0;
 
 INIT_BENCHMARK_DATA_LCD(disp_loop);
 /* for handling multiple channels */
-struct thc_channel_group ch_grp;
+struct thc_channel_group ch_grp[NUM_LCDS];
+int create_async_channel(void);
 
 /* Routines for channel group manipulation */
 void init_chnl_group(struct thc_channel_group *ch_grp)
@@ -92,20 +94,25 @@ static void main_and_loop(void)
 	struct thc_channel_group_item *curr_item;
 
 	/* initialize channel group list head */
-	init_chnl_group(&ch_grp);
+	init_chnl_group(&ch_grp[current_lcd_id]);
 
 	DO_FINISH(
 
-		ASYNC(
-			ret = null_init();
-			if (ret) {
-				LIBLCD_ERR("nullb init failed");
-				stop = 1;
-			} else {
-				LIBLCD_MSG("SUCCESSFULLY REGISTERED NULLB!");
-			}
+		/* parent LCD initializes the module */
+		if (current_lcd_id == 0) {
+			ASYNC(
+				ret = null_init();
+				if (ret) {
+					LIBLCD_ERR("nullb init failed");
+					stop = 1;
+				} else {
+					LIBLCD_MSG("SUCCESSFULLY REGISTERED NULLB!");
+				}
 
-			);
+				);
+		} else {
+			create_async_channel();
+		}
 
 		/* By the time we hit this loop, the async channel
 		 * will be set up (the awe running init_dummy_fs above
@@ -119,7 +126,7 @@ static void main_and_loop(void)
 			//ret = thc_ipc_poll_recv(blk_async_chl, &msg);
 			//TODO cleanup curr_item's memory!
 			//BENCH_BEGIN_LCD(disp_loop);
-			ret = thc_poll_recv_group_lcd(&ch_grp, &curr_item, &msg);
+			ret = thc_poll_recv_group_lcd(&ch_grp[current_lcd_id], &curr_item, &msg);
 			if (ret) {
 				if (ret == -EWOULDBLOCK) {
 					continue;
@@ -137,7 +144,7 @@ static void main_and_loop(void)
 
 				ret = dispatch_async_loop(curr_item->channel, msg,
 							blk_cspace, 
-							blk_sync_endpoint);
+							blk_sync_endpoints[current_lcd_id]);
 				if (ret) {
 					LIBLCD_ERR("async dispatch failed");
 					stop = 1;
@@ -188,15 +195,17 @@ static int __noreturn nullb_lcd_init(void)
 	 * Remember - lcd_get_boot_info()->cptrs[0] holds the slot
 	 * in the cspace where blk_chnl was granted by the boot module!
 	 */
-	blk_register_chnl = lcd_get_boot_info()->cptrs[0];
-	printk("blk reg channel %lu\n", blk_register_chnl.cptr);
+	blk_register_chnls[current_lcd_id] = lcd_get_boot_info()->cptrs[0];
+	printk("blk reg channel %lu\n", blk_register_chnls[current_lcd_id].cptr);
 	/*
 	 * Initialize nullb glue
 	 */
-	r = glue_nullb_init();
-	if (r) {
-		LIBLCD_ERR("nullb init");
-		goto fail2;
+	if (current_lcd_id == 0) {
+		r = glue_nullb_init();
+		if (r) {
+			LIBLCD_ERR("nullb init");
+			goto fail2;
+		}
 	}
 
 	/* RUN CODE / LOOP ---------------------------------------- */
@@ -205,7 +214,8 @@ static int __noreturn nullb_lcd_init(void)
 
 	/* DONE -------------------------------------------------- */
 
-	glue_nullb_exit();
+	if (current_lcd_id == 0)
+		glue_nullb_exit();
 
 	lcd_exit(0); /* doesn't return */
 fail2:

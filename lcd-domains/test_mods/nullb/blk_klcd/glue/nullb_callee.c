@@ -150,7 +150,7 @@ int blk_mq_init_queue_callee(struct fipc_message *request, struct thc_channel *c
 	cptr_t set_ref = __cptr(fipc_get_reg0(request));
 	int ret = 0;
 	struct blk_mq_tag_set_container *set_container;
-        struct request_queue_container *rq_container;
+        struct request_queue_container *rq_container = NULL;
 
 	request_cookie = thc_get_request_cookie(request);
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
@@ -458,7 +458,7 @@ int alloc_disk_node_callee(struct fipc_message *request, struct thc_channel *cha
 	unsigned int request_cookie;
 	struct fipc_message *response;
 	struct gendisk *disk;
-	struct gendisk_container *disk_container;
+	struct gendisk_container *disk_container = NULL;
 
 	request_cookie = thc_get_request_cookie(request);
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
@@ -541,6 +541,7 @@ int put_disk_callee(struct fipc_message *request, struct thc_channel *channel, s
 	 * so remove from cspace here */
 	glue_cap_remove(c_cspace, disk_container->my_ref);
 
+	disk = &disk_container->gendisk;
 	put_disk(disk);
 
 	if (async_msg_blocking_send_start(channel, &response)) {
@@ -714,6 +715,76 @@ static void destroy_async_fs_ring_channel(struct thc_channel *chnl)
 fail2:
 fail1:
         return;
+}
+
+int register_child(void)
+{
+	cptr_t tx, rx;
+	struct thc_channel *chnl;
+        struct thc_channel *aux_chnl = NULL;
+	cptr_t sync_endpoint;
+	int ret;
+        struct drv_info *drv_info;
+	struct thc_channel_group_item *disp_item;
+
+	sync_endpoint = lcd_cr0();
+	tx = lcd_cr1(); rx = lcd_cr2();
+
+	LIBLCD_MSG("%s child %d registration received, setting up thc_chl",
+			__func__, lcd_r1());
+	/*
+	 * Set up async ring channel
+	 */
+	ret = setup_async_fs_ring_channel(tx, rx, &chnl);
+	if (ret) {
+		LIBLCD_ERR("error setting up ring channel");
+		goto fail1;
+	}
+
+	disp_item = kzalloc(sizeof(*disp_item), GFP_KERNEL);
+	if (!disp_item) {
+		LIBLCD_ERR("no mem for disp_item");
+		goto fail2;
+	}
+
+	/* Store the pointer to thc_channel */
+	disp_item->channel = chnl;
+
+	/*
+	 * Add to dispatch loop
+	 */
+        drv_info = add_drv(disp_item, c_cspace, sync_endpoint, aux_chnl);
+	if (!drv_info) {
+		LIBLCD_ERR("error adding to dispatch loop");
+		goto fail2;
+	}
+
+	/* add disp_item to the channel group */
+	add_chnl_group_item(disp_item, drv_info->ch_grp);
+
+	LIBLCD_MSG("%s, child %d registration complete!\n", __func__, lcd_r1());
+
+	goto out;
+
+fail2:
+	kfree(chnl);
+	destroy_async_fs_ring_channel(chnl);
+fail1:
+	return ret;
+out:
+	/*
+	 * Flush capability registers
+	 */
+	lcd_set_cr0(CAP_CPTR_NULL);
+	lcd_set_cr1(CAP_CPTR_NULL);
+	lcd_set_cr2(CAP_CPTR_NULL);
+
+	lcd_set_r0(ret);
+
+	if (lcd_sync_reply())
+		LIBLCD_ERR("double fault?");
+
+	return 0;
 }
 
 static int nullbu_open(struct inode *inode, struct file *filp)
@@ -1051,7 +1122,7 @@ int register_blkdev_callee(void)
 
         cptr_t sync_endpoint;
         int ret = 0;
-        int major;
+        int major = 0;
         struct drv_info *drv_info;
 	struct thc_channel_group_item *disp_item;
 
@@ -1432,12 +1503,13 @@ static void queue_rq_async_noyield(struct blk_mq_hw_ctx *ctx, struct blk_mq_queu
 		 * We've done the first request. If we have more than 1
 		 * left in the list, set dptr to defer issue.
 		 */
-		if (!bd_async->list && bd_async->rq_list->next != bd_async->rq_list->prev)
+		if (!bd_async->list && bd_async->rq_list->next != bd_async->rq_list->prev) {
 			bd_async->list = bd_async->drv_list;
 
 				
 				//printk("[KLCD] ^^async out of async \n");
 			count++;
+		} // XXX:
 	}
 	//printk("[KLCD] ^^async out of do fin \n");
 	//printk("noyield count %d \n", count);
@@ -1915,7 +1987,7 @@ int _init_hctx_fn(struct blk_mq_hw_ctx *ctx, void *data, unsigned int index, str
 	int ret;
 	struct fipc_message *request;
 	struct fipc_message *response;
-	int func_ret;
+	int func_ret = 0;
 	struct blk_mq_hw_ctx_container *ctx_container;
 	struct blk_mq_ops_container *ops_container;
 
@@ -2372,7 +2444,7 @@ int blk_mq_alloc_tag_set_callee(struct fipc_message *request, struct thc_channel
 	struct trampoline_hidden_args *map_queue_hidden_args;
 	struct trampoline_hidden_args *init_hctx_hidden_args;
 	struct trampoline_hidden_args *sirq_done_hidden_args;
-	int func_ret;
+	int func_ret = 0;
 	int err;
 	//int sync_ret;
 	//unsigned 	long mem_order;

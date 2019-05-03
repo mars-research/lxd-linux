@@ -18,12 +18,20 @@
 
 cptr_t blk_klcd, nullb_lcd;
 struct lcd_create_ctx *dummy_ctx;
+struct lcd_create_ctx **dummy_ctxs;
 cptr_t blk_chnl_cptr;
 cptr_t blk_dest, nullb_dest_cptr;
+cptr_t *nullb_lcds;
+cptr_t *nullb_dest_cptrs;
+
+static int num_lcds = NUM_LCDS;
+module_param(num_lcds, int, 0);
+MODULE_PARM_DESC(num_lcds, "Number of LCDs to launch");
 
 static int boot_main(void)
 {
 	int ret;
+	int i;
 	/*
 	 * Enter lcd mode
 	 */
@@ -61,30 +69,68 @@ static int boot_main(void)
 		LIBLCD_ERR("failed to create net klcd");
 		goto fail3;
 	}
-	ret = lcd_create_module_lcd(LCD_DIR("nullb/nullb_lcd"),
+
+	dummy_ctxs = kzalloc(sizeof(struct lcd_create_ctx*) * num_lcds, GFP_KERNEL);
+
+	if (!dummy_ctxs) {
+		LIBLCD_ERR("failed to alloc memory for dummy_ctxs");
+		goto fail4;
+	}
+	printk("%s, dummy_ctxs %p\n", __func__, dummy_ctxs);
+
+	nullb_lcds = kzalloc(sizeof(cptr_t*) * num_lcds, GFP_KERNEL);
+
+	if (!nullb_lcds) {
+		LIBLCD_ERR("failed to alloc memory for nullb_lcds");
+		goto fail4;
+	}
+
+	printk("%s, nullb_lcds %p\n", __func__, nullb_lcds);
+
+	nullb_dest_cptrs = kzalloc(sizeof(cptr_t*) * num_lcds, GFP_KERNEL);
+
+	if (!nullb_dest_cptrs) {
+		LIBLCD_ERR("failed to alloc memory for nullb_dest_cptrs");
+		goto fail4;
+	}
+
+	ret = lcd_create_module_lcds(LCD_DIR("nullb/nullb_lcd"),
 				"lcd_test_mod_nullb_nullb_lcd",
-				&nullb_lcd,
-				&dummy_ctx);
+				nullb_lcds,
+				dummy_ctxs, num_lcds);
 	if (ret) {
 		LIBLCD_ERR("failed to create dummy lcd");
 		goto fail4;
 	}
 
-	ret = cptr_alloc(lcd_to_boot_cptr_cache(dummy_ctx), 
-			&nullb_dest_cptr);
-	if (ret) {
-		LIBLCD_ERR("alloc cptr");
-		goto fail5;
+	LIBLCD_MSG("Created parent and child LCDS");
+
+	for (i = 0; i < num_lcds; i++) {
+		LIBLCD_MSG("LCD %d, cptr %lu | ctx %p\n", i,
+				nullb_lcds[i].cptr,
+				dummy_ctxs[i]);
 	}
-	
-	/* why is this so hard to remember?
-	 * blk_chnl_cptr is the slot where the ep exists for the current (klcd) 
-	 * we need to grant that to the LCD. This happens through the boot cptr
-	 * cache. The capability is granted to the nullb_lcd at nullb_dest_cptr slot */
-	ret = lcd_cap_grant(nullb_lcd, blk_chnl_cptr, nullb_dest_cptr);
-	if (ret) {
-		LIBLCD_ERR("grant");
-		goto fail6;
+
+	for (i = 0; i < num_lcds; i++) {
+
+		ret = cptr_alloc(lcd_to_boot_cptr_cache(dummy_ctxs[i]), 
+				&nullb_dest_cptrs[i]);
+		if (ret) {
+			LIBLCD_ERR("alloc cptr");
+			goto fail5;
+		}
+		
+		/* why is this so hard to remember?
+		 * blk_chnl_cptr is the slot where the ep exists for the current (klcd) 
+		 * we need to grant that to the LCD. This happens through the boot cptr
+		 * cache. The capability is granted to the nullb_lcd at nullb_dest_cptr slot */
+		ret = lcd_cap_grant(nullb_lcds[i], blk_chnl_cptr, nullb_dest_cptrs[i]);
+		if (ret) {
+			LIBLCD_ERR("grant");
+			goto fail6;
+		}
+		LIBLCD_MSG("blk_chnl in boot space %d", nullb_dest_cptrs[i]);
+		lcd_to_boot_info(dummy_ctxs[i])->cptrs[0] = nullb_dest_cptrs[i];
 	}
 	
 	/* ---------- Set up boot info ---------- */
@@ -96,10 +142,6 @@ static int boot_main(void)
 		LIBLCD_ERR("grant");
 		goto fail7;
 	}
-
-	LIBLCD_MSG("blk_chnl in boot space %d",nullb_dest_cptr);
-	lcd_to_boot_info(dummy_ctx)->cptrs[0] = nullb_dest_cptr;
-
 
 	/* ---------- RUN! ---------- */
 
@@ -114,12 +156,21 @@ static int boot_main(void)
 		goto fail8;
 	}
 	
+	msleep_interruptible(3000);
+
 	LIBLCD_MSG("starting nullb lcd...");
-	ret = lcd_run(nullb_lcd);
-	if (ret) {
-		LIBLCD_ERR("failed to start nullb lcd");
-		goto fail9;
+
+	for (i = 0; i < num_lcds; i++) {
+		LIBLCD_MSG("Starting LCD %d ", i);
+
+		ret = lcd_run(nullb_lcds[i]);
+		if (ret) {
+			LIBLCD_ERR("failed to start nullb lcd");
+			goto fail9;
+		}
+		msleep_interruptible(3000);
 	}
+
 	/*
 	 * Wait for 4 seconds
 	 */
@@ -157,6 +208,7 @@ int boot_lcd_thread(void *data)
 {
 	static unsigned once = 0;
 	int ret;
+	int i;
 	while (!kthread_should_stop()) {
 		if (!once) {
 			LCD_MAIN({
@@ -170,10 +222,21 @@ int boot_lcd_thread(void *data)
 
 	//msleep(10000);	
 	lcd_destroy_module_klcd(blk_klcd, "lcd_test_mod_nullb_blk_klcd");
-	msleep(10000);	
-	lcd_cap_delete(nullb_lcd);
-	lcd_destroy_create_ctx(dummy_ctx);
-	
+
+	if (current->lcd) {
+		for (i = 0; i < num_lcds; i++) {
+			lcd_cap_delete(nullb_lcds[i]);
+		}
+		kfree(nullb_lcds);
+	}
+	if (dummy_ctxs) {
+		for (i = 0; i < num_lcds; i++) {
+			lcd_destroy_create_ctx(dummy_ctxs[i]);
+		}
+		kfree(dummy_ctxs);
+	}
+	kfree(nullb_dest_cptrs);
+
 	lcd_exit(0);
 	return 0;
 }

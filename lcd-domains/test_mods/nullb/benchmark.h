@@ -194,7 +194,7 @@ static void inline bench_dump_data(u64 *data, char *id)
 /* XXX May be there is a better way to do this! */
 static u64 inline bench_find_base(u64 number)
 {
-	u64 base;
+	u64 base = 0;
 	int i = 1;
 
 	while(1) {

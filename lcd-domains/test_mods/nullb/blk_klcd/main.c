@@ -30,6 +30,7 @@ INIT_BENCHMARK_DATA(disp_loop);
 static LIST_HEAD(drv_infos);
 int pmfs_ready;
 struct cspace *klcd_cspace;
+int register_child(void);
 
 /*drv_infos is a global list that has a list of drivers registered to it
  * ch_grp is another list internal to a particular drv_info that has a list
@@ -270,7 +271,12 @@ static int do_one_register(cptr_t register_chnl)
 	/*
 	 * Dispatch to register handler
 	 */
-	ret = dispatch_sync_loop();
+	if (lcd_r0()) {
+		ret = dispatch_sync_loop();
+	} else {
+		ret = register_child();
+	}
+
 	if (ret)
 		return ret; /* dispatch fn is responsible for cptr cleanup */
 
