@@ -165,7 +165,7 @@ void skb_data_pool_init(void)
 	//pool = priv_pool_init(SKB_DATA_POOL, 0x20, 2048);
 	pool_base = base_pools[pools[pool_pick()].start_idx];
 	pool_size = best_diff * ((1 << pool_order) * PAGE_SIZE);
-	pool = priv_pool_init(SKB_DATA_POOL, (void*) pool_base, pool_size, 2048);
+	pool = priv_pool_init((void*) pool_base, pool_size, 2048, "skb_data_pool");
 #ifdef SKBC_PRIVATE_POOL
 	skbc_pool = priv_pool_init(SKB_CONTAINER_POOL, 0x20,
 				SKB_CONTAINER_SIZE * 2);
@@ -906,7 +906,7 @@ normal_probe:
 		goto fail_vol;
 	}
 
-        p = virt_to_head_page(pool->pool);
+        p = virt_to_head_page(pool->base);
 
 	pool_ord = ilog2(roundup_pow_of_two((1 << pool_order) * best_diff));
         ret = lcd_volunteer_pages(p, pool_ord, &pool_cptr);
@@ -916,7 +916,7 @@ normal_probe:
 		goto fail_vol;
 	}
 
-	pool_pfn_start = (unsigned long)pool->pool >> PAGE_SHIFT;
+	pool_pfn_start = (unsigned long)pool->base >> PAGE_SHIFT;
 	pool_pfn_end = pool_pfn_start + ((1 << pool_order) * best_diff);
 
 	lcd_set_cr0(res0_cptr);
@@ -1439,7 +1439,7 @@ int ndo_start_xmit_dofin(struct sk_buff *skb,
 	case SHARED_DATA_XMIT:
 		fipc_set_reg3(_request,
 				(unsigned long)
-				((void*)skb->head - pool->pool));
+				((void*)skb->head - pool->base));
 
 		fipc_set_reg4(_request, skb->end);
 
@@ -1621,7 +1621,7 @@ int ndo_start_xmit_nonlcd(struct sk_buff *skb,
 	case SHARED_DATA_XMIT:
 		fipc_set_reg3(_request,
 				(unsigned long)
-				((void*)skb->head - pool->pool));
+				((void*)skb->head - pool->base));
 
 		fipc_set_reg4(_request, skb->end);
 
@@ -2136,7 +2136,7 @@ quit:
 	case SHARED_DATA_XMIT:
 		fipc_set_reg3(_request,
 				(unsigned long)
-				((void*)skb->head - pool->pool));
+				((void*)skb->head - pool->base));
 
 		fipc_set_reg4(_request, skb->end);
 		fipc_set_reg5(_request, skb->protocol);
