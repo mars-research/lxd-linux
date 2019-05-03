@@ -35,6 +35,7 @@ static void main_and_loop(void)
 {
 	int ret;
 	int stop = 0;
+	int once = 1;
 #ifdef REPORT_LCD_LOAD
 	unsigned long long start_disp, end_disp;
 	unsigned long long start_g, end_g, diff_g;
@@ -66,6 +67,15 @@ static void main_and_loop(void)
 		 * channel). */
 		while (!stop && !dummy_done) {
 			struct thc_channel_group_item* curr_item;
+			if (once) {
+				printk("%s, LCD:%d looping", __func__, current_lcd_id);
+				once = 0;
+
+				list_for_each_entry(curr_item, &(ch_grp[current_lcd_id].head), list) {
+					printk("%s, curr_item->channel %p is_xmit: %d", __func__,
+							curr_item->channel, curr_item->xmit_channel);
+				}
+			}
 
 #ifdef REPORT_LCD_LOAD
 			if (!start_g)
@@ -118,12 +128,16 @@ static void main_and_loop(void)
 					start_disp = lcd_RDTSC_START();
 					/* message for us */
 					if (async_msg_get_fn_type(msg) == NDO_START_XMIT) {
+
+						//printk("%s, got msg on xmit ch: %p", __func__, curr_item->channel);
 						if (fipc_get_reg0(msg)) {
 						ret = ndo_start_xmit_async_bare_callee(msg,
 							curr_item->channel,
 							nullnet_cspace,
 							nullnet_sync_endpoints[current_lcd_id]);
 						} else {
+							//printk("%s, LCD:%d got XMIT msg on chnl: %p",
+							//		__func__, current_lcd_id, curr_item->channel);
 						ret = ndo_start_xmit_noawe_callee(msg,
 							curr_item->channel,
 							nullnet_cspace,

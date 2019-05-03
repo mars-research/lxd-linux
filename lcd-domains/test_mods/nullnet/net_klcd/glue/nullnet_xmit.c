@@ -25,6 +25,7 @@ struct thc_channel *sirq_channels[4];
 #define NUM_THREADS	NUM_CORES
 
 int prep_channel(struct trampoline_hidden_args *hidden_args, int queue);
+int pick_channel(int lcd_id);
 extern inline xmit_type_t check_skb_range(struct sk_buff *skb);
 extern struct glue_cspace *c_cspace;
 extern struct cptr sync_ep;
@@ -34,16 +35,17 @@ extern u32 thread;
 extern struct ptstate_t *ptrs[NUM_THREADS];
 extern struct rtnl_link_stats64 g_stats;
 extern struct thc_channel *xmit_chnl;
-extern priv_pool_t *pool;
+extern priv_pool_t *skb_pool;
+#ifndef CONFIG_PREALLOC_XMIT_CHANNELS
 DEFINE_SPINLOCK(prep_lock);
-
+#endif
 /*
  * setup a new channel for the first time when an application thread
  * wishes to send a packet through this interface
  */
 int setup_once(struct trampoline_hidden_args *hidden_args)
 {
-	int queue;
+	int lcd_id;
 	static int count = 0;
 
 	printk("%s, %s:%d lcdenter \n", __func__,
@@ -84,10 +86,15 @@ int setup_once(struct trampoline_hidden_args *hidden_args)
 		!strncmp(current->comm, "lt-iperf3",
 				strlen("lt-iperf3"))) {
 
+#ifdef CONFIG_PREALLOC_XMIT_CHANNELS
+		lcd_id = count++ % NUM_LCDS;
+		pick_channel(lcd_id);
+#else
 		spin_lock(&prep_lock);
-		queue = count++ % NUM_LCDS;
-		prep_channel(hidden_args, queue);
+		lcd_id = count++ % NUM_LCDS;
+		prep_channel(hidden_args, lcd_id);
 		spin_unlock(&prep_lock);
+#endif
 		printk("===================================\n");
 		printk("===== Private Channel created (pid %d) =====\n", current->pid);
 		printk("===================================\n");
@@ -174,7 +181,7 @@ int __ndo_start_xmit_inner_async(struct sk_buff *skb, struct net_device *dev, st
 
 	fipc_set_reg3(_request,
 			(unsigned long)
-			((void*)skb->head - pool->base));
+			((void*)skb->head - skb_pool->base));
 
 	fipc_set_reg4(_request, skb->end);
 	fipc_set_reg5(_request, skb->protocol);
@@ -377,14 +384,15 @@ int ndo_start_xmit_noasync(struct sk_buff *skb, struct net_device *dev, struct t
 	if (unlikely(!current->ptstate)) {
 		if (setup_once(hidden_args))
 			goto free;
+
+		printk("%s, Got async_chnl %p\n", __func__, current->ptstate->thc_chnl);
 	}
 
 	/* get the async channel */
-	async_chnl = PTS()->thc_chnl;
+	async_chnl = current->ptstate->thc_chnl;
 
 
-	fipc_test_blocking_send_start(
-			async_chnl, &_request);
+	fipc_test_blocking_send_start( async_chnl, &_request);
 
 	async_msg_set_fn_type(_request, NDO_START_XMIT);
 
@@ -400,7 +408,7 @@ int ndo_start_xmit_noasync(struct sk_buff *skb, struct net_device *dev, struct t
 
 	fipc_set_reg3(_request,
 			(unsigned long)
-			((void*)skb->head - pool->base));
+			((void*)skb->head - skb_pool->base));
 
 	fipc_set_reg4(_request, skb->end);
 	fipc_set_reg5(_request, skb->protocol);
@@ -409,8 +417,10 @@ int ndo_start_xmit_noasync(struct sk_buff *skb, struct net_device *dev, struct t
 	fipc_send_msg_end(thc_channel_to_fipc(
 			async_chnl), _request);
 
+	//printk("%s, msg sent on chnl %p\n", __func__, async_chnl);
 #ifdef SENDER_DISPATCH_LOOP
 	/* to receive consume_skb */
+	//printk("%s, waiting on chnl %p for recv\n", __func__, async_chnl);
 	fipc_test_blocking_recv_start(
 			async_chnl,
 			&_request1);
@@ -429,6 +439,7 @@ int ndo_start_xmit_noasync(struct sk_buff *skb, struct net_device *dev, struct t
 				hidden_args->sync_ep);
 #endif
 
+	//printk("%s, waiting on chnl %p for real resp\n", __func__, async_chnl);
 	/* guard nonlcd case with all macros */
 	fipc_test_blocking_recv_start(
 			async_chnl,
@@ -502,7 +513,7 @@ int ndo_start_xmit_async(struct sk_buff *skb, struct net_device *dev, struct tra
 
 	fipc_set_reg3(_request,
 			(unsigned long)
-			((void*)skb->head - pool->base));
+			((void*)skb->head - skb_pool->base));
 
 	fipc_set_reg4(_request, skb->end);
 	fipc_set_reg5(_request, skb->protocol);

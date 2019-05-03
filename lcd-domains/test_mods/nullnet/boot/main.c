@@ -24,6 +24,10 @@ cptr_t net_chnl;
 cptr_t net_chnl_domain_cptr, dummy_chnl_domain_cptr;
 cptr_t *dummy_chnl_domain_cptrs;
 
+static int bind_cpu = 2;
+module_param(bind_cpu, int, 0);
+MODULE_PARM_DESC(bind_cpu, "CPU to bind to");
+
 static int num_lcds = NUM_LCDS;
 module_param(num_lcds, int, 0);
 MODULE_PARM_DESC(num_lcds, "Number of LCDs to launch");
@@ -234,8 +238,10 @@ static int boot_init(void)
 
 	boot_task = kthread_create(boot_lcd_thread, NULL, "boot_lcd_thread");
 
-	if (!IS_ERR(boot_task))
+	if (!IS_ERR(boot_task)) {
+		kthread_bind(boot_task, bind_cpu);
 		wake_up_process(boot_task);
+	}
 	return 0;
 }
 

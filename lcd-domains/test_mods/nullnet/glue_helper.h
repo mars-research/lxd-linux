@@ -81,6 +81,9 @@ struct skbuff_members {
 #define CONSUME_SKB_SEND_ONLY
 #define CONSUME_SKB_NO_HASHING
 #define SENDER_DISPATCH_LOOP
+#define CONFIG_PREALLOC_XMIT_CHANNELS
+
+#define MAX_CHNL_PAIRS 5
 
 //#define NO_AWE
 //#define NO_HASHING

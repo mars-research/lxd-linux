@@ -99,11 +99,16 @@ u32 thread = 0;
 struct ptstate_t *ptrs[NUM_THREADS] = {0};
 struct rtnl_link_stats64 g_stats;
 struct thc_channel *xmit_chnl;
-priv_pool_t *pool;
+/* Declared in net/core/skbuff.c */
+extern priv_pool_t *skb_pool;
 priv_pool_t *skbc_pool;
 void *pool_base = NULL;
 size_t pool_size = 0;
 
+#ifdef CONFIG_PREALLOC_XMIT_CHANNELS
+int prep_xmit_channels_klcd(int lcd_id);
+void prep_xmit_channels_clean_klcd(void);
+#endif
 
 #ifdef TIMESTAMP
 uint64_t *times_ndo_xmit = NULL;
@@ -121,82 +126,25 @@ uint64_t *perf4 = NULL;
 #endif
 struct kmem_cache *skb_c_cache = NULL;
 
+#define MAX_CHANNELS_PER_LCD           10
+
+struct lcd_smp {
+       cptr_t sync_ep;
+       struct thc_channel *xmit_channels[MAX_CHANNELS_PER_LCD];
+       struct thc_channel *async_chnl;
+       spinlock_t lock;
+       int used_channels;
+       int num_xmit_chnls;
+} lcd_metadata [NUM_LCDS];
+
 
 int ndo_start_xmit_async_landing(struct sk_buff *first, struct net_device *dev, struct trampoline_hidden_args *hidden_args);
 
-#define MAX_POOLS	20
-
-char *base_pools[MAX_POOLS];
-int pool_order = 10;
-int start_idx[MAX_POOLS/2] = {-1}, end_idx[MAX_POOLS/2] = {-1};
-unsigned int best_diff = 0;
-int best_idx = -1;
-int pool_idx = 0;
-struct {
-	int start_idx;
-	int end_idx;
-	size_t size;
-	bool valid;
-} pools[MAX_POOLS] = { {0} };
-
-int compare_addr(const void *a, const void *b)
-{
-	return *(unsigned int *)a - *(unsigned int *)b;
-}
-
-int pool_pick(void)
-{
-	int i;
-	for (i = 0; i < MAX_POOLS; i++) {
-		base_pools[i] = (char*) __get_free_pages(GFP_KERNEL | __GFP_ZERO,
-	                            pool_order);
-	}
-
-	sort(base_pools, MAX_POOLS, sizeof(char*), compare_addr, NULL);
-
-	printk("%s, sorted order:\n", __func__);
-	for (i = 0; i < MAX_POOLS; i++) {
-		printk("%s, got pool %p\n", __func__, base_pools[i]);
-	}
-
-	pools[pool_idx].start_idx = 0;
-	pools[pool_idx].end_idx = MAX_POOLS - 1;
-	pools[pool_idx].valid = true;
-	for (i = 0; i < MAX_POOLS - 1; i++) {
-		printk("%s, comparing pool[%d]=%llx and pool[%d]=%llx\n", __func__,
-					i+1, (uint64_t)base_pools[i+1], i, (uint64_t) base_pools[i]);
-		if (((uint64_t) base_pools[i+1] - (uint64_t) base_pools[i]) != ((1 << pool_order) * PAGE_SIZE)) {
-			printk("%s, found discontinuity @ i %d\n", __func__, i);
-			pools[pool_idx].valid = true;
-			pools[pool_idx++].end_idx = i;
-			pools[pool_idx].start_idx = i + 1;
-		}
-	}
-
-	/* if there is no discontinuity, then we will have a huge chunk until the end */
-	pools[pool_idx].valid = true;
-	pools[pool_idx].end_idx = MAX_POOLS - 1;
-
-	for (i = 0; i < pool_idx; i++) {
-		printk("%s, pool %d: start idx = %d | end idx = %d\n",
-				__func__, i, pools[i].start_idx, pools[i].end_idx);
-		if (!pools[i].valid)
-			continue;
-		if ((pools[i].end_idx - pools[i].start_idx + 1) > best_diff) {
-			best_idx = i;
-			best_diff = pools[i].end_idx - pools[i].start_idx + 1;
-		}
-	}
-	printk("%s, best diff %u | best idx %d | start = %d | end = %d\n",
-			__func__, best_diff, best_idx, pools[best_idx].start_idx, pools[best_idx].end_idx);
-       	return best_idx;
-}
-extern priv_pool_t *skb_pool;
 void skb_data_pool_init(void)
 {
 	pool_base = vzalloc(SKB_DATA_POOL_SIZE);
 	pool_size = SKB_DATA_POOL_SIZE;
-	skb_pool = pool = priv_pool_init((void*) pool_base, pool_size, 2048, "skb_data_pool");
+	skb_pool = priv_pool_init((void*) pool_base, pool_size, 2048, "skb_data_pool");
 
 #ifdef SKBC_PRIVATE_POOL
 	skbc_pool = priv_pool_init(SKB_CONTAINER_POOL, 10,
@@ -208,8 +156,8 @@ void skb_data_pool_free(void)
 {
 	if (pool_base)
 		vfree(pool_base);
-	if (pool)
-		priv_pool_destroy(pool);
+	if (skb_pool)
+		priv_pool_destroy(skb_pool);
 #ifdef SKBC_PRIVATE_POOL
 	if (skbc_pool)
 		priv_pool_destroy(skbc_pool);
@@ -230,6 +178,7 @@ inline xmit_type_t check_skb_range(struct sk_buff *skb)
 int glue_nullnet_init(void)
 {
 	int ret;
+	int i;
 	ret = glue_cap_init();
 	if (ret) {
 		LIBLCD_ERR("cap init");
@@ -286,6 +235,10 @@ int glue_nullnet_init(void)
 				NULL);
 	if (!skb_c_cache)
 		printk("WARN: skb_container cache not created\n");
+
+        for (i = 0; i < NUM_LCDS; i++)
+                spin_lock_init(&lcd_metadata[i].lock);
+
 	return 0;
 fail2:
 	glue_cap_exit();
@@ -1791,13 +1744,13 @@ void setup(struct net_device *dev, struct trampoline_hidden_args *hidden_args)
 	}
 
 #ifdef CONFIG_VMALLOC_SHARED_POOL
-	ret = lcd_volunteer_vmalloc_mem(__gva((unsigned long)pool->base), SKB_DATA_POOL_SIZE >> PAGE_SHIFT, &pool_cptr);
+	ret = lcd_volunteer_vmalloc_mem(__gva((unsigned long)skb_pool->base), SKB_DATA_POOL_SIZE >> PAGE_SHIFT, &pool_cptr);
 	pool_ord = SKB_DATA_POOL_ORDER;
 #else
-	p = virt_to_head_page(pool->base);
+	p = virt_to_head_page(skb_pool->base);
 
         pool_ord = ilog2(roundup_pow_of_two((
-				pool->total_pages * PAGE_SIZE)
+				skb_pool->total_pages * PAGE_SIZE)
 				>> PAGE_SHIFT));
 
         ret = lcd_volunteer_pages(p, pool_ord, &pool_cptr);
@@ -1808,8 +1761,8 @@ void setup(struct net_device *dev, struct trampoline_hidden_args *hidden_args)
 		goto fail_vol;
 	}	
 
-	pool_pfn_start = (unsigned long)pool->base >> PAGE_SHIFT;
-	pool_pfn_end = pool_pfn_start + pool->total_pages;
+	pool_pfn_start = (unsigned long)skb_pool->base >> PAGE_SHIFT;
+	pool_pfn_end = pool_pfn_start + skb_pool->total_pages;
 
 	printk("%s, pool pfn start %lu | end %lu\n", __func__,
 			pool_pfn_start, pool_pfn_end);
@@ -2172,7 +2125,9 @@ int register_child(void)
 	}
 
 	lcd_channels[lcd_r1()] = chnl;
-
+#ifdef CONFIG_PREALLOC_XMIT_CHANNELS
+	prep_xmit_channels_klcd(lcd_r1());
+#endif
 	LIBLCD_MSG("%s, child %d registration complete!\n", __func__, lcd_r1());
 	printk("%s, chnl: %p lcd_channels[%lu]: %p\n", __func__, chnl, lcd_r1(), lcd_channels[lcd_r1()]);
 
@@ -2195,7 +2150,9 @@ out:
 	lcd_set_cr2(CAP_CPTR_NULL);
 	lcd_set_cr3(CAP_CPTR_NULL);
 	lcd_set_cr4(CAP_CPTR_NULL);
-
+#ifdef CONFIG_PREALLOC_XMIT_CHANNELS
+	prep_xmit_channels_clean_klcd();
+#endif
 	lcd_set_r0(ret);
 
 	if (lcd_sync_reply())
@@ -2203,6 +2160,52 @@ out:
 
 	return 0;
 }
+
+#ifdef CONFIG_PREALLOC_XMIT_CHANNELS
+int prep_xmit_channels_klcd(int lcd_id)
+{
+	int i;
+	struct thc_channel *chnl;
+	cptr_t tx[MAX_CHNL_PAIRS], rx[MAX_CHNL_PAIRS];
+	int ret;
+
+	tx[0] = lcd_cr5(); rx[0] = lcd_cr6();
+	tx[1] = lcd_cr7(); rx[1] = lcd_cr8();
+	tx[2] = lcd_cr9(); rx[2] = lcd_cr10();
+	tx[3] = lcd_cr11(); rx[3] = lcd_cr12();
+	tx[4] = lcd_cr13(); rx[4] = lcd_cr14();
+
+	/*
+	 * Set up async ring channel
+	 */
+	for (i = 0; i < MAX_CHNL_PAIRS; i++) {
+		ret = setup_async_net_ring_channel(tx[i], rx[i], &chnl);
+		if (ret) {
+			LIBLCD_ERR("error setting up ring channel");
+			goto fail_ep;
+		}
+		printk("%s setting up async channel: %d chnl: %p\n", __func__, i, chnl);
+		lcd_metadata[lcd_id].xmit_channels[lcd_metadata[lcd_id].num_xmit_chnls++] = chnl;
+	}
+
+fail_ep:
+       return -1;
+}
+
+void prep_xmit_channels_clean_klcd(void)
+{
+	lcd_set_cr5(CAP_CPTR_NULL);
+	lcd_set_cr6(CAP_CPTR_NULL);
+	lcd_set_cr7(CAP_CPTR_NULL);
+	lcd_set_cr8(CAP_CPTR_NULL);
+	lcd_set_cr9(CAP_CPTR_NULL);
+	lcd_set_cr10(CAP_CPTR_NULL);
+	lcd_set_cr11(CAP_CPTR_NULL);
+	lcd_set_cr12(CAP_CPTR_NULL);
+	lcd_set_cr13(CAP_CPTR_NULL);
+	lcd_set_cr14(CAP_CPTR_NULL);
+}
+#endif
 
 //DONE
 int __rtnl_link_register_callee(void)
@@ -2261,6 +2264,10 @@ int __rtnl_link_register_callee(void)
 		LIBLCD_ERR("error setting up ring channel");
 		goto fail6;
 	}
+
+#ifdef CONFIG_PREALLOC_XMIT_CHANNELS
+	prep_xmit_channels_klcd(lcd_r2());
+#endif
 	/*
 	 * Add to dispatch loop
 	 */
@@ -2350,6 +2357,9 @@ out:
 	lcd_set_cr3(CAP_CPTR_NULL);
 	lcd_set_cr4(CAP_CPTR_NULL);
 
+#ifdef CONFIG_PREALLOC_XMIT_CHANNELS
+	prep_xmit_channels_clean_klcd();
+#endif
 	lcd_set_r0(ret);
 
 	if (lcd_sync_reply())
@@ -2421,7 +2431,7 @@ fail_lookup:
 }
 
 /* prepare a new private channel for the thread that is calling this function */
-int prep_channel(struct trampoline_hidden_args *hidden_args, int queue)
+int prep_channel(struct trampoline_hidden_args *hidden_args, int lcd_id)
 {
 	cptr_t tx, rx;
 	cptr_t sync_end;
@@ -2444,14 +2454,8 @@ int prep_channel(struct trampoline_hidden_args *hidden_args, int queue)
 		goto fail_cptr;
 	}
 
-	if (queue) {
-		from_sync_end = hidden_args->lcds[queue].lcd_sync_ep;
-		async_chnl = hidden_args->lcds[queue].lcd_async_chnl;
-		current->ptstate->queue_mapping = queue;
-	} else {
-		from_sync_end = hidden_args->sync_ep;
-		async_chnl = hidden_args->async_chnl;
-	}
+	from_sync_end = lcd_metadata[lcd_id].sync_ep;
+	async_chnl = lcd_metadata[lcd_id].async_chnl;
 
 	/* grant sync_ep */
 	if ((ret = grant_sync_ep(&sync_end, from_sync_end))) {
@@ -2530,6 +2534,26 @@ fail_ep:
 fail_ipc:
 fail_cptr:
 	return -1;
+}
+
+int pick_channel(int lcd_id)
+{
+	int used_channels;
+
+	spin_lock(&lcd_metadata[lcd_id].lock);
+
+	used_channels = lcd_metadata[lcd_id].used_channels;
+	if (used_channels < MAX_CHANNELS_PER_LCD) {
+		printk("%s, lcd_id:%d picking channel[%d]: %p\n", __func__,
+				lcd_id, used_channels, lcd_metadata[lcd_id].xmit_channels[used_channels]);
+		current->ptstate->thc_chnl = lcd_metadata[lcd_id].xmit_channels[used_channels];
+		lcd_metadata[lcd_id].used_channels++;
+	} else
+		printk("%s, exceeded max pre-allocated channels. used: %d, total: %d\n",
+				__func__, used_channels, MAX_CHANNELS_PER_LCD);
+
+	spin_unlock(&lcd_metadata[lcd_id].lock);
+	return 0;
 }
 
 //DONE
@@ -2780,11 +2804,14 @@ fail_async:
 
 int cleanup_channels(struct thc_channel *_channel)
 {
-	struct fipc_message *_request;
-	int ret;
+	int ret = 0;
 	int i;
+#ifndef CONFIG_PREALLOC_XMIT_CHANNELS
+	struct fipc_message *_request;
 	unsigned int request_cookie;
+#endif
 
+#ifndef CONFIG_PREALLOC_XMIT_CHANNELS
 	for (i = 0; i < NUM_LCDS; i++) {
 		ret = async_msg_blocking_send_start(lcd_channels[i], &_request);
 
@@ -2812,7 +2839,13 @@ int cleanup_channels(struct thc_channel *_channel)
 			}
 		}
 	}
-
+#else
+	for (i = 0; i < NUM_LCDS; i++) {
+		lcd_metadata[i].used_channels = 0;
+	}
+#endif
+#ifndef CONFIG_PREALLOC_XMIT_CHANNELS
 fail_async:
+#endif
 	return ret;
 }
