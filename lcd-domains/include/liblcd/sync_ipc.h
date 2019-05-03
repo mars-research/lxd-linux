@@ -19,7 +19,7 @@
 
 /* UTCB ---------------------------------------- */
 
-#define LCD_NUM_REGS 16
+#define LCD_NUM_REGS 25
 struct lcd_utcb {
 	/**
 	 * mr registers are general purpose 64-bit registers. You can
@@ -63,6 +63,17 @@ static inline void lcd_set_cr##idx(cptr_t val)				\
 {									\
 	lcd_get_utcb()->cr[idx] = val;					\
 }									
+
+static inline void lcd_set_cr(int idx, cptr_t val)
+{
+	lcd_get_utcb()->cr[idx] = val;
+}
+
+static inline cptr_t lcd_get_cr(int idx)
+{
+	return lcd_get_utcb()->cr[idx];
+}
+
 LCD_MK_REG_ACCESS(0)
 LCD_MK_REG_ACCESS(1)
 LCD_MK_REG_ACCESS(2)
@@ -80,6 +91,15 @@ LCD_MK_REG_ACCESS(12)
 LCD_MK_REG_ACCESS(13)
 LCD_MK_REG_ACCESS(14)
 LCD_MK_REG_ACCESS(15)
+LCD_MK_REG_ACCESS(16)
+LCD_MK_REG_ACCESS(17)
+LCD_MK_REG_ACCESS(18)
+LCD_MK_REG_ACCESS(19)
+LCD_MK_REG_ACCESS(20)
+LCD_MK_REG_ACCESS(21)
+LCD_MK_REG_ACCESS(22)
+LCD_MK_REG_ACCESS(23)
+LCD_MK_REG_ACCESS(24)
 
 /* SYNCHRONOUS IPC ---------------------------------------- */
 

@@ -124,7 +124,7 @@ static int do_one_register(cptr_t register_chnl)
 	int ret;
 	cptr_t sync_endpoint, tx, rx;
 	cptr_t tx_xmit, rx_xmit;
-	int i;
+	int i, j;
 	cptr_t _tx[MAX_CHNL_PAIRS], _rx[MAX_CHNL_PAIRS];
 	/*
 	 * Set up cptrs
@@ -174,16 +174,11 @@ static int do_one_register(cptr_t register_chnl)
 	lcd_set_cr2(rx);
 	lcd_set_cr3(tx_xmit);
 	lcd_set_cr4(rx_xmit);
-	lcd_set_cr5(_rx[0]);
-	lcd_set_cr6(_tx[0]);
-	lcd_set_cr7(_rx[1]);
-	lcd_set_cr8(_tx[1]);
-	lcd_set_cr9(_rx[2]);
-	lcd_set_cr10(_tx[2]);
-	lcd_set_cr11(_rx[3]);
-	lcd_set_cr12(_tx[3]);
-	lcd_set_cr13(_rx[4]);
-	lcd_set_cr14(_tx[4]);
+
+	for (i = 0, j = 5; i < MAX_CHNL_PAIRS && j < LCD_NUM_REGS; i++) {
+		lcd_set_cr(j++, _tx[i]);
+		lcd_set_cr(j++, _rx[i]);
+	}
 
 	ret = lcd_sync_poll_recv(register_chnl);
 	if (ret) {
@@ -210,21 +205,9 @@ static int do_one_register(cptr_t register_chnl)
 	return 0;
 
 free_cptrs:
-	lcd_set_cr0(CAP_CPTR_NULL);
-	lcd_set_cr1(CAP_CPTR_NULL);
-	lcd_set_cr2(CAP_CPTR_NULL);
-	lcd_set_cr3(CAP_CPTR_NULL);
-	lcd_set_cr4(CAP_CPTR_NULL);
-	lcd_set_cr5(CAP_CPTR_NULL);
-	lcd_set_cr6(CAP_CPTR_NULL);
-	lcd_set_cr7(CAP_CPTR_NULL);
-	lcd_set_cr8(CAP_CPTR_NULL);
-	lcd_set_cr9(CAP_CPTR_NULL);
-	lcd_set_cr10(CAP_CPTR_NULL);
-	lcd_set_cr11(CAP_CPTR_NULL);
-	lcd_set_cr12(CAP_CPTR_NULL);
-	lcd_set_cr13(CAP_CPTR_NULL);
-	lcd_set_cr14(CAP_CPTR_NULL);
+	for (i = 0; i < LCD_NUM_REGS; i++)
+	       lcd_set_cr(i, CAP_CPTR_NULL);
+
 	lcd_cptr_free(sync_endpoint);
 
 fail3:

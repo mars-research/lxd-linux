@@ -83,7 +83,8 @@ struct skbuff_members {
 #define SENDER_DISPATCH_LOOP
 #define CONFIG_PREALLOC_XMIT_CHANNELS
 
-#define MAX_CHNL_PAIRS 5
+#define MAX_CHANNELS_PER_LCD           10
+#define MAX_CHNL_PAIRS			MAX_CHANNELS_PER_LCD
 
 //#define NO_AWE
 //#define NO_HASHING

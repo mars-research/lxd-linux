@@ -514,40 +514,28 @@ int create_one_async_channel(struct thc_channel **chnl, cptr_t *tx, cptr_t *rx)
 #ifdef CONFIG_PREALLOC_XMIT_CHANNELS
 int prep_xmit_channels_lcd(void)
 {
-       cptr_t tx[MAX_CHNL_PAIRS], rx[MAX_CHNL_PAIRS];
-       struct thc_channel *xmit;
-       int i;
+	cptr_t tx[MAX_CHNL_PAIRS], rx[MAX_CHNL_PAIRS];
+	struct thc_channel *xmit;
+	int i, j;
 
-       for (i = 0; i < MAX_CHNL_PAIRS; i++) {
-               if (create_one_async_channel(&xmit, &tx[i], &rx[i]))
-                       LIBLCD_ERR("async channel creation failed\n");
-       }
+	for (i = 0; i < MAX_CHNL_PAIRS; i++) {
+		if (create_one_async_channel(&xmit, &tx[i], &rx[i]))
+			LIBLCD_ERR("async channel creation failed\n");
+	}
 
-       lcd_set_cr5(rx[0]);
-       lcd_set_cr6(tx[0]);
-       lcd_set_cr7(rx[1]);
-       lcd_set_cr8(tx[1]);
-       lcd_set_cr9(rx[2]);
-       lcd_set_cr10(tx[2]);
-       lcd_set_cr11(rx[3]);
-       lcd_set_cr12(tx[3]);
-       lcd_set_cr13(rx[4]);
-       lcd_set_cr14(tx[4]);
-       return 0;
+	for (i = 0, j = 5; i < MAX_CHNL_PAIRS && j < LCD_NUM_REGS; i++) {
+		lcd_set_cr(j++, rx[i]);
+		lcd_set_cr(j++, tx[i]);
+	}
+
+	return 0;
 }
 
 void prep_xmit_channels_clean_lcd(void)
 {
-       lcd_set_cr5(CAP_CPTR_NULL);
-       lcd_set_cr6(CAP_CPTR_NULL);
-       lcd_set_cr7(CAP_CPTR_NULL);
-       lcd_set_cr8(CAP_CPTR_NULL);
-       lcd_set_cr9(CAP_CPTR_NULL);
-       lcd_set_cr10(CAP_CPTR_NULL);
-       lcd_set_cr11(CAP_CPTR_NULL);
-       lcd_set_cr12(CAP_CPTR_NULL);
-       lcd_set_cr13(CAP_CPTR_NULL);
-       lcd_set_cr14(CAP_CPTR_NULL);
+	int i;
+	for (i = 0; i < LCD_NUM_REGS; i++)
+	       lcd_set_cr(i, CAP_CPTR_NULL);
 }
 #endif
 

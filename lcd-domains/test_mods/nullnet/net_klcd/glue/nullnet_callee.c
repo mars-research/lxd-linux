@@ -126,8 +126,6 @@ uint64_t *perf4 = NULL;
 #endif
 struct kmem_cache *skb_c_cache = NULL;
 
-#define MAX_CHANNELS_PER_LCD           10
-
 struct lcd_smp {
        cptr_t sync_ep;
        struct thc_channel *xmit_channels[MAX_CHANNELS_PER_LCD];
@@ -2164,17 +2162,15 @@ out:
 #ifdef CONFIG_PREALLOC_XMIT_CHANNELS
 int prep_xmit_channels_klcd(int lcd_id)
 {
-	int i;
+	int i, j;
 	struct thc_channel *chnl;
 	cptr_t tx[MAX_CHNL_PAIRS], rx[MAX_CHNL_PAIRS];
 	int ret;
 
-	tx[0] = lcd_cr5(); rx[0] = lcd_cr6();
-	tx[1] = lcd_cr7(); rx[1] = lcd_cr8();
-	tx[2] = lcd_cr9(); rx[2] = lcd_cr10();
-	tx[3] = lcd_cr11(); rx[3] = lcd_cr12();
-	tx[4] = lcd_cr13(); rx[4] = lcd_cr14();
-
+	for (i = 0, j = 5; i < MAX_CHNL_PAIRS && j < LCD_NUM_REGS; i++) {
+		tx[i] = lcd_get_cr(j++);
+		rx[i] = lcd_get_cr(j++);
+	}
 	/*
 	 * Set up async ring channel
 	 */
@@ -2189,21 +2185,14 @@ int prep_xmit_channels_klcd(int lcd_id)
 	}
 
 fail_ep:
-       return -1;
+	return -1;
 }
 
 void prep_xmit_channels_clean_klcd(void)
 {
-	lcd_set_cr5(CAP_CPTR_NULL);
-	lcd_set_cr6(CAP_CPTR_NULL);
-	lcd_set_cr7(CAP_CPTR_NULL);
-	lcd_set_cr8(CAP_CPTR_NULL);
-	lcd_set_cr9(CAP_CPTR_NULL);
-	lcd_set_cr10(CAP_CPTR_NULL);
-	lcd_set_cr11(CAP_CPTR_NULL);
-	lcd_set_cr12(CAP_CPTR_NULL);
-	lcd_set_cr13(CAP_CPTR_NULL);
-	lcd_set_cr14(CAP_CPTR_NULL);
+	int i;
+	for (i = 0; i < LCD_NUM_REGS; i++)
+	       lcd_set_cr(i, CAP_CPTR_NULL);
 }
 #endif
 
