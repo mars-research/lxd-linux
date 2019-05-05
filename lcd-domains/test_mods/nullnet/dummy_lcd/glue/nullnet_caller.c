@@ -237,6 +237,117 @@ fail1:
 }
 #endif
 
+static int setup_async_channel_on_node(int node_id, cptr_t *buf1_cptr_out, cptr_t *buf2_cptr_out,
+			struct thc_channel **chnl_out)
+{
+	int ret;
+	cptr_t buf1_cptr, buf2_cptr;
+	gva_t buf1_addr, buf2_addr;
+	struct fipc_ring_channel *fchnl;
+	struct thc_channel *chnl;
+	unsigned int pg_order = PMFS_ASYNC_RPC_BUFFER_ORDER - PAGE_SHIFT;
+	LIBLCD_MSG("%s\n",__func__);
+	/*
+	 * Allocate buffers
+	 *
+	 * (We use the lower level alloc. If we used the heap, even though
+	 * we may alloc only 1 - 2 pages, we would end up sharing around
+	 * 4 MB chunks of memory, since the heap uses coarse microkernel
+	 * allocations.)
+	 */
+
+	printk("%s, allocate pages for lcd:%d on node: %d\n", __func__, current_lcd_id,
+					node_id);
+	ret = _lcd_alloc_pages_exact_node(node_id, GFP_KERNEL, pg_order, &buf1_cptr);
+	if (ret) {
+		LIBLCD_ERR("buf1 alloc");
+		goto fail1;
+	}
+
+	ret = _lcd_alloc_pages_exact_node(node_id, GFP_KERNEL, pg_order, &buf2_cptr);
+	if (ret) {
+		LIBLCD_ERR("buf2 alloc");
+		goto fail2;
+	}
+	/*
+	 * Map them somewhere
+	 */
+	ret = lcd_map_virt(buf1_cptr, pg_order, &buf1_addr);
+	if (ret) {
+		LIBLCD_ERR("error mapping buf1");
+		goto fail3;
+	}
+	ret = lcd_map_virt(buf2_cptr, pg_order, &buf2_addr);
+	if (ret) {
+		LIBLCD_ERR("error mapping buf2");
+		goto fail4;
+	}
+	/*
+	 * Prep buffers for rpc
+	 */
+	ret = fipc_prep_buffers(PMFS_ASYNC_RPC_BUFFER_ORDER,
+				(void *)gva_val(buf1_addr),
+				(void *)gva_val(buf2_addr));
+	if (ret) {
+		LIBLCD_ERR("prep buffers");
+		goto fail5;
+	}
+	LIBLCD_MSG("==> Prep buffers");
+	/*
+	 * Alloc and init channel header
+	 */
+	fchnl = kmalloc(sizeof(*fchnl), GFP_KERNEL);
+	if (!fchnl) {
+		ret = -ENOMEM;
+		LIBLCD_ERR("chnl alloc");
+		goto fail6;
+	}
+	ret = fipc_ring_channel_init(fchnl, PMFS_ASYNC_RPC_BUFFER_ORDER,
+				(void *)gva_val(buf1_addr),
+				(void *)gva_val(buf2_addr));
+	if (ret) {
+		LIBLCD_ERR("ring chnl init");
+		goto fail7;
+	}
+	/*
+	 * Install async channel in async dispatch loop
+	 */
+	chnl = kzalloc(sizeof(*chnl), GFP_KERNEL);
+	if (!chnl) {
+		ret = -ENOMEM;
+		LIBLCD_ERR("alloc failed");
+		goto fail8;
+	}
+	ret = thc_channel_init(chnl, fchnl);
+	if (ret) {
+		LIBLCD_ERR("error init'ing async channel group item");
+		goto fail9;
+	}
+
+	*buf1_cptr_out = buf1_cptr;
+	*buf2_cptr_out = buf2_cptr;
+	*chnl_out = chnl;
+
+	return 0;
+
+fail9:
+	kfree(chnl);
+fail8:
+fail7:
+	kfree(fchnl);
+fail6:
+fail5:
+	lcd_unmap_virt(buf1_addr, pg_order);
+fail4:
+	lcd_unmap_virt(buf1_addr, pg_order);
+fail3:
+	lcd_cap_delete(buf2_cptr);
+fail2:
+	lcd_cap_delete(buf1_cptr);
+fail1:
+	return ret; 
+}
+
 static int setup_async_channel(cptr_t *buf1_cptr_out, cptr_t *buf2_cptr_out,
 			struct thc_channel **chnl_out)
 {
@@ -481,6 +592,34 @@ fail1:
 struct thc_channel_group_item *ptrs[NUM_LCDS][32];
 static int idx[NUM_LCDS] = {0};
 
+int create_one_async_channel_on_node(int node_id, struct thc_channel **chnl, cptr_t *tx, cptr_t *rx)
+{
+	int ret;
+	struct thc_channel_group_item *xmit_ch_item;
+
+	ret = setup_async_channel_on_node(node_id, tx, rx, chnl);
+
+	if (ret) {
+		LIBLCD_ERR("async xmit chnl setup failed");
+		return -1;
+	}
+
+	xmit_ch_item = kzalloc(sizeof(*xmit_ch_item), GFP_KERNEL);
+
+	thc_channel_group_item_init(xmit_ch_item, *chnl, NULL);
+
+	xmit_ch_item->xmit_channel = true;
+
+	thc_channel_group_item_add(&ch_grp[current_lcd_id], xmit_ch_item);
+
+	printk("%s:%d adding chnl: %p to group: %p", __func__, current_lcd_id,
+				xmit_ch_item->channel, &ch_grp[current_lcd_id]);
+
+	ptrs[current_lcd_id][idx[current_lcd_id]++%32] = xmit_ch_item;
+
+	return 0;
+}
+
 int create_one_async_channel(struct thc_channel **chnl, cptr_t *tx, cptr_t *rx)
 {
 	int ret;
@@ -517,10 +656,34 @@ int prep_xmit_channels_lcd(void)
 	cptr_t tx[MAX_CHNL_PAIRS], rx[MAX_CHNL_PAIRS];
 	struct thc_channel *xmit;
 	int i, j;
+	int node_id;
 
 	for (i = 0; i < MAX_CHNL_PAIRS; i++) {
-		if (create_one_async_channel(&xmit, &tx[i], &rx[i]))
+#if NUM_LCDS == 1
+		if (i >= 8) {
+			node_id = 1;
+		} else {
+			node_id = 0;
+		}
+		/* create half of the channel pairs on numa node 1 */
+		if (create_one_async_channel_on_node(node_id, &xmit, &tx[i], &rx[i]))
 			LIBLCD_ERR("async channel creation failed\n");
+#elif NUM_LCDS == 2
+		if (current_lcd_id == 0)
+			node_id = 0;
+		else
+			node_id = 1;
+		if (create_one_async_channel_on_node(node_id, &xmit, &tx[i], &rx[i]))
+				LIBLCD_ERR("async channel creation failed\n");
+
+#elif NUM_LCDS == 4
+		if ((current_lcd_id == 0) || (current_lcd_id == 1))
+			node_id = 0;
+		else
+			node_id = 1;
+		if (create_one_async_channel_on_node(node_id, &xmit, &tx[i], &rx[i]))
+				LIBLCD_ERR("async channel creation failed\n");
+#endif
 	}
 
 	for (i = 0, j = 5; i < MAX_CHNL_PAIRS && j < LCD_NUM_REGS; i++) {

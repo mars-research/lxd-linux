@@ -36,9 +36,8 @@ extern struct ptstate_t *ptrs[NUM_THREADS];
 extern struct rtnl_link_stats64 g_stats;
 extern struct thc_channel *xmit_chnl;
 extern priv_pool_t *skb_pool;
-#ifndef CONFIG_PREALLOC_XMIT_CHANNELS
+
 DEFINE_SPINLOCK(prep_lock);
-#endif
 /*
  * setup a new channel for the first time when an application thread
  * wishes to send a packet through this interface
@@ -46,10 +45,15 @@ DEFINE_SPINLOCK(prep_lock);
 int setup_once(struct trampoline_hidden_args *hidden_args)
 {
 	int lcd_id;
+#if NUM_LCDS == 1
+#elif NUM_LCDS == 2
+#else
 	static int count = 0;
-
-	printk("%s, %s:%d lcdenter \n", __func__,
-			current->comm, current->pid);
+	static int numa_count1 = 0;
+	static int numa_count0 = 0;
+#endif
+	printk("%s, %s:%d lcdenter on cpu: %d\n", __func__,
+			current->comm, current->pid, smp_processor_id());
 
 	/* step 1. create lcd env */
 	lcd_enter();
@@ -87,11 +91,37 @@ int setup_once(struct trampoline_hidden_args *hidden_args)
 				strlen("lt-iperf3"))) {
 
 #ifdef CONFIG_PREALLOC_XMIT_CHANNELS
+#if NUM_LCDS == 1
+		lcd_id = 0;
+#elif NUM_LCDS == 2
+		if (smp_processor_id() < 8) {
+				lcd_id = 0;
+		} else {
+				lcd_id = 1;
+		}
+#else
+		spin_lock(&prep_lock);
 		lcd_id = count++ % NUM_LCDS;
+		if (smp_processor_id() <= 6) {
+			numa_count0++;
+			if (numa_count0 % 2)
+				lcd_id = 0;
+			else
+				lcd_id = 1;
+		} else {
+			numa_count1++;
+			if (numa_count1 % 2)
+				lcd_id = 2;
+			else
+				lcd_id = 3;
+		}
+		spin_unlock(&prep_lock);
+#endif
 		pick_channel(lcd_id);
 #else
 		spin_lock(&prep_lock);
 		lcd_id = count++ % NUM_LCDS;
+
 		prep_channel(hidden_args, lcd_id);
 		spin_unlock(&prep_lock);
 #endif
