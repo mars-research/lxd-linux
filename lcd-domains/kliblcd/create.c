@@ -8,7 +8,7 @@
 #include <liblcd/liblcd.h>
 #include <lcd_domains/microkernel.h>
 
-int lcd_create(cptr_t *lcd, int lcd_id)
+int lcd_create(cptr_t *lcd, int lcd_id, int num_lcds)
 {
 	cptr_t slot;
 	int ret;
@@ -23,7 +23,7 @@ int lcd_create(cptr_t *lcd, int lcd_id)
 	/*
 	 * Make LCD
 	 */
-	ret = __lcd_create(current->lcd, slot, lcd_id);
+	ret = __lcd_create(current->lcd, slot, lcd_id, num_lcds);
 	if (ret) {
 		LIBLCD_ERR("lcd create failed");
 		goto fail2;

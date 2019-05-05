@@ -169,7 +169,7 @@ fail1:
 	return ret;
 }
 
-int __lcd_create_no_vm(struct lcd **out, const char *name, int lcd_id)
+int __lcd_create_no_vm(struct lcd **out, const char *name, int lcd_id, int num_lcds)
 {
 	struct lcd *lcd;
 	int ret;
@@ -199,6 +199,37 @@ int __lcd_create_no_vm(struct lcd **out, const char *name, int lcd_id)
 		LCD_ERR("failed to create kthread");
 		goto fail2;
 	}
+	/* do bind only for LCDs */
+	if (!strncmp(name, "lcd/", strlen("lcd/"))) {
+		switch (num_lcds) {
+			case 1:
+				kthread_bind(lcd->kthread, 8);
+				break;
+			case 2:
+				/* lcds=2, each on one numa node */
+				if (lcd_id == 0)
+					kthread_bind(lcd->kthread, 8);
+				else
+					kthread_bind(lcd->kthread, 19);
+				break;
+			case 4:
+				switch (lcd_id) {
+				case 0:
+					kthread_bind(lcd->kthread, 7);
+					break;
+				case 1:
+					kthread_bind(lcd->kthread, 8);
+					break;
+				case 2:
+					kthread_bind(lcd->kthread, 18);
+					break;
+				case 3:
+					kthread_bind(lcd->kthread, 19);
+					break;
+				}
+				break;
+		}
+	}
 	/*
 	 * Bump reference count on kthread
 	 */
@@ -219,7 +250,7 @@ fail1:
 }
 
 #define LCD_KTHREAD_NAME_SZ	32
-int __lcd_create(struct lcd *caller, cptr_t slot, int lcd_id)
+int __lcd_create(struct lcd *caller, cptr_t slot, int lcd_id, int num_lcds)
 {
 	struct lcd *lcd;
 	int ret = 0;
@@ -236,7 +267,7 @@ int __lcd_create(struct lcd *caller, cptr_t slot, int lcd_id)
 
 	snprintf(lcd_name, LCD_KTHREAD_NAME_SZ, "lcd/%d", lcd_id);
 
-	ret = __lcd_create_no_vm(&lcd, lcd_name, lcd_id);
+	ret = __lcd_create_no_vm(&lcd, lcd_name, lcd_id, num_lcds);
 	if (ret) {
 		LCD_ERR("lcd create");
 		goto fail1;
@@ -280,7 +311,7 @@ int __lcd_create_klcd(struct lcd *caller, cptr_t slot)
 	/*
 	 * Basic init of lcd
 	 */
-	ret = __lcd_create_no_vm(&lcd, "klcd", 0);
+	ret = __lcd_create_no_vm(&lcd, "klcd", 0, 0);
 	if (ret) {
 		LCD_ERR("lcd create");
 		goto fail1;

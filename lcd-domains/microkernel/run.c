@@ -38,7 +38,7 @@ static int handle_syscall_create(struct lcd *lcd)
 	/*
 	 * Do create
 	 */
-	return __lcd_create(lcd, lcd_slot, 0);
+	return __lcd_create(lcd, lcd_slot, 0, 0);
 }
 
 static int handle_syscall_cap_grant(struct lcd *lcd)

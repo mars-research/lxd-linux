@@ -19,7 +19,7 @@
 
 /* UTCB ---------------------------------------- */
 
-#define LCD_NUM_REGS 25
+#define LCD_NUM_REGS 42
 struct lcd_utcb {
 	/**
 	 * mr registers are general purpose 64-bit registers. You can
