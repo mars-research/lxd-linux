@@ -228,6 +228,28 @@ int __lcd_create_no_vm(struct lcd **out, const char *name, int lcd_id, int num_l
 					break;
 				}
 				break;
+			case 6:
+				switch (lcd_id) {
+				case 0:
+					kthread_bind(lcd->kthread, 6);
+					break;
+				case 1:
+					kthread_bind(lcd->kthread, 7);
+					break;
+				case 2:
+					kthread_bind(lcd->kthread, 8);
+					break;
+				case 3:
+					kthread_bind(lcd->kthread, 17);
+					break;
+				case 4:
+					kthread_bind(lcd->kthread, 18);
+					break;
+				case 5:
+					kthread_bind(lcd->kthread, 19);
+					break;
+				}
+				break;
 		}
 	}
 	/*
