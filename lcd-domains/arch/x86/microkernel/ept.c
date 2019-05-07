@@ -322,9 +322,12 @@ int lcd_arch_ept_map(struct lcd_arch *lcd, gpa_t ga, hpa_t ha,
 	mutex_lock(&g_ept_lock);
 #endif
 	ret = lcd_arch_ept_walk(lcd, ga, create, &ept_entry);
-	if (ret)
+	if (ret) {
+#ifdef CONFIG_LCD_SINGLE_EPT
+		mutex_unlock(&g_ept_lock);
+#endif
 		return ret;
-
+	}
 	/*
 	 * Check if guest physical address already mapped
 	 */
@@ -390,8 +393,12 @@ int lcd_arch_ept_unmap(struct lcd_arch *lcd, gpa_t a)
 	mutex_lock(&g_ept_lock);
 #endif
 	ret = lcd_arch_ept_walk(lcd, a, 0, &ept_entry);
-	if (ret)
+	if (ret) {
+#ifdef CONFIG_LCD_SINGLE_EPT
+		mutex_unlock(&g_ept_lock);
+#endif
 		return ret;
+	}
 
 	/*
 	 * Unset
@@ -416,8 +423,13 @@ int lcd_arch_ept_unmap2(struct lcd_arch *lcd, gpa_t a, hpa_t *hpa_out)
 	mutex_lock(&g_ept_lock);
 #endif
 	ret = lcd_arch_ept_walk(lcd, a, 0, &ept_entry);
-	if (ret)
+	if (ret) {
+#ifdef CONFIG_LCD_SINGLE_EPT
+		mutex_unlock(&g_ept_lock);
+#endif
 		return ret;
+	}
+
 	/*
 	 * Extract hpa
 	 */
@@ -466,8 +478,13 @@ int lcd_arch_ept_gpa_to_hpa(struct lcd_arch *lcd, gpa_t ga, hpa_t *ha_out, bool 
 #endif
 
 	ret = lcd_arch_ept_walk(lcd, ga, 0, &ept_entry);
-	if (ret)
+
+	if (ret) {
+#ifdef CONFIG_LCD_SINGLE_EPT
+		mutex_unlock(&g_ept_lock);
+#endif
 		return ret;
+	}
 
 	/*
 	 * Confirm the entry is present
