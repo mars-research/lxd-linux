@@ -142,6 +142,8 @@ static int boot_main(void)
 		goto fail8;
 	}
 
+	msleep_interruptible(3000);
+
 	LIBLCD_MSG("starting ixgbe ethernet...");
 
 	for (i = 0; i < num_lcds; i++) {
@@ -151,6 +153,7 @@ static int boot_main(void)
 			LIBLCD_ERR("failed to start ixgbe lcd");
 			goto fail9;
 		}
+		msleep_interruptible(4000);
 	}
 #ifdef BOOT_THREAD
 	// return

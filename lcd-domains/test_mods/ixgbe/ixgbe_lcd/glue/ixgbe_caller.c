@@ -16,35 +16,41 @@
 #include <lcd_config/post_hook.h>
 
 //#define LCD_MEASUREMENT
+#define IXGBE_RX_HDR_SIZE	256
+#define SKB_ALLOC_SIZE	(IXGBE_RX_HDR_SIZE + NET_SKB_PAD + NET_IP_ALIGN + SKB_DATA_ALIGN(sizeof(struct skb_shared_info)))
 
-struct cptr sync_ep;
-static struct glue_cspace *c_cspace;
 extern struct glue_cspace *ixgbe_cspace;
-
 extern struct thc_channel *ixgbe_asyncs[NUM_LCDS];
 extern cptr_t ixgbe_sync_endpoints[NUM_LCDS];
 extern cptr_t ixgbe_register_channels[NUM_LCDS];
 extern struct thc_channel_group ch_grps[NUM_LCDS];
 
+struct cptr sync_ep;
+static struct glue_cspace *c_cspace;
 static struct net_device *g_net_device;
+struct kmem_cache *skb_c_cache;
+struct kmem_cache *skb_c_cache1;
+struct kmem_cache *skb_cache;
+extern struct net_device *g_netdev;
 
 #ifdef IOMMU_ASSIGN
 /* device for IOMMU assignment */
 struct pcidev_info dev_assign = { 0x0000, 0x06, 0x00, 0x1 };
 #endif
-
-struct kmem_cache *skb_c_cache;
-struct kmem_cache *skb_c_cache1;
-struct kmem_cache *skb_cache;
+struct thc_channel_group_item *ptrs[NUM_LCDS][32];
+static int idx[NUM_LCDS] = {0};
 
 /* XXX: How to determine this? */
 #define CPTR_HASH_BITS      5
 static DEFINE_HASHTABLE(cptr_table, CPTR_HASH_BITS);
 
-extern int init_default_flow_dissectors(void);
+int init_default_flow_dissectors(void);
 
-#define IXGBE_RX_HDR_SIZE	256
-#define SKB_ALLOC_SIZE	(IXGBE_RX_HDR_SIZE + NET_SKB_PAD + NET_IP_ALIGN + SKB_DATA_ALIGN(sizeof(struct skb_shared_info)))
+#ifdef CONFIG_PREALLOC_XMIT_CHANNELS
+int prep_xmit_channels_lcd(void);
+void prep_xmit_channels_clean_lcd(void);
+#endif
+netdev_tx_t ixgbe_xmit_frame(struct sk_buff *skb, struct net_device *dev);
 
 int glue_ixgbe_init(void)
 {
@@ -150,6 +156,114 @@ int glue_lookup_skbuff(struct hlist_head *htable, struct cptr c, struct sk_buff_
 void glue_remove_skbuff(struct sk_buff_container *skb_c)
 {
 	hash_del(&skb_c->hentry);
+}
+
+static int setup_async_channel_on_node(int node_id, cptr_t *buf1_cptr_out, cptr_t *buf2_cptr_out,
+			struct thc_channel **chnl_out)
+{
+	int ret;
+	cptr_t buf1_cptr, buf2_cptr;
+	gva_t buf1_addr, buf2_addr;
+	struct fipc_ring_channel *fchnl;
+	struct thc_channel *chnl;
+	unsigned int pg_order = ASYNC_RPC_BUFFER_ORDER - PAGE_SHIFT;
+	LIBLCD_MSG("%s\n",__func__);
+	/*
+	 * Allocate buffers
+	 *
+	 * (We use the lower level alloc. If we used the heap, even though
+	 * we may alloc only 1 - 2 pages, we would end up sharing around
+	 * 4 MB chunks of memory, since the heap uses coarse microkernel
+	 * allocations.)
+	 */
+	ret = _lcd_alloc_pages_exact_node(node_id, GFP_KERNEL, pg_order, &buf1_cptr);
+	if (ret) {
+		LIBLCD_ERR("buf1 alloc");
+		goto fail1;
+	}
+	ret = _lcd_alloc_pages_exact_node(node_id, GFP_KERNEL, pg_order, &buf2_cptr);
+	if (ret) {
+		LIBLCD_ERR("buf2 alloc");
+		goto fail2;
+	}
+	/*
+	 * Map them somewhere
+	 */
+	ret = lcd_map_virt(buf1_cptr, pg_order, &buf1_addr);
+	if (ret) {
+		LIBLCD_ERR("error mapping buf1");
+		goto fail3;
+	}
+	ret = lcd_map_virt(buf2_cptr, pg_order, &buf2_addr);
+	if (ret) {
+		LIBLCD_ERR("error mapping buf2");
+		goto fail4;
+	}
+	/*
+	 * Prep buffers for rpc
+	 */
+	ret = fipc_prep_buffers(ASYNC_RPC_BUFFER_ORDER,
+				(void *)gva_val(buf1_addr),
+				(void *)gva_val(buf2_addr));
+	if (ret) {
+		LIBLCD_ERR("prep buffers");
+		goto fail5;
+	}
+	LIBLCD_MSG("==> Prep buffers");
+	/*
+	 * Alloc and init channel header
+	 */
+	fchnl = kmalloc(sizeof(*fchnl), GFP_KERNEL);
+	if (!fchnl) {
+		ret = -ENOMEM;
+		LIBLCD_ERR("chnl alloc");
+		goto fail6;
+	}
+	ret = fipc_ring_channel_init(fchnl, ASYNC_RPC_BUFFER_ORDER,
+				(void *)gva_val(buf1_addr),
+				(void *)gva_val(buf2_addr));
+	if (ret) {
+		LIBLCD_ERR("ring chnl init");
+		goto fail7;
+	}
+	/*
+	 * Install async channel in async dispatch loop
+	 */
+	chnl = kzalloc(sizeof(*chnl), GFP_KERNEL);
+	if (!chnl) {
+		ret = -ENOMEM;
+		LIBLCD_ERR("alloc failed");
+		goto fail8;
+	}
+	ret = thc_channel_init(chnl, fchnl);
+	if (ret) {
+		LIBLCD_ERR("error init'ing async channel group item");
+		goto fail9;
+	}
+
+	*buf1_cptr_out = buf1_cptr;
+	*buf2_cptr_out = buf2_cptr;
+	*chnl_out = chnl;
+
+	LIBLCD_MSG("Returning from %s", __func__);
+	return 0;
+
+fail9:
+	kfree(chnl);
+fail8:
+fail7:
+	kfree(fchnl);
+fail6:
+fail5:
+	lcd_unmap_virt(buf1_addr, pg_order);
+fail4:
+	lcd_unmap_virt(buf1_addr, pg_order);
+fail3:
+	lcd_cap_delete(buf2_cptr);
+fail2:
+	lcd_cap_delete(buf1_cptr);
+fail1:
+	return ret;
 }
 
 static int setup_async_channel(cptr_t *buf1_cptr_out, cptr_t *buf2_cptr_out,
@@ -309,12 +423,37 @@ fail1:
 	return;
 }
 
-struct thc_channel_group_item *ptrs[32] = {0};
+int create_one_async_channel_on_node(int node_id, struct thc_channel **chnl, cptr_t *tx, cptr_t *rx)
+{
+	int ret;
+	struct thc_channel_group_item *xmit_ch_item;
+
+	ret = setup_async_channel_on_node(node_id, tx, rx, chnl);
+
+	if (ret) {
+		LIBLCD_ERR("async xmit chnl setup failed");
+		return -1;
+	}
+
+	xmit_ch_item = kzalloc(sizeof(*xmit_ch_item), GFP_KERNEL);
+
+	thc_channel_group_item_init(xmit_ch_item, *chnl, NULL);
+
+	xmit_ch_item->xmit_channel = true;
+
+	thc_channel_group_item_add(&ch_grps[current_lcd_id], xmit_ch_item);
+
+	printk("%s:%d adding chnl: %p to group: %p", __func__, current_lcd_id,
+				xmit_ch_item->channel, &ch_grps[current_lcd_id]);
+
+	ptrs[current_lcd_id][idx[current_lcd_id]++ % 32] = xmit_ch_item;
+
+	return 0;
+}
 
 int create_one_async_channel(struct thc_channel **chnl, cptr_t *tx, cptr_t *rx)
 {
 	int ret;
-	static int idx = 0;
 	struct thc_channel_group_item *xmit_ch_item;
 
 	ret = setup_async_channel(tx, rx, chnl);
@@ -332,11 +471,69 @@ int create_one_async_channel(struct thc_channel **chnl, cptr_t *tx, cptr_t *rx)
 
 	thc_channel_group_item_add(&ch_grps[current_lcd_id], xmit_ch_item);
 
-	printk("%s, assingning ptrs[%d] to %p", __func__, idx % 32, xmit_ch_item);
-	ptrs[idx++%32] = xmit_ch_item;
+	ptrs[current_lcd_id][idx[current_lcd_id]++ % 32] = xmit_ch_item;
 
 	return 0;
 }
+
+#ifdef CONFIG_PREALLOC_XMIT_CHANNELS
+int prep_xmit_channels_lcd(void)
+{
+	cptr_t tx[MAX_CHNL_PAIRS], rx[MAX_CHNL_PAIRS];
+	struct thc_channel *xmit;
+	int i, j;
+	int node_id;
+
+	for (i = 0; i < MAX_CHNL_PAIRS; i++) {
+#if NUM_LCDS == 1
+		if (i >= 8) {
+			node_id = 1;
+		} else {
+			node_id = 0;
+		}
+		/* create half of the channel pairs on numa node 1 */
+		if (create_one_async_channel_on_node(node_id, &xmit, &tx[i], &rx[i]))
+			LIBLCD_ERR("async channel creation failed\n");
+#elif NUM_LCDS == 2
+		if (current_lcd_id == 0)
+			node_id = 0;
+		else
+			node_id = 1;
+		if (create_one_async_channel_on_node(node_id, &xmit, &tx[i], &rx[i]))
+				LIBLCD_ERR("async channel creation failed\n");
+
+#elif NUM_LCDS == 4
+		if (current_lcd_id < 2)
+			node_id = 0;
+		else
+			node_id = 1;
+		if (create_one_async_channel_on_node(node_id, &xmit, &tx[i], &rx[i]))
+				LIBLCD_ERR("async channel creation failed\n");
+#elif NUM_LCDS == 6
+		if (current_lcd_id < 3)
+			node_id = 0;
+		else
+			node_id = 1;
+		if (create_one_async_channel_on_node(node_id, &xmit, &tx[i], &rx[i]))
+				LIBLCD_ERR("async channel creation failed\n");
+#endif
+	}
+
+	for (i = 0, j = 5; i < MAX_CHNL_PAIRS && j < LCD_NUM_REGS; i++) {
+		lcd_set_cr(j++, rx[i]);
+		lcd_set_cr(j++, tx[i]);
+	}
+
+	return 0;
+}
+
+void prep_xmit_channels_clean_lcd(void)
+{
+	int i;
+	for (i = 0; i < LCD_NUM_REGS; i++)
+	       lcd_set_cr(i, CAP_CPTR_NULL);
+}
+#endif
 
 int create_async_channel(int lcd_id)
 {
@@ -347,12 +544,6 @@ int create_async_channel(int lcd_id)
 	struct thc_channel *chnl;
 	struct thc_channel *xmit_chnl;
 
-#ifdef EXTRA_CHANNELS
-	cptr_t tx_xmit2, rx_xmit2;
-	cptr_t txirq_xmit, rxirq_xmit;
-	struct thc_channel *xmit_chnl2;
-	struct thc_channel *xmit_irq_chnl;
-#endif
 	/*
 	 * Set up async and sync channels
 	 */
@@ -373,19 +564,6 @@ int create_async_channel(int lcd_id)
 			goto fail_ch;
 		}
 	}
-	ptrs[0] = ptrs[1] = NULL;
-
-#ifdef EXTRA_CHANNELS
-	if (create_one_async_channel(&xmit_chnl2, &tx_xmit2, &rx_xmit2)) {
-		LIBLCD_ERR("async channel creation failed");
-		goto fail_ch;
-	}
-
-	if (create_one_async_channel(&xmit_irq_chnl, &txirq_xmit, &rxirq_xmit)) {
-		LIBLCD_ERR("async channel creation failed");
-		goto fail_ch;
-	}
-#endif
 
 	lcd_set_cr0(ixgbe_sync_endpoints[current_lcd_id]);
         lcd_set_cr1(rx);
@@ -394,16 +572,15 @@ int create_async_channel(int lcd_id)
         lcd_set_cr4(tx_xmit);
 	/* Pass lcd_id */
 	lcd_set_r1(current_lcd_id);
-#ifdef EXTRA_CHANNELS
-        lcd_set_cr5(rxirq_xmit);
-        lcd_set_cr6(txirq_xmit);
-        lcd_set_cr7(rx_xmit2);
-	lcd_set_cr8(tx_xmit2);
+
+#ifdef CONFIG_PREALLOC_XMIT_CHANNELS
+	prep_xmit_channels_lcd();
 #endif
-	LIBLCD_MSG("sync call %s", __func__);
+	LIBLCD_MSG("%s sync call for lcd: %d", __func__, lcd_id);
+
 	ret = lcd_sync_call(ixgbe_register_channels[current_lcd_id]);
 
-	LIBLCD_MSG("sync call returned%s", __func__);
+	LIBLCD_MSG("%s: sync call returned!", __func__);
 
         /*
          * Flush cap registers
@@ -414,10 +591,10 @@ int create_async_channel(int lcd_id)
         lcd_set_cr3(CAP_CPTR_NULL);
         lcd_set_cr4(CAP_CPTR_NULL);
 
-#ifdef EXTRA_CHANNELS
-        lcd_set_cr5(CAP_CPTR_NULL);
-        lcd_set_cr6(CAP_CPTR_NULL);
+#ifdef CONFIG_PREALLOC_XMIT_CHANNELS
+	prep_xmit_channels_clean_lcd();
 #endif
+
         if (ret) {
                 LIBLCD_ERR("lcd_call");
                 goto fail3;
@@ -702,101 +879,7 @@ fail_ipc:
 extern struct pci_driver_container ixgbe_driver_container;
 u64 dma_mask = 0;
 void *data_pool;
-#if 0
-void lcd_register_chardev(const char* name, struct file_operations *fops)
-{
-	int ret = 0;
-	struct fipc_message *request;
-	struct fipc_message *response;
 
-	/* we dont use the fops now, neither the name! we can handle it 
-	 * later if needed */
-	ret = async_msg_blocking_send_start(ixgbe_asyncs[current_lcd_id], &request);
-	if (ret) {
-		LIBLCD_ERR("failed to get a send slot");
-		goto fail_async;
-	}
-
-	/* KLCD will setup a char device for us */
-	async_msg_set_fn_type(request, REGISTER_CHARDEV);
-
-	ret = thc_ipc_call(ixgbe_asyncs[current_lcd_id], request, &response);
-	if (ret) {
-		LIBLCD_ERR("thc_ipc_call");
-		goto fail_ipc;
-	}
-
-	fipc_recv_msg_end(thc_channel_to_fipc(ixgbe_asyncs[current_lcd_id]), response);
-
-fail_async:
-fail_ipc:
-	return;
-}
-
-/* Give the user process a dedicated channel pair */
-int ixgbe_user_open(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
-{
-	struct fipc_message *response;
-	unsigned int request_cookie;
-	int ret = 0;
-	unsigned int func_ret = 0;
-	cptr_t tx, rx;
-	struct thc_channel *chnl;
-
-	request_cookie = thc_get_request_cookie(request);
-	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
-
-	if (create_one_async_channel(&chnl, &tx, &rx)) {
-		LIBLCD_ERR("async channel creation failed");
-	}
-
-        lcd_set_cr0(rx);
-        lcd_set_cr1(tx);
-
-	ret = lcd_sync_send(ixgbe_sync_endpoints[current_lcd_id]);
-
-        lcd_set_cr0(CAP_CPTR_NULL);
-        lcd_set_cr1(CAP_CPTR_NULL);
-
-	if (ret) {
-		LIBLCD_ERR("sync send failed");
-		func_ret = -1;
-		goto fail_sync;
-	}
-
-fail_sync:
-	if (async_msg_blocking_send_start(channel, &response)) {
-		LIBLCD_ERR("error getting response msg");
-		ret = -EIO;
-	}
-	fipc_set_reg1(response, func_ret);
-	thc_ipc_reply(channel, request_cookie, response);
-
-	return ret;
-}
-
-/* destroy the async channel created in open here */
-int ixgbe_user_close(struct fipc_message *request, struct thc_channel *channel, struct glue_cspace *cspace, cptr_t sync_ep)
-{
-	return 0;
-}
-
-/* dummy */
-static int ixgbeu_open(struct inode *inode, struct file *filp)
-{
-	return 0;
-}
-
-static int ixgbeu_close (struct inode *inode, struct file *filp)
-{
-	return 0;
-}
-
-struct file_operations ixgbe_user_fops = {
-        .open   = ixgbeu_open,
-      	.release = ixgbeu_close,
-};
-#endif
 int probe_callee(struct fipc_message *_request,
 		struct thc_channel *_channel,
 		struct glue_cspace *cspace,
@@ -1495,6 +1578,7 @@ void napi_consume_skb(struct sk_buff *skb, int budget)
 	fipc_set_reg1(_request, budget);
 
 #ifdef NAPI_CONSUME_SEND_ONLY
+	printk("%s, request sent!", __func__);
 	thc_set_msg_type(_request, msg_type_request);
 	fipc_send_msg_end(thc_channel_to_fipc(channel),
 					_request);
@@ -2538,10 +2622,6 @@ fail_lookup:
 	return ret;
 
 }
-
-extern netdev_tx_t ixgbe_xmit_frame(struct sk_buff *skb,
-				struct net_device *dev);
-extern struct net_device *g_netdev;
 
 int prep_channel_callee(struct fipc_message *_request,
 		struct thc_channel *_channel,
@@ -4138,17 +4218,20 @@ fail_ipc:
 
 int cleanup_channel_group(struct fipc_message *request, struct thc_channel *channel)
 {
-	int i;
 	fipc_recv_msg_end(thc_channel_to_fipc(channel), request);
 
+#ifndef CONFIG_PREALLOC_XMIT_CHANNELS
+	{
+	int i;
 	for (i = 0; i < 32; i++) {
-		if (ptrs[i]) {
-			thc_channel_group_item_remove(&ch_grps[current_lcd_id], ptrs[i]);
-			destroy_async_channel(ptrs[i]->channel);
-			kfree(ptrs[i]);
-			ptrs[i] = NULL;
+		if (ptrs[current_lcd_id][i]) {
+			thc_channel_group_item_remove(&ch_grp[current_lcd_id], ptrs[current_lcd_id][i]);
+			destroy_async_channel(ptrs[current_lcd_id][i]->channel);
+			kfree(ptrs[current_lcd_id][i]);
+			ptrs[current_lcd_id][i] = NULL;
 		} //if
 	} //for
-
+	}
+#endif
 	return 0;
 }

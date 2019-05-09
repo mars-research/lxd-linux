@@ -13,6 +13,19 @@
 
 /* COMPILER: This is always included after all includes. */
 #include <lcd_config/post_hook.h>
+
+#define REGISTER_FREQ	50
+
+extern struct trampoline_hidden_args *g_ndo_start_xmit_hidden_args;
+extern struct timer_list service_timer;
+extern struct glue_cspace *c_cspace;
+atomic_t num_registered = ATOMIC_INIT(0);
+
+static LIST_HEAD(net_infos);
+struct thc_channel *xmit_chnl;
+struct thc_channel *xmit_chnl2;
+struct thc_channel *xmit_irq_chnl;
+
 /* LOOP ------------------------------------------------------------ */
 struct net_info {
 	struct thc_channel *chnl;
@@ -20,22 +33,15 @@ struct net_info {
 	cptr_t sync_endpoint;
 	struct list_head list;
 };
-static LIST_HEAD(net_infos);
-struct thc_channel *xmit_chnl;
-struct thc_channel *xmit_chnl2;
-struct thc_channel *xmit_irq_chnl;
-struct thc_channel *klcd_chnl;
-extern struct trampoline_hidden_args *g_ndo_start_xmit_hidden_args;
-extern struct lcd_channels lcds[NUM_LCDS];
 
-extern int setup_async_net_ring_channel(cptr_t tx, cptr_t rx, 
+int setup_async_net_ring_channel(cptr_t tx, cptr_t rx, 
 				struct thc_channel **chnl_out);
-extern void destroy_async_net_ring_channel(struct thc_channel *chnl);
-extern int ixgbe_trigger_dump(struct thc_channel *_channel);
-extern int ixgbe_service_event_sched(struct thc_channel *_channel);
-extern int trigger_exit_to_lcd(struct thc_channel *_channel, enum dispatch_t);
-extern struct timer_list service_timer;
-extern struct glue_cspace *c_cspace;
+void destroy_async_net_ring_channel(struct thc_channel *chnl);
+int ixgbe_trigger_dump(struct thc_channel *_channel);
+int ixgbe_service_event_sched(struct thc_channel *_channel);
+int trigger_exit_to_lcd(struct thc_channel *_channel, enum dispatch_t);
+int register_parent(int lcd_id);
+int register_child(int lcd_id);
 
 /* mechanism for unloading LCD gracefully */
 static bool unload_lcd =0;
@@ -159,10 +165,8 @@ static int do_one_register(cptr_t register_chnl)
 	int ret;
 	cptr_t sync_endpoint, tx, rx;
 	cptr_t tx_xmit, rx_xmit;
-
-	struct thc_channel *chnl;
-	struct net_info *net_info;
-
+	cptr_t _tx[MAX_CHNL_PAIRS], _rx[MAX_CHNL_PAIRS];
+	int i, j;
 	int lcd_id;
 
 	/*
@@ -193,7 +197,20 @@ static int do_one_register(cptr_t register_chnl)
 		LIBLCD_ERR("cptr alloc failed");
 		goto fail3;
 	}
-	
+
+	for (i = 0; i < MAX_CHNL_PAIRS; i++) {
+		ret = lcd_cptr_alloc(&_tx[i]);
+		if (ret) {
+			LIBLCD_ERR("cptr alloc failed");
+			goto fail3;
+		}
+		ret = lcd_cptr_alloc(&_rx[i]);
+		if (ret) {
+			LIBLCD_ERR("cptr alloc failed");
+			goto fail3;
+		}
+	}
+
 	/*
 	 * Set up regs and poll
 	 */
@@ -203,87 +220,41 @@ static int do_one_register(cptr_t register_chnl)
 	lcd_set_cr3(tx_xmit);
 	lcd_set_cr4(rx_xmit);
 
+	for (i = 0, j = 5; i < MAX_CHNL_PAIRS && j < LCD_NUM_REGS; i++) {
+		lcd_set_cr(j++, _tx[i]);
+		lcd_set_cr(j++, _rx[i]);
+	}
+
 	ret = lcd_sync_poll_recv(register_chnl);
 	if (ret) {
 		if (ret == -EWOULDBLOCK)
 			ret = 0;
 		goto free_cptrs;
 	}
-#ifdef SYNC_TX
-	/*
-	 * Dispatch to register handler
-	 */
-	ret = dispatch_sync_loop();
-	if (ret)
-		return ret; /* dispatch fn is responsible for cptr cleanup */
-#endif
 
 	lcd_id = lcd_r1();
 
-	LIBLCD_MSG("settingup net_ring channel for LCD %d", lcd_id);
+	atomic_inc(&num_registered);
 
-	/*
-	 * Set up async ring channel
-	 */
-	ret = setup_async_net_ring_channel(tx, rx, &chnl);
-	if (ret) {
-		LIBLCD_ERR("error setting up ring channel");
-		goto fail6;
-	}
-
-	klcd_chnl = chnl;
-
-	/* Populate LCD channel information */
-	lcds[lcd_id].lcd_async_chnl = chnl;
-	lcds[lcd_id].lcd_sync_end = sync_endpoint;
-
-	/* Only parent LCD creates extra channels */
 	if (lcd_id == 0) {
-		LIBLCD_MSG("settingup xmit channel for LCD %d", lcd_id);
-		/*
-		 * Set up async ring channel
-		 */
-		ret = setup_async_net_ring_channel(tx_xmit, rx_xmit,
-						&xmit_chnl);
-		if (ret) {
-			LIBLCD_ERR("error setting up ring channel");
-			goto fail6;
-		}
+		register_parent(lcd_id);
+	} else {
+		register_child(lcd_id);
 	}
 
-	/*
-	 * Add to dispatch loop
-	 */
-	LIBLCD_MSG("Adding to fsinfo cspace %lu | chnl %p | sync_ep %lu", c_cspace, chnl, sync_endpoint);
- 
-	net_info = add_net(chnl, c_cspace, sync_endpoint);
-	if (!net_info) {
-		LIBLCD_ERR("error adding to dispatch loop");
-		goto fail7;
-	}
-
-	LIBLCD_MSG("Returning from %s", __func__);
-	lcd_set_cr0(CAP_CPTR_NULL);
-	lcd_set_cr1(CAP_CPTR_NULL);
-	lcd_set_cr2(CAP_CPTR_NULL);
-	lcd_set_cr3(CAP_CPTR_NULL);
-	lcd_set_cr4(CAP_CPTR_NULL);
-
-	if (lcd_sync_reply())
-		LIBLCD_ERR("Error reply");
 	return 0;
 
-fail6:
-	destroy_async_net_ring_channel(chnl);
-fail7:
 free_cptrs:
-	lcd_set_cr0(CAP_CPTR_NULL);
-	lcd_set_cr1(CAP_CPTR_NULL);
-	lcd_set_cr2(CAP_CPTR_NULL);
-	lcd_set_cr3(CAP_CPTR_NULL);
-	lcd_set_cr4(CAP_CPTR_NULL);
+	for (i = 0; i < LCD_NUM_REGS; i++)
+	       lcd_set_cr(i, CAP_CPTR_NULL);
+
 	lcd_cptr_free(sync_endpoint);
 fail3:
+	for (i = 0; i < MAX_CHNL_PAIRS; i++) {
+		lcd_cptr_free(_tx[i]);
+		lcd_cptr_free(_rx[i]);
+	}
+
 	lcd_cptr_free(tx);
 	lcd_cptr_free(tx_xmit);
 fail2:
@@ -292,7 +263,6 @@ fail2:
 fail1:
 	return ret;
 }
-#define REGISTER_FREQ	50
 
 static void loop(cptr_t register_chnl)
 {
@@ -304,18 +274,19 @@ static void loop(cptr_t register_chnl)
 
 	DO_FINISH(
 	while (!stop) {
-		if (jiffies >= tics) {
-			/*
-			 * Listen for a register call
-			 */
-			ret = do_one_register(register_chnl);
-			if (ret) {
-				LIBLCD_ERR("register error");
-				break;
+		if (atomic_read(&num_registered) != NUM_LCDS) {
+			if (jiffies >= tics) {
+				/*
+				 * Listen for a register call
+				 */
+				ret = do_one_register(register_chnl);
+				if (ret) {
+					LIBLCD_ERR("register error");
+					break;
+				}
+				tics = jiffies + REGISTER_FREQ;
+				continue;
 			}
-
-			tics = jiffies + REGISTER_FREQ;
-			continue;
 		}
 		if (stop)
 			break;

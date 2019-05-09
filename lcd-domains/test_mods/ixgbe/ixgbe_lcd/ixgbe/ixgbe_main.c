@@ -3006,8 +3006,11 @@ int ixgbe_poll(struct napi_struct *napi, int budget)
 		}
 	}
 	ixgbe_for_each_ring(ring, q_vector->tx) {
-		if (!ixgbe_clean_tx_irq(q_vector, ring, budget))
+		int ret;
+		if (!(ret =  ixgbe_clean_tx_irq(q_vector, ring, budget))) {
 			clean_complete = false;
+			printk("%s, cleaning tx ring: %p, ret = %d", __func__, ring, ret);
+		}
 	}
 
 	/* Exit if we are called by netpoll or busy polling is active */

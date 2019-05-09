@@ -24,10 +24,11 @@
 #define NAPI_CONSUME_SEND_ONLY
 #define LOCAL_SKB
 #define NAPI_RX_SEND_ONLY
-//#define SENDER_DISPATCH_LOOP
+#define SENDER_DISPATCH_LOOP
+#define CONFIG_PREALLOC_XMIT_CHANNELS
 
 enum dispatch_t {
-	__PCI_REGISTER_DRIVER,
+	__PCI_REGISTER_DRIVER = 1,
 	PCI_UNREGISTER_DRIVER,
 	ALLOC_ETHERDEV_MQS,
 	REGISTER_NETDEV,
@@ -159,6 +160,26 @@ struct skbuff_members {
 #define C(x)	skb_lcd->x = skb->x
 #define P(x)	skb->x = skb_lcd->x
 
+#if NUM_LCDS == 1
+/* total LCD cores = 2 (lcds=1,klcd=1), free cores = 18 */
+#define MAX_CHANNELS_PER_LCD           	18
+#define NUM_THREADS_ON_NODE0		8
+#elif NUM_LCDS == 2
+/* total LCD cores = 3 (lcds=2,klcd=1), free cores = 17 */
+#define MAX_CHANNELS_PER_LCD           	9
+#define NUM_THREADS_ON_NODE0		8
+#elif NUM_LCDS == 4
+/* total LCD cores = 5 (lcds=4,klcd=1), free cores = 15 */
+#define MAX_CHANNELS_PER_LCD		4
+#define NUM_THREADS_ON_NODE0		7
+#elif NUM_LCDS == 6
+/* total LCD cores = 7 (lcds=6,klcd=1), free cores = 13 */
+#define MAX_CHANNELS_PER_LCD		3
+#define NUM_THREADS_ON_NODE0		6
+#endif
+
+#define MAX_CHNL_PAIRS			MAX_CHANNELS_PER_LCD
+
 /* CSPACES ------------------------------------------------------------ */
 int glue_cap_init(void);
 
@@ -233,7 +254,6 @@ async_msg_blocking_recv_start(struct thc_channel *chnl,
 			struct fipc_message** out)
 {
 	int ret;
-	static int count = 0;
 
 	for (;;) {
 		/* Poll until we get a message or error */
@@ -242,8 +262,6 @@ async_msg_blocking_recv_start(struct thc_channel *chnl,
 		if ( !ret || ret != -EWOULDBLOCK )
 			return ret;
 		cpu_relax();
-		if (count++ % 512 == 0)
-			cond_resched();
 	}
 }
 #endif /* __IXGBE_COMMON_H__ */

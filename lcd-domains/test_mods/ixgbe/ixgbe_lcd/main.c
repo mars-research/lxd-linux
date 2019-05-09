@@ -26,7 +26,9 @@ extern int create_async_channel(int lcd_id);
 unsigned long loops_per_jiffy;
 bool poll_start = false;
 extern int __ixgbe_poll(int lcd_id);
+
 #define LCD_ROUNDROBIN
+
 /* LOOP ---------------------------------------- */
 
 static void main_and_loop(void)
