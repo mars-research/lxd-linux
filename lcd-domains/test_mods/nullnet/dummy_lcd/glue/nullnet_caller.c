@@ -677,7 +677,14 @@ int prep_xmit_channels_lcd(void)
 				LIBLCD_ERR("async channel creation failed\n");
 
 #elif NUM_LCDS == 4
-		if ((current_lcd_id == 0) || (current_lcd_id == 1))
+		if (current_lcd_id < 2)
+			node_id = 0;
+		else
+			node_id = 1;
+		if (create_one_async_channel_on_node(node_id, &xmit, &tx[i], &rx[i]))
+				LIBLCD_ERR("async channel creation failed\n");
+#elif NUM_LCDS == 6
+		if (current_lcd_id < 3)
 			node_id = 0;
 		else
 			node_id = 1;
@@ -1470,6 +1477,7 @@ int ndo_start_xmit_noawe_callee(struct fipc_message *_request, struct thc_channe
 	return ret;
 }
 
+#define MARSHAL
 /* xmit_callee for async. This function receives the IPC and
  * sends back a response
  */
@@ -1477,19 +1485,23 @@ int ndo_start_xmit_async_bare_callee(struct fipc_message *_request, struct thc_c
 {
 	struct fipc_message *response;
 	unsigned 	int request_cookie;
+#ifdef MARSHAL
 	struct lcd_sk_buff_container static_skb_c;
 	struct lcd_sk_buff_container *skb_c = &static_skb_c;
 	struct sk_buff *skb = &skb_c->skbuff;
+#endif
 #ifdef COPY
 	struct skbuff_members *skb_lcd;
 #endif
+#ifdef MARSHAL
 	unsigned long skbh_offset, skb_end;
 	__be16 proto;
 	u32 len;
 	cptr_t skb_ref;
+#endif
 
 	request_cookie = thc_get_request_cookie(_request);
-
+#ifdef MARSHAL
 	skb_ref = __cptr(fipc_get_reg2(_request));
 
 	skbh_offset = fipc_get_reg3(_request);
@@ -1497,13 +1509,16 @@ int ndo_start_xmit_async_bare_callee(struct fipc_message *_request, struct thc_c
 	skb_end = fipc_get_reg4(_request);
 	proto = fipc_get_reg5(_request);
 	len = fipc_get_reg6(_request);
+#endif
 	fipc_recv_msg_end(thc_channel_to_fipc(channel),
 				_request);
 
+#ifdef MARSHAL
 	skb->head = (char*)data_pool + skbh_offset;
 	skb->end = skb_end;
 	skb->len = len;
 	skb->private = true;
+#endif
 
 #ifdef COPY
 	skb_lcd = SKB_LCD_MEMBERS(skb);
@@ -1523,14 +1538,13 @@ int ndo_start_xmit_async_bare_callee(struct fipc_message *_request, struct thc_c
 	skb->data = skb->head + skb_lcd->head_data_off;
 #endif
 
-	fipc_recv_msg_end(thc_channel_to_fipc(channel),
-				_request);
-
+#ifdef MARSHAL
 	skb_c->chnl = channel;
 
 	skb_c->cookie = request_cookie;
 
 	dummy_xmit(skb, NULL);
+#endif
 
 	if (async_msg_blocking_send_start(channel, &response)) {
 		LIBLCD_ERR("error getting response msg");

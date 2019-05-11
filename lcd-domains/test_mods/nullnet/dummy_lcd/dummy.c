@@ -102,8 +102,13 @@ netdev_tx_t dummy_xmit(struct sk_buff *skb, struct net_device *dev)
 	dstats->tx_bytes += skb->len;
 	u64_stats_update_end(&dstats->syncp);
 #else
+	/* XXX: Touching global variable brings down the bandwidth
+	 * Do not do it for now
+	 */
+#if 0
 	g_dstats.tx_packets++;
 	g_dstats.tx_bytes += skb->len;
+#endif
 #endif
 
 #ifdef SENDER_DISPATCH_LOOP

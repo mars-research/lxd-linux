@@ -94,15 +94,15 @@ int setup_once(struct trampoline_hidden_args *hidden_args)
 #if NUM_LCDS == 1
 		lcd_id = 0;
 #elif NUM_LCDS == 2
-		if (smp_processor_id() < 8) {
+		if (smp_processor_id() < NUM_THREADS_ON_NODE0) {
 				lcd_id = 0;
 		} else {
 				lcd_id = 1;
 		}
-#else
+#elif NUM_LCDS == 4
 		spin_lock(&prep_lock);
 		lcd_id = count++ % NUM_LCDS;
-		if (smp_processor_id() <= 6) {
+		if (smp_processor_id() < NUM_THREADS_ON_NODE0) {
 			numa_count0++;
 			if (numa_count0 % 2)
 				lcd_id = 0;
@@ -114,6 +114,16 @@ int setup_once(struct trampoline_hidden_args *hidden_args)
 				lcd_id = 2;
 			else
 				lcd_id = 3;
+		}
+		spin_unlock(&prep_lock);
+#elif NUM_LCDS == 6
+		spin_lock(&prep_lock);
+		lcd_id = count++ % NUM_LCDS;
+		if (smp_processor_id() < NUM_THREADS_ON_NODE0) {
+			lcd_id = numa_count0++ % (NUM_LCDS >> 1);
+		} else {
+			lcd_id = numa_count1++ % (NUM_LCDS >> 1);
+			lcd_id += (NUM_LCDS >> 1);
 		}
 		spin_unlock(&prep_lock);
 #endif
@@ -255,9 +265,16 @@ fail_ipc:
 
 int __ndo_start_xmit_bare_async(struct sk_buff *skb, struct net_device *dev, struct trampoline_hidden_args *hidden_args)
 {
+	struct fipc_message *_request;
+	struct fipc_message *_response;
+	struct thc_channel *async_chnl = NULL;
 	xmit_type_t xmit_type;
-	_TS_DECL(xmit);
+	unsigned int request_cookie;
+	int ret;
+#ifdef TIMESTAMP
 	u32 i;
+	_TS_DECL(xmit);
+#endif
 
 	xmit_type = check_skb_range(skb);
 
@@ -273,10 +290,12 @@ int __ndo_start_xmit_bare_async(struct sk_buff *skb, struct net_device *dev, str
 			goto free;
 	}
 
+	async_chnl = (struct thc_channel*) PTS()->thc_chnl;
 	/* 
 	 * doesn't free the packet NUM_TRANSACTIONS times
 	 * frees the packet only once
 	 */
+#ifdef TIMESTAMP
 	_TS_START(xmit);
 	for (i = 0; i < NUM_TRANSACTIONS; i++) {
 		int j;
@@ -292,6 +311,35 @@ int __ndo_start_xmit_bare_async(struct sk_buff *skb, struct net_device *dev, str
 
 	printk("%s, do_finish{async()}; %d transactions took %llu\n", __func__,
 			NUM_TRANSACTIONS, _TS_DIFF(xmit)/NUM_TRANSACTIONS);
+#endif
+	ret = fipc_test_blocking_send_start(
+			async_chnl, &_request);
+
+	if (unlikely(ret)) {
+		LIBLCD_ERR("failed to get a send slot");
+		goto fail_async;
+	}
+
+	async_msg_set_fn_type(_request, NDO_START_XMIT);
+
+	/* inform LCD that it is async */
+	fipc_set_reg0(_request, 1);
+
+	ret = thc_ipc_send_request(async_chnl, _request, &request_cookie);
+
+	ret = thc_ipc_recv_response_inline(async_chnl, request_cookie,
+				&_response);
+
+	awe_mapper_remove_id(request_cookie);
+
+	if (unlikely(ret)) {
+		LIBLCD_ERR("thc_ipc_call");
+		goto fail_ipc;
+	}
+	ret = fipc_get_reg1(_response);
+	fipc_recv_msg_end(thc_channel_to_fipc( async_chnl), _response);
+fail_ipc:
+fail_async:
 free:
 	dev_kfree_skb(skb);
 	return NETDEV_TX_OK;
@@ -307,6 +355,7 @@ int __ndo_start_xmit_bare_fipc_nomarshal(struct sk_buff *skb, struct net_device 
 	xmit_type_t xmit_type;
 	struct thc_channel *async_chnl;
 #ifdef TIMESTAMP
+	_TS_DECL(xmit);
 	_TS_START(xmit);
 #endif
 
@@ -447,6 +496,14 @@ int ndo_start_xmit_noasync(struct sk_buff *skb, struct net_device *dev, struct t
 	fipc_send_msg_end(thc_channel_to_fipc(
 			async_chnl), _request);
 
+	/*
+	 * XXX: Touching global variable affects the bandwidth.  Ideally, it
+	 * should be a per-cpu thing. So, disable stats collection for now
+	 */
+#if 0
+	g_stats.tx_packets += 1;
+	g_stats.tx_bytes += skb->len;
+#endif
 	//printk("%s, msg sent on chnl %p\n", __func__, async_chnl);
 #ifdef SENDER_DISPATCH_LOOP
 	/* to receive consume_skb */
@@ -464,9 +521,17 @@ int ndo_start_xmit_noasync(struct sk_buff *skb, struct net_device *dev, struct t
 	 */
 	fipc_set_reg0(_request1, (uint64_t) skb);
 
+	if (async_msg_get_fn_type(_request1) != CONSUME_SKB) {
+		printk("%s Discard bogus message type= %d\n", __func__,
+				async_msg_get_fn_type(_request1));
+		fipc_recv_msg_end(thc_channel_to_fipc(async_chnl), _request1);
+		goto skip;
+	}
+
 	/* call consume_skb */
 	dispatch_async_loop(async_chnl, _request1, hidden_args->cspace,
 				hidden_args->sync_ep);
+skip:
 #endif
 
 	//printk("%s, waiting on chnl %p for real resp\n", __func__, async_chnl);
@@ -483,8 +548,6 @@ free:
 #ifndef SENDER_DISPATCH_LOOP
 	dev_kfree_skb(skb);
 #endif
-	g_stats.tx_packets += 1;
-	g_stats.tx_bytes += skb->len;
 	return NETDEV_TX_OK;
 }
 
@@ -593,8 +656,14 @@ free:
 #ifndef SENDER_DISPATCH_LOOP
 	dev_kfree_skb(skb);
 #endif
+	/*
+	 * XXX: Touching global variable affects the bandwidth.  Ideally, it
+	 * should be a per-cpu thing. So, disable stats collection for now
+	 */
+#if 0
 	g_stats.tx_packets += 1;
 	g_stats.tx_bytes += skb->len;
+#endif
 
 fail_async:
 fail_ipc:

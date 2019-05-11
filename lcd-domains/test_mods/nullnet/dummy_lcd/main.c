@@ -27,7 +27,7 @@ bool tdiff_valid = false;
 u64 tdiff_disp = 0ull;
 TS_DECL(disp_loop);
 /* LOOP ---------------------------------------- */
-#define REPORT_LCD_LOAD
+//#define REPORT_LCD_LOAD
 
 void create_async_channel(void);
 
@@ -125,7 +125,9 @@ static void main_and_loop(void)
 
 				if( !ret )
 				{
+#ifdef REPORT_LCD_LOAD
 					start_disp = lcd_RDTSC_START();
+#endif
 					/* message for us */
 					if (async_msg_get_fn_type(msg) == NDO_START_XMIT) {
 

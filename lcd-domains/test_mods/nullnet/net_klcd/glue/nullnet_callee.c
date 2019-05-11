@@ -137,6 +137,8 @@ struct lcd_smp {
 
 
 int ndo_start_xmit_async_landing(struct sk_buff *first, struct net_device *dev, struct trampoline_hidden_args *hidden_args);
+int __ndo_start_xmit_dummy(struct sk_buff *skb, struct net_device *dev, struct trampoline_hidden_args *hidden_args);
+int __ndo_start_xmit_bare_fipc_nomarshal(struct sk_buff *skb, struct net_device *dev, struct trampoline_hidden_args *hidden_args);
 
 void skb_data_pool_init(void)
 {
@@ -799,6 +801,8 @@ int LCD_TRAMPOLINE_LINKAGE(ndo_start_xmit_trampoline)
 	struct trampoline_hidden_args *hidden_args;
 	LCD_TRAMPOLINE_PROLOGUE(hidden_args, ndo_start_xmit_trampoline);
 	ndo_start_xmit_fp = ndo_start_xmit_async_landing;
+	//ndo_start_xmit_fp = __ndo_start_xmit_dummy;
+	//ndo_start_xmit_fp = __ndo_start_xmit_bare_fipc_nomarshal;
 	return ndo_start_xmit_fp(skb, dev, hidden_args);
 
 }
@@ -1266,9 +1270,10 @@ struct rtnl_link_stats64 *ndo_get_stats64(struct net_device *dev, struct rtnl_li
 			ndo_get_stats64_user(dev, stats, hidden_args);
 		});*/
 
+#if 0
 		stats->tx_packets = g_stats.tx_packets;
 		stats->tx_bytes = g_stats.tx_bytes;
-
+#endif
 		return stats;
 	}
 
@@ -2533,7 +2538,8 @@ int pick_channel(int lcd_id)
 
 	used_channels = lcd_metadata[lcd_id].used_channels;
 	if (used_channels < MAX_CHANNELS_PER_LCD) {
-		printk("%s, lcd_id:%d picking channel[%d]: %p\n", __func__,
+		printk("%s, %s:%d lcd_id:%d picking channel[%d]: %p\n", __func__,
+				current->comm, current->pid,
 				lcd_id, used_channels, lcd_metadata[lcd_id].xmit_channels[used_channels]);
 		current->ptstate->thc_chnl = lcd_metadata[lcd_id].xmit_channels[used_channels];
 		lcd_metadata[lcd_id].used_channels++;

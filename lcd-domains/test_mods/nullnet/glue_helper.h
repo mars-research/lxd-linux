@@ -86,12 +86,19 @@ struct skbuff_members {
 #if NUM_LCDS == 1
 /* total LCD cores = 2 (lcds=1,klcd=1), free cores = 18 */
 #define MAX_CHANNELS_PER_LCD           	18
+#define NUM_THREADS_ON_NODE0		8
 #elif NUM_LCDS == 2
 /* total LCD cores = 3 (lcds=2,klcd=1), free cores = 17 */
 #define MAX_CHANNELS_PER_LCD           	9
+#define NUM_THREADS_ON_NODE0		8
 #elif NUM_LCDS == 4
 /* total LCD cores = 5 (lcds=4,klcd=1), free cores = 15 */
 #define MAX_CHANNELS_PER_LCD		4
+#define NUM_THREADS_ON_NODE0		7
+#elif NUM_LCDS == 6
+/* total LCD cores = 7 (lcds=6,klcd=1), free cores = 13 */
+#define MAX_CHANNELS_PER_LCD		3
+#define NUM_THREADS_ON_NODE0		6
 #endif
 
 #define MAX_CHNL_PAIRS			MAX_CHANNELS_PER_LCD
