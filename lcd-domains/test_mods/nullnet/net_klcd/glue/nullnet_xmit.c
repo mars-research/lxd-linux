@@ -45,13 +45,6 @@ DEFINE_SPINLOCK(prep_lock);
 int setup_once(struct trampoline_hidden_args *hidden_args)
 {
 	int lcd_id;
-#if NUM_LCDS == 1
-#elif NUM_LCDS == 2
-#else
-	static int count = 0;
-	static int numa_count1 = 0;
-	static int numa_count0 = 0;
-#endif
 	printk("%s, %s:%d lcdenter on cpu: %d\n", __func__,
 			current->comm, current->pid, smp_processor_id());
 
@@ -100,32 +93,23 @@ int setup_once(struct trampoline_hidden_args *hidden_args)
 				lcd_id = 1;
 		}
 #elif NUM_LCDS == 4
-		spin_lock(&prep_lock);
-		lcd_id = count++ % NUM_LCDS;
-		if (smp_processor_id() < NUM_THREADS_ON_NODE0) {
-			numa_count0++;
-			if (numa_count0 % 2)
-				lcd_id = 0;
-			else
-				lcd_id = 1;
-		} else {
-			numa_count1++;
-			if (numa_count1 % 2)
-				lcd_id = 2;
-			else
-				lcd_id = 3;
+		switch (smp_processor_id()) {
+		case 0: case 4: case 8: case 12: case 16: case 20:
+			lcd_id = 0;
+			break;
+		case 1: case 5: case 9: case 13: case 17: case 21: case 25:
+			lcd_id = 1;
+			break;
+		case 2: case 6: case 10: case 14: case 18: case 22: case 26:
+			lcd_id = 2;
+			break;
+		case 3: case 7: case 11: case 15: case 19: case 23: case 27:
+			lcd_id = 3;
+			break;
+		default:
+			lcd_id = 0;
+			break;
 		}
-		spin_unlock(&prep_lock);
-#elif NUM_LCDS == 6
-		spin_lock(&prep_lock);
-		lcd_id = count++ % NUM_LCDS;
-		if (smp_processor_id() < NUM_THREADS_ON_NODE0) {
-			lcd_id = numa_count0++ % (NUM_LCDS >> 1);
-		} else {
-			lcd_id = numa_count1++ % (NUM_LCDS >> 1);
-			lcd_id += (NUM_LCDS >> 1);
-		}
-		spin_unlock(&prep_lock);
 #endif
 		pick_channel(lcd_id);
 #else
@@ -697,6 +681,7 @@ int ndo_start_xmit_async_landing(struct sk_buff *first, struct net_device *dev, 
 			ASYNC_({
 				skb->chain_skb = true;
 				rc = ndo_start_xmit_async(skb, dev, hidden_args);
+				//rc = __ndo_start_xmit_bare_async(skb, dev, hidden_args);
 				if (unlikely(!dev_xmit_complete(rc))) {
 					skb->next = next;
 					printk("%s, xmit failed\n", __func__);

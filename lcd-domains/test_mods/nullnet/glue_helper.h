@@ -83,18 +83,22 @@ struct skbuff_members {
 #define SENDER_DISPATCH_LOOP
 #define CONFIG_PREALLOC_XMIT_CHANNELS
 
+/* TODO: Use num_online_cpus/ num_online_nodes from Linux */
+#define NUM_CPUS		32
+#define NUM_NODES		4
+#define NUM_CPUS_PER_NODE	(NUM_CPUS / NUM_NODES)
+
 #if NUM_LCDS == 1
-/* total LCD cores = 2 (lcds=1,klcd=1), free cores = 18 */
-#define MAX_CHANNELS_PER_LCD           	18
-#define NUM_THREADS_ON_NODE0		8
+#define NUM_LCD_CPUS		(NUM_LCDS + 1)
+  #define MAX_CHANNELS_PER_LCD           	(NUM_CPUS - NUM_LCD_CPUS)
+  #define NUM_THREADS_ON_NODE0		(NUM_CPUS_PER_NODE - NUM_LCD_CPUS)
 #elif NUM_LCDS == 2
-/* total LCD cores = 3 (lcds=2,klcd=1), free cores = 17 */
-#define MAX_CHANNELS_PER_LCD           	9
-#define NUM_THREADS_ON_NODE0		8
+  #define MAX_CHANNELS_PER_LCD          6
+  #define NUM_THREADS_ON_NODE0		5
 #elif NUM_LCDS == 4
 /* total LCD cores = 5 (lcds=4,klcd=1), free cores = 15 */
-#define MAX_CHANNELS_PER_LCD		4
-#define NUM_THREADS_ON_NODE0		7
+#define MAX_CHANNELS_PER_LCD		7
+#define NUM_THREADS_ON_NODE0		6
 #elif NUM_LCDS == 6
 /* total LCD cores = 7 (lcds=6,klcd=1), free cores = 13 */
 #define MAX_CHANNELS_PER_LCD		3
