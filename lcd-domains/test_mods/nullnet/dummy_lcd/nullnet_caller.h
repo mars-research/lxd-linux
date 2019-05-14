@@ -26,14 +26,30 @@ int ndo_start_xmit_noawe_callee(struct fipc_message *_request,
 		struct glue_cspace *cspace,
 		struct cptr sync_ep);
 
-int ndo_start_xmit_async_bare_callee(struct fipc_message *_request,
-		struct thc_channel *_channel,
-		struct glue_cspace *cspace,
-		struct cptr sync_ep);
-
 int ndo_start_xmit_bare_callee(struct fipc_message *_request,
 		struct thc_channel *_channel,
 		struct glue_cspace *cspace,
 		struct cptr sync_ep);
+
+int ndo_start_xmit_noasync_1c_callee(struct fipc_message *_request,
+		struct thc_channel *_channel,
+		struct glue_cspace *cspace,
+		struct cptr sync_ep);
+
+int ndo_start_xmit_noasync_callee(struct fipc_message *_request,
+		struct thc_channel *_channel,
+		struct glue_cspace *cspace,
+		struct cptr sync_ep);
+
+int ndo_start_xmit_async_1c_callee(struct fipc_message *_request,
+		struct thc_channel *_channel,
+		struct glue_cspace *cspace,
+		struct cptr sync_ep);
+
+int ndo_start_xmit_async_callee(struct fipc_message *_request,
+		struct thc_channel *_channel,
+		struct glue_cspace *cspace,
+		struct cptr sync_ep);
+
 
 #endif /* __NULLNET_CALLER_H__ */

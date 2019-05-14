@@ -329,6 +329,104 @@ free:
 	return NETDEV_TX_OK;
 }
 
+int ndo_start_xmit_async_1c(struct sk_buff *skb, struct net_device *dev, struct trampoline_hidden_args *hidden_args)
+{
+	struct fipc_message *_request;
+	struct fipc_message *_response;
+	struct thc_channel *async_chnl = NULL;
+	xmit_type_t xmit_type;
+	unsigned int request_cookie;
+	struct net_device_container *net_dev_container;
+	struct sk_buff_container static_skbc = {0};
+	struct sk_buff_container *skb_c = &static_skbc;
+	int ret;
+#ifdef COPY
+	struct skbuff_members *skb_lcd;
+#endif
+
+	xmit_type = check_skb_range(skb);
+
+	if (xmit_type == VOLUNTEER_XMIT) {
+		printk("%s, skb->proto %02X | len %d\n",
+				__func__, ntohs(skb->protocol),
+				skb->len);
+		goto free;
+	}
+
+	if (unlikely(!current->ptstate)) {
+		if (setup_once(hidden_args))
+			goto free;
+	}
+
+	net_dev_container = container_of(dev,
+			struct net_device_container, net_device);
+	async_chnl = (struct thc_channel*) PTS()->thc_chnl;
+	/* 
+	 * doesn't free the packet NUM_TRANSACTIONS times
+	 * frees the packet only once
+	 */
+	ret = fipc_test_blocking_send_start(
+			async_chnl, &_request);
+
+	if (unlikely(ret)) {
+		LIBLCD_ERR("failed to get a send slot");
+		goto fail_async;
+	}
+
+	async_msg_set_fn_type(_request, NDO_START_XMIT);
+
+	/* inform LCD that it is async */
+	fipc_set_reg0(_request, 1);
+
+	fipc_set_reg1(_request,
+			net_dev_container->other_ref.cptr);
+
+	fipc_set_reg2(_request,
+			skb_c->my_ref.cptr);
+
+	fipc_set_reg3(_request,
+			(unsigned long)
+			((void*)skb->head - skb_pool->base));
+
+	fipc_set_reg4(_request, skb->end);
+	fipc_set_reg5(_request, skb->protocol);
+	fipc_set_reg6(_request, skb->len);
+
+#ifdef COPY
+	skb_lcd = SKB_LCD_MEMBERS(skb);
+	C(len);
+	C(data_len);
+	C(queue_mapping);
+	C(xmit_more);
+	C(tail);
+	C(truesize);
+	C(ip_summed);
+	C(csum_start);
+	C(network_header);
+	C(csum_offset);
+	C(transport_header);
+	skb_lcd->head_data_off = skb->data - skb->head;
+#endif
+
+	ret = thc_ipc_send_request(async_chnl, _request, &request_cookie);
+
+	ret = thc_ipc_recv_response_inline(async_chnl, request_cookie,
+				&_response);
+
+	awe_mapper_remove_id(request_cookie);
+
+	if (unlikely(ret)) {
+		LIBLCD_ERR("thc_ipc_call");
+		goto fail_ipc;
+	}
+	ret = fipc_get_reg1(_response);
+	fipc_recv_msg_end(thc_channel_to_fipc( async_chnl), _response);
+fail_ipc:
+fail_async:
+free:
+	dev_kfree_skb(skb);
+	return NETDEV_TX_OK;
+}
 /*
  * This function measures the overhead of bare fipc in KLCD/LCD setting
  */
@@ -535,6 +633,79 @@ free:
 	return NETDEV_TX_OK;
 }
 
+int ndo_start_xmit_noasync_1c(struct sk_buff *skb, struct net_device *dev, struct trampoline_hidden_args *hidden_args)
+{
+	struct fipc_message *_request;
+	struct fipc_message *_response;
+	xmit_type_t xmit_type;
+	struct thc_channel *async_chnl;
+	struct net_device_container *net_dev_container;
+	struct sk_buff_container static_skbc = {0};
+	struct sk_buff_container *skb_c = &static_skbc;
+	int ret;
+
+	net_dev_container = container_of(dev,
+			struct net_device_container, net_device);
+
+	skb_c->skb = skb;
+
+	xmit_type = check_skb_range(skb);
+
+	if (xmit_type == VOLUNTEER_XMIT) {
+		printk("%s, skb->proto %02X | len %d\n",
+				__func__, ntohs(skb->protocol),
+				skb->len);
+		goto free;
+	}
+
+	/* setup once for this thread */
+	if (unlikely(!current->ptstate)) {
+		if (setup_once(hidden_args))
+			goto free;
+
+		printk("%s, Got async_chnl %p\n", __func__, current->ptstate->thc_chnl);
+	}
+
+	/* get the async channel */
+	async_chnl = current->ptstate->thc_chnl;
+
+
+	fipc_test_blocking_send_start( async_chnl, &_request);
+
+	async_msg_set_fn_type(_request, NDO_START_XMIT);
+
+	thc_set_msg_type(_request, msg_type_request);
+
+	/* chain skb or not */
+	fipc_set_reg0(_request, false);
+
+	fipc_set_reg1(_request,
+			net_dev_container->other_ref.cptr);
+	fipc_set_reg2(_request,
+			skb_c->my_ref.cptr);
+
+	fipc_set_reg3(_request,
+			(unsigned long)
+			((void*)skb->head - skb_pool->base));
+
+	fipc_set_reg4(_request, skb->end);
+	fipc_set_reg5(_request, skb->protocol);
+	fipc_set_reg6(_request, skb->len);
+
+	fipc_send_msg_end(thc_channel_to_fipc(
+			async_chnl), _request);
+
+	/* guard nonlcd case with all macros */
+	fipc_test_blocking_recv_start( async_chnl, &_response);
+
+	fipc_recv_msg_end(thc_channel_to_fipc(
+			async_chnl), _response);
+
+	ret = fipc_get_reg1(_response);
+free:
+	dev_kfree_skb(skb);
+	return NETDEV_TX_OK;
+}
 /*
  * This function gets called when there is a chained skb in flight. For packet sizes > mtu, skbs are chained
  * at the IP layer if NETIF_CHAIN_SKB feature is enabled in the driver
@@ -666,6 +837,7 @@ int ndo_start_xmit_async_landing(struct sk_buff *first, struct net_device *dev, 
 		skb->chain_skb = false;
 
 	if (!skb->chain_skb)
+		//return ndo_start_xmit_noasync_1c(skb, dev, hidden_args);
 		return ndo_start_xmit_noasync(skb, dev, hidden_args);
 
 	/* chain skb */
@@ -681,7 +853,7 @@ int ndo_start_xmit_async_landing(struct sk_buff *first, struct net_device *dev, 
 			ASYNC_({
 				skb->chain_skb = true;
 				rc = ndo_start_xmit_async(skb, dev, hidden_args);
-				//rc = __ndo_start_xmit_bare_async(skb, dev, hidden_args);
+				//rc = ndo_start_xmit_async_1c(skb, dev, hidden_args);
 				if (unlikely(!dev_xmit_complete(rc))) {
 					skb->next = next;
 					printk("%s, xmit failed\n", __func__);

@@ -133,14 +133,14 @@ static void main_and_loop(void)
 
 						//printk("%s, got msg on xmit ch: %p", __func__, curr_item->channel);
 						if (fipc_get_reg0(msg)) {
-						ret = ndo_start_xmit_async_bare_callee(msg,
+						ret = ndo_start_xmit_async_callee(msg,
 							curr_item->channel,
 							nullnet_cspace,
 							nullnet_sync_endpoints[current_lcd_id]);
 						} else {
 							//printk("%s, LCD:%d got XMIT msg on chnl: %p",
 							//		__func__, current_lcd_id, curr_item->channel);
-						ret = ndo_start_xmit_noawe_callee(msg,
+						ret = ndo_start_xmit_noasync_callee(msg,
 							curr_item->channel,
 							nullnet_cspace,
 							nullnet_sync_endpoints[current_lcd_id]);

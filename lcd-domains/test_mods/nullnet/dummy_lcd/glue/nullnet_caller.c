@@ -677,10 +677,7 @@ int prep_xmit_channels_lcd(void)
 				LIBLCD_ERR("async channel creation failed\n");
 
 #elif NUM_LCDS == 4
-		if (current_lcd_id < 2)
-			node_id = 0;
-		else
-			node_id = 1;
+		node_id = current_lcd_id;
 		if (create_one_async_channel_on_node(node_id, &xmit, &tx[i], &rx[i]))
 				LIBLCD_ERR("async channel creation failed\n");
 #elif NUM_LCDS == 6
@@ -1412,7 +1409,70 @@ int ndo_start_xmit_bare_callee(struct fipc_message *_request, struct thc_channel
 	return 0;
 }
 
-int ndo_start_xmit_noawe_callee(struct fipc_message *_request, struct thc_channel *channel, struct glue_cspace *cspace, struct cptr sync_ep)
+int ndo_start_xmit_noasync_1c_callee(struct fipc_message *_request, struct thc_channel *channel, struct glue_cspace *cspace, struct cptr sync_ep)
+{
+	struct lcd_sk_buff_container static_skb_c;
+	struct lcd_sk_buff_container *skb_c = &static_skb_c;
+	struct sk_buff *skb = &skb_c->skbuff;
+	struct fipc_message *response;
+	int ret = NETDEV_TX_OK;
+#ifdef COPY
+	struct skbuff_members *skb_lcd;
+#endif
+
+	unsigned long skbh_offset, skb_end;
+	__be16 proto;
+	u32 len;
+	cptr_t skb_ref;
+
+	skb_ref = __cptr(fipc_get_reg2(_request));
+
+	skbh_offset = fipc_get_reg3(_request);
+
+	skb_end = fipc_get_reg4(_request);
+	proto = fipc_get_reg5(_request);
+	len = fipc_get_reg6(_request);
+	fipc_recv_msg_end(thc_channel_to_fipc(channel),
+				_request);
+
+	skb->head = (char*)data_pool + skbh_offset;
+	skb->end = skb_end;
+	skb->len = len;
+	skb->private = true;
+
+#ifdef COPY
+	skb_lcd = SKB_LCD_MEMBERS(skb);
+
+	P(len);
+	P(data_len);
+	P(queue_mapping);
+	P(xmit_more);
+	P(tail);
+	P(truesize);
+	P(ip_summed);
+	P(csum_start);
+	P(network_header);
+	P(csum_offset);
+	P(transport_header);
+
+	skb->data = skb->head + skb_lcd->head_data_off;
+#endif
+
+	skb_c->chnl = channel;
+
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+
+	fipc_set_reg1(response, ret);
+	thc_set_msg_type(response, msg_type_response);
+	fipc_send_msg_end(thc_channel_to_fipc(channel), response);
+	//printk("%s, response sent! chnl: %p", __func__, channel);
+	return ret;
+}
+
+int ndo_start_xmit_noasync_callee(struct fipc_message *_request, struct thc_channel *channel, struct glue_cspace *cspace, struct cptr sync_ep)
 {
 	struct lcd_sk_buff_container static_skb_c;
 	struct lcd_sk_buff_container *skb_c = &static_skb_c;
@@ -1477,11 +1537,84 @@ int ndo_start_xmit_noawe_callee(struct fipc_message *_request, struct thc_channe
 	return ret;
 }
 
-#define MARSHAL
 /* xmit_callee for async. This function receives the IPC and
  * sends back a response
  */
-int ndo_start_xmit_async_bare_callee(struct fipc_message *_request, struct thc_channel *channel, struct glue_cspace *cspace, struct cptr sync_ep)
+int ndo_start_xmit_async_1c_callee(struct fipc_message *_request, struct thc_channel *channel, struct glue_cspace *cspace, struct cptr sync_ep)
+{
+	struct fipc_message *response;
+	unsigned 	int request_cookie;
+#ifdef MARSHAL
+	struct lcd_sk_buff_container static_skb_c;
+	struct lcd_sk_buff_container *skb_c = &static_skb_c;
+	struct sk_buff *skb = &skb_c->skbuff;
+#endif
+#ifdef COPY
+	struct skbuff_members *skb_lcd;
+#endif
+#ifdef MARSHAL
+	unsigned long skbh_offset, skb_end;
+	__be16 proto;
+	u32 len;
+	cptr_t skb_ref;
+#endif
+
+	request_cookie = thc_get_request_cookie(_request);
+#ifdef MARSHAL
+	skb_ref = __cptr(fipc_get_reg2(_request));
+
+	skbh_offset = fipc_get_reg3(_request);
+
+	skb_end = fipc_get_reg4(_request);
+	proto = fipc_get_reg5(_request);
+	len = fipc_get_reg6(_request);
+#endif
+	fipc_recv_msg_end(thc_channel_to_fipc(channel),
+				_request);
+
+#ifdef MARSHAL
+	skb->head = (char*)data_pool + skbh_offset;
+	skb->end = skb_end;
+	skb->len = len;
+	skb->private = true;
+#endif
+
+#ifdef COPY
+	skb_lcd = SKB_LCD_MEMBERS(skb);
+
+	P(len);
+	P(data_len);
+	P(queue_mapping);
+	P(xmit_more);
+	P(tail);
+	P(truesize);
+	P(ip_summed);
+	P(csum_start);
+	P(network_header);
+	P(csum_offset);
+	P(transport_header);
+
+	skb->data = skb->head + skb_lcd->head_data_off;
+#endif
+
+#ifdef MARSHAL
+	skb_c->chnl = channel;
+
+	skb_c->cookie = request_cookie;
+#endif
+
+	if (async_msg_blocking_send_start(channel, &response)) {
+		LIBLCD_ERR("error getting response msg");
+		return -EIO;
+	}
+
+	return thc_ipc_reply(channel, request_cookie, response);
+}
+
+/* xmit_callee for async. This function receives the IPC and
+ * sends back a response
+ */
+int ndo_start_xmit_async_callee(struct fipc_message *_request, struct thc_channel *channel, struct glue_cspace *cspace, struct cptr sync_ep)
 {
 	struct fipc_message *response;
 	unsigned 	int request_cookie;

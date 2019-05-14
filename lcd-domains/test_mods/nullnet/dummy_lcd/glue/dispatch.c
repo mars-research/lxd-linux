@@ -31,11 +31,6 @@ int dispatch_async_loop(struct thc_channel *channel,
 			/* wait until uninit is called */
 			dummy_done = 1;
 			return -1;
-		case NDO_START_XMIT:
-//			trace(NDO_START_XMIT);
-			/* XXX: xmit never reaches the dispatch loop */
-			return ndo_start_xmit_async_bare_callee(message,
-					channel, cspace, sync_ep);
 		case NDO_VALIDATE_ADDR:
 			trace(NDO_VALIDATE_ADDR);
 			return ndo_validate_addr_callee(message,

@@ -137,8 +137,6 @@ struct lcd_smp {
 
 
 int ndo_start_xmit_async_landing(struct sk_buff *first, struct net_device *dev, struct trampoline_hidden_args *hidden_args);
-int __ndo_start_xmit_dummy(struct sk_buff *skb, struct net_device *dev, struct trampoline_hidden_args *hidden_args);
-int __ndo_start_xmit_bare_fipc_nomarshal(struct sk_buff *skb, struct net_device *dev, struct trampoline_hidden_args *hidden_args);
 
 void skb_data_pool_init(void)
 {
@@ -801,8 +799,6 @@ int LCD_TRAMPOLINE_LINKAGE(ndo_start_xmit_trampoline)
 	struct trampoline_hidden_args *hidden_args;
 	LCD_TRAMPOLINE_PROLOGUE(hidden_args, ndo_start_xmit_trampoline);
 	ndo_start_xmit_fp = ndo_start_xmit_async_landing;
-	//ndo_start_xmit_fp = __ndo_start_xmit_dummy;
-	//ndo_start_xmit_fp = __ndo_start_xmit_bare_fipc_nomarshal;
 	return ndo_start_xmit_fp(skb, dev, hidden_args);
 
 }

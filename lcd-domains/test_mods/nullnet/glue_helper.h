@@ -82,6 +82,8 @@ struct skbuff_members {
 #define CONSUME_SKB_NO_HASHING
 #define SENDER_DISPATCH_LOOP
 #define CONFIG_PREALLOC_XMIT_CHANNELS
+#define COPY
+#define MARSHAL
 
 /* TODO: Use num_online_cpus/ num_online_nodes from Linux */
 #define NUM_CPUS		32
