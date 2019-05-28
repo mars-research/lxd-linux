@@ -31,6 +31,7 @@ static LIST_HEAD(drv_infos);
 int pmfs_ready;
 struct cspace *klcd_cspace;
 int register_child(void);
+atomic_t num_registered = ATOMIC_INIT(0);
 
 /*drv_infos is a global list that has a list of drivers registered to it
  * ch_grp is another list internal to a particular drv_info that has a list
@@ -216,7 +217,9 @@ static int async_aux_loop(struct drv_info **drv_out, struct fipc_message **msg_o
 static int do_one_register(cptr_t register_chnl)
 {
 	int ret;
+	int i, j;
 	cptr_t sync_endpoint, tx, rx;
+	cptr_t _tx[MAX_CHNL_PAIRS], _rx[MAX_CHNL_PAIRS];
 	//cptr_t tx_aux, rx_aux;
 
 	/*
@@ -236,6 +239,19 @@ static int do_one_register(cptr_t register_chnl)
 	if (ret) {
 		LIBLCD_ERR("cptr alloc failed");
 		goto fail3;
+	}
+
+	for (i = 0; i < MAX_CHNL_PAIRS; i++) {
+		ret = lcd_cptr_alloc(&_tx[i]);
+		if (ret) {
+			LIBLCD_ERR("cptr alloc failed");
+			goto fail3;
+		}
+		ret = lcd_cptr_alloc(&_rx[i]);
+		if (ret) {
+			LIBLCD_ERR("cptr alloc failed");
+			goto fail3;
+		}
 	}
 
 	//ret = lcd_cptr_alloc(&tx_aux);
@@ -259,21 +275,28 @@ static int do_one_register(cptr_t register_chnl)
 	//lcd_set_cr3(tx_aux);
 	//lcd_set_cr4(rx_aux);
 
+	for (i = 0, j = 5; i < MAX_CHNL_PAIRS && j < LCD_NUM_REGS; i++) {
+		lcd_set_cr(j++, _tx[i]);
+		lcd_set_cr(j++, _rx[i]);
+	}
+
 	//printk("polling for sync recv...\n");
 	ret = lcd_sync_poll_recv(register_chnl);
 	if (ret) {
-		//if (ret == -EWOULDBLOCK) {
-			//printk("EWOULDBLOCK \n");
-			//ret = 0;
-		//}
+		if (ret == -EWOULDBLOCK) {
+			ret = 0;
+		}
 		goto free_cptrs;
 	}
+
+	atomic_inc(&num_registered);
 	/*
 	 * Dispatch to register handler
 	 */
 	if (lcd_r0()) {
 		ret = dispatch_sync_loop();
 	} else {
+		printk("%s, calling register_child\n", __func__);
 		ret = register_child();
 	}
 
@@ -283,9 +306,9 @@ static int do_one_register(cptr_t register_chnl)
 	return 0;
 
 free_cptrs:
-	lcd_set_cr0(CAP_CPTR_NULL);
-	lcd_set_cr1(CAP_CPTR_NULL);
-	lcd_set_cr2(CAP_CPTR_NULL);
+	for (i = 0; i < LCD_NUM_REGS; i++)
+	       lcd_set_cr(i, CAP_CPTR_NULL);
+
 	//lcd_set_cr3(CAP_CPTR_NULL);
 	//lcd_set_cr4(CAP_CPTR_NULL);
 	//lcd_cptr_free(rx_aux);
@@ -294,6 +317,11 @@ free_cptrs:
 //fail4:
 	lcd_cptr_free(rx);
 fail3:
+	for (i = 0; i < MAX_CHNL_PAIRS; i++) {
+		lcd_cptr_free(_tx[i]);
+		lcd_cptr_free(_rx[i]);
+	}
+
 	lcd_cptr_free(tx);
 fail2:
 	lcd_cptr_free(sync_endpoint);
@@ -335,6 +363,13 @@ static void handle_loop(long id)
 		
 			ret = async_loop(&drv, &curr_item, &msg);
 			if (!ret) {
+				if (async_msg_get_fn_type(msg) == BLK_MQ_END_REQUEST) {
+					printk("KLCD: end_request seen \n");
+				}
+				if (async_msg_get_fn_type(msg) == BLK_MQ_START_REQUEST) {
+					printk("KLCD: start_request seen \n");
+				}
+
 				//(async_msg_get_fn_type(msg) == BLK_MQ_END_REQUEST) ? count ++ : -1;
 				//(async_msg_get_fn_type(msg) == BLK_MQ_START_REQUEST) ? bench_start() : -1;
 				//((id == 0) && (async_msg_get_fn_type(msg) == BLK_MQ_END_REQUEST)) ? marker_begin() : -1;
@@ -473,31 +508,87 @@ int klcd_task(void *data) {
 static void loop(cptr_t register_chnl)
 {
 	unsigned long tics = jiffies + VFS_REGISTER_FREQ;
-	//struct fipc_message *msg;
-	//struct thc_channel_group_item *curr_item;
-	//struct drv_info *drv;
+	struct fipc_message *msg;
+	struct thc_channel_group_item *curr_item;
+	struct drv_info *drv;
 	int stop = 0;
 	int ret;
-	//struct task_struct *sub_task = NULL;
+	int id = 0;
 
-	while(!stop) {
-		if (jiffies >= tics) {
-			ret = do_one_register(register_chnl);
-			if (ret == 0) {
-				LIBLCD_MSG("registered driver successfully \n");
+	DO_FINISH(
+		while(!stop) {
+			if (atomic_read(&num_registered) != NUM_LCDS) {
+				if (jiffies >= tics) {
+					ret = do_one_register(register_chnl);
+					if (ret) {
+						LIBLCD_MSG("register error\n");
+						break;
+					}
+					tics = jiffies + VFS_REGISTER_FREQ;
+					continue;
+				}
+			}
+			if (stop)
+				break;
+		
+			ret = async_loop(&drv, &curr_item, &msg);
+			if (!ret) {
+				if (async_msg_get_fn_type(msg) == BLK_MQ_END_REQUEST) {
+					printk("KLCD: end_request seen \n");
+				}
+				if (async_msg_get_fn_type(msg) == BLK_MQ_START_REQUEST) {
+					printk("KLCD: start_request seen \n");
+				}
+
+				//(async_msg_get_fn_type(msg) == BLK_MQ_END_REQUEST) ? count ++ : -1;
+				//(async_msg_get_fn_type(msg) == BLK_MQ_START_REQUEST) ? bench_start() : -1;
+				//((id == 0) && (async_msg_get_fn_type(msg) == BLK_MQ_END_REQUEST)) ? marker_begin() : -1;
+				//((id == 0xab) && (async_msg_get_fn_type(msg) == BLK_MQ_END_REQUEST)) ? bench_end() : -1;
+				ASYNC(
+				
+
+					ret = dispatch_async_loop(
+						curr_item->channel, 
+						msg,
+						drv->cspace,
+						drv->sync_endpoint);
+					if (ret) {
+						LIBLCD_ERR("drv dispatch err");
+						/* (break won't work here) */
+						stop = 1;
+					}
+					);
+			//((async_msg_get_fn_type(msg) == BLK_MQ_END_REQUEST)) ? bench_end() : -1;
+			} else if (ret != -EWOULDBLOCK) {
+				LIBLCD_ERR("async loop failed");
+				stop = 1;
 				break;
 			}
-			else if (ret == -EWOULDBLOCK) {
-				tics = jiffies + VFS_REGISTER_FREQ;
-				continue;
-			}
-			else {
-				LIBLCD_ERR("register error");
+
+			if (kthread_should_stop()) {
+				LIBLCD_ERR("kthread should stop");
+				stop = 1;
+				if (id == 0) {
+					blk_exit(curr_item->channel);
+				}
 				break;
 			}
+
+#ifndef CONFIG_PREEMPT
+			/*
+			 * Play nice with the rest of the system
+			 */
+			cond_resched();
+#endif
+		
 		}
-	}
-	
+		if(id == 0) {
+			BENCH_COMPUTE_STAT(disp_loop);
+			//MARKER_DUMP(disp_loop);
+			//printk("main klcd count --> %d \n",count);
+		}
+		LIBLCD_MSG("blk exited loop, calling blk_exit");
+	);	
 	//sub_task = kthread_create(klcd_task, NULL, "klcd_task");
 	//if (IS_ERR(sub_task)) {
 	//	ret = PTR_ERR(sub_task);
@@ -507,7 +598,7 @@ static void loop(cptr_t register_chnl)
 	
 	//wake_up_process(sub_task);
 	
-	handle_loop(0);
+	//handle_loop(0);
 	//kthread_stop(sub_task);
 /*	
 	DO_FINISH(

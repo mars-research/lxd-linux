@@ -16,36 +16,40 @@
 
 
 #define PMFS_ASYNC_RPC_BUFFER_ORDER 20
+#define FIPC_MSG_STATUS_AVAILABLE 0xdeaddeadUL
+#define FIPC_MSG_STATUS_SENT      0xfeedfeedUL
+
 #define SENDER_DISPATCH_LOOP
+#define CONFIG_PREALLOC_CHANNELS
 
 enum dispatch_t {
-        BLK_MQ_ALLOC_TAG_SET,
+        BLK_MQ_ALLOC_TAG_SET = 1,
         BLK_MQ_INIT_QUEUE,
         BLK_CLEANUP_QUEUE,
-	BLK_MQ_END_REQUEST,
+	BLK_MQ_END_REQUEST = 4,
         BLK_MQ_FREE_TAG_SET,
         BLK_MQ_START_REQUEST,
         BLK_MQ_MAP_QUEUE,
-        BLK_QUEUE_LOGICAL_BLOCK_SIZE,
+        BLK_QUEUE_LOGICAL_BLOCK_SIZE = 8,
         BLK_QUEUE_PHYSICAL_BLOCK_SIZE,
         ALLOC_DISK,
 	ADD_DISK,
-        PUT_DISK,
+        PUT_DISK = 12,
         DEL_GENDISK,
         DISK_NODE,
         REGISTER_BLKDEV,
-        UNREGISTER_BLKDEV,
+        UNREGISTER_BLKDEV = 16,
         REGISTER_CHARDEV,
 	QUEUE_RQ_FN,
         MAP_QUEUE_FN,
-        INIT_HCTX_FN,
+        INIT_HCTX_FN = 20,
         SOFTIRQ_DONE_FN,
         OPEN,
 	RELEASE,
-	OPEN_CHARDEV,
+	OPEN_CHARDEV = 24,
 	RELEASE_CHARDEV,
 	MMAP_CHARDEV,
-        DESTROY_LCD
+        DESTROY_LCD = 27
 };
 
 /* CONTAINERS ------------------------------------------------------------ */
@@ -104,6 +108,25 @@ struct request_queue_container {
         cptr_t other_ref;
         cptr_t my_ref;
 };
+
+#if NUM_LCDS == 1
+#define NUM_LCD_CPUS				(NUM_LCDS + 1)
+  #define MAX_CHANNELS_PER_LCD           	(NUM_CPUS - NUM_LCD_CPUS)
+  #define NUM_THREADS_ON_NODE0			(NUM_CPUS_PER_NODE - NUM_LCD_CPUS)
+#elif NUM_LCDS == 2
+  #define MAX_CHANNELS_PER_LCD          15
+  #define NUM_THREADS_ON_NODE0		5
+#elif NUM_LCDS == 4
+/* total LCD cores = 5 (lcds=4,klcd=1), free cores = 15 */
+#define MAX_CHANNELS_PER_LCD		7
+#define NUM_THREADS_ON_NODE0		6
+#elif NUM_LCDS == 6
+/* total LCD cores = 7 (lcds=6,klcd=1), free cores = 13 */
+#define MAX_CHANNELS_PER_LCD		3
+#define NUM_THREADS_ON_NODE0		6
+#endif
+
+#define MAX_CHNL_PAIRS			MAX_CHANNELS_PER_LCD
 
 /* CSPACES ------------------------------------------------------------ */
 int glue_cap_init(void);
@@ -224,6 +247,131 @@ async_msg_blocking_send_start(struct thc_channel *chnl,
                         return -EIO;
         }
 }
+struct ring_stats {
+	unsigned long num_available;
+	unsigned long num_sent;
+	unsigned long num_other;
+};
 
+static inline void collect_msg_statuses(struct ring_stats *stats, unsigned long num_slots,
+				unsigned long slot,
+				struct fipc_message *buffer)
+{
+	int i;
+	for (i = 0; i < num_slots; i++) {
+		switch(buffer[(slot + i) % num_slots].msg_status) {
+		case FIPC_MSG_STATUS_AVAILABLE:
+			stats->num_available++;
+			break;
+		case FIPC_MSG_STATUS_SENT:
+			stats->num_sent++;
+			break;
+		default:
+			stats->num_other++;
+			break;
+		}
+	}
+}
+
+static inline void dump_ring_stats(struct thc_channel *chnl)
+{
+	struct fipc_ring_channel *rc = thc_channel_to_fipc(chnl);
+	unsigned long tx_slot = rc->tx.slot;
+	unsigned long rx_slot = rc->rx.slot;
+	unsigned long num_tx_slots = rc->tx.order_two_mask;
+	unsigned long num_rx_slots = rc->rx.order_two_mask;
+	struct ring_stats tx_stats = {0}, rx_stats = {0};
+
+	collect_msg_statuses(&tx_stats, num_tx_slots, tx_slot, rc->tx.buffer);
+	collect_msg_statuses(&rx_stats, num_rx_slots, tx_slot, rc->rx.buffer);
+
+	printk("========== ring buf stats (Tx) ===========\n");
+	printk("[Tx] [%s:%d] Buffer: %p tx_slot: %lu num_slots: %lu\n",
+				current->comm, current->pid, rc->tx.buffer, tx_slot,
+				num_tx_slots);
+
+	printk("[Tx] current_slot:%lu status: %x\n", tx_slot, rc->tx.buffer[tx_slot].msg_status);
+
+	printk("[Tx] num_available: %lu num_sent: %lu num_other: %lu\n",
+				tx_stats.num_available, tx_stats.num_sent, tx_stats.num_other);
+	printk("========== ring buf stats (Rx) ===========\n");
+	printk("[Rx] [%s:%d] Buffer: %p tx_slot: %lu num_slots: %lu\n",
+				current->comm, current->pid, rc->rx.buffer, rx_slot,
+				num_rx_slots);
+
+	printk("[Rx] current_slot:%lu status: %x\n", rx_slot, rc->rx.buffer[rx_slot].msg_status);
+
+	printk("[Rx] num_available: %lu num_sent: %lu num_other: %lu\n",
+				rx_stats.num_available, rx_stats.num_sent, rx_stats.num_other);
+	printk("=====================================\n");
+
+}
+
+#define THRESHOLD		(5 * 1000)	/* 5 seconds */
+#define fipc_test_pause()    asm volatile ( "pause\n": : :"memory" );
+static inline
+int
+fipc_msg_blocking_send_start(struct thc_channel *chnl,
+                        struct fipc_message **out)
+{
+        int ret;
+	int once = 1;
+	ktime_t start = ktime_get();
+        for (;;) {
+                /* Poll until we get a free slot or error */
+                ret = fipc_send_msg_start(thc_channel_to_fipc(chnl), out);
+                if (!ret || ret != -EWOULDBLOCK)
+                        return ret;
+		fipc_test_pause();
+		if (ktime_to_ms(ktime_sub(ktime_get(), start)) >= THRESHOLD) {
+			if (once) {
+				once = 0;
+				dump_ring_stats(chnl);
+				printk("%s, could not get a slot for more than %d seconds!\n",
+						__func__, THRESHOLD / 1000);
+			}
+		}
+        }
+}
+
+static inline int 
+fipc_msg_blocking_recv_start(struct thc_channel *chnl, 
+		struct fipc_message **response)
+{
+	int ret;
+	int once = 1;
+	ktime_t start = ktime_get();
+
+retry:
+	ret = fipc_recv_msg_start(thc_channel_to_fipc(chnl), response);
+	if (ret == 0) {
+		/*
+		 * Message for us; remove request_cookie from awe mapper
+		 */
+		return 0;
+	} else if (ret == -EWOULDBLOCK) {
+		/*
+		 * No messages in rx buffer; go to sleep.
+		 */
+		//cpu_relax();
+		fipc_test_pause();
+		if (ktime_to_ms(ktime_sub(ktime_get(), start)) >= THRESHOLD) {
+			if (once) {
+				once = 0;
+				dump_ring_stats(chnl);
+				printk("%s, could not get a slot for more than %d seconds!\n",
+						__func__, THRESHOLD / 1000);
+			}
+		}
+
+		goto retry;
+	} else {
+		/*
+		 * Error
+		 */
+		printk(KERN_ERR "thc_ipc_recv_response: fipc returned %d\n",
+				ret);
+		return ret;
+	}
+}
 #endif /* _GLUE_HELPER_H_ */
-

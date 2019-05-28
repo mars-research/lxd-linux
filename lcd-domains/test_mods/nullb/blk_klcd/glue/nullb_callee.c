@@ -64,6 +64,16 @@ struct trampoline_hidden_args {
 	cptr_t sync_ep;
 };
 
+struct lcd_smp {
+       cptr_t sync_ep;
+       struct thc_channel *qrq_channels[MAX_CHANNELS_PER_LCD];
+       struct thc_channel *async_chnl;
+       spinlock_t lock;
+       unsigned int used_channels;
+       int num_qrq_chnls;
+} lcd_metadata [NUM_LCDS];
+
+
 static struct glue_cspace *c_cspace;
 extern struct cspace *klcd_cspace;
 
@@ -78,6 +88,8 @@ static void add_async_item(struct async_item *item)
 int glue_blk_init(void)
 {
 	int ret;
+	int i;
+
 	ret = glue_cap_init();
 	if (ret) {
 		LIBLCD_ERR("cap init");
@@ -88,6 +100,12 @@ int glue_blk_init(void)
 		LIBLCD_ERR("cap create");
 		goto fail2;
 	}
+
+	memset(lcd_metadata, 0x0, sizeof(lcd_metadata));
+	for (i = 0; i < NUM_LCDS; i++) {
+                spin_lock_init(&lcd_metadata[i].lock);
+	}
+
 	return 0;
 fail2:
 	glue_cap_exit();
@@ -717,6 +735,43 @@ fail1:
         return;
 }
 
+#ifdef CONFIG_PREALLOC_CHANNELS
+int prep_qrq_channels_klcd(int lcd_id)
+{
+	int i, j;
+	struct thc_channel *chnl;
+	cptr_t tx[MAX_CHNL_PAIRS], rx[MAX_CHNL_PAIRS];
+	int ret;
+
+	for (i = 0, j = 5; i < MAX_CHNL_PAIRS && j < LCD_NUM_REGS; i++) {
+		tx[i] = lcd_get_cr(j++);
+		rx[i] = lcd_get_cr(j++);
+	}
+	/*
+	 * Set up async ring channel
+	 */
+	for (i = 0; i < MAX_CHNL_PAIRS; i++) {
+		ret = setup_async_fs_ring_channel(tx[i], rx[i], &chnl);
+		if (ret) {
+			LIBLCD_ERR("error setting up ring channel");
+			goto fail_ep;
+		}
+		printk("%s setting up async channel: %d chnl: %p\n", __func__, i, chnl);
+		lcd_metadata[lcd_id].qrq_channels[lcd_metadata[lcd_id].num_qrq_chnls++] = chnl;
+	}
+
+fail_ep:
+	return -1;
+}
+
+void prep_qrq_channels_clean_klcd(void)
+{
+	int i;
+	for (i = 0; i < LCD_NUM_REGS; i++)
+	       lcd_set_cr(i, CAP_CPTR_NULL);
+}
+#endif
+
 int register_child(void)
 {
 	cptr_t tx, rx;
@@ -762,6 +817,10 @@ int register_child(void)
 	/* add disp_item to the channel group */
 	add_chnl_group_item(disp_item, drv_info->ch_grp);
 
+#ifdef CONFIG_PREALLOC_CHANNELS
+	prep_qrq_channels_klcd(lcd_r2());
+#endif
+
 	LIBLCD_MSG("%s, child %d registration complete!\n", __func__, lcd_r1());
 
 	goto out;
@@ -778,6 +837,10 @@ out:
 	lcd_set_cr0(CAP_CPTR_NULL);
 	lcd_set_cr1(CAP_CPTR_NULL);
 	lcd_set_cr2(CAP_CPTR_NULL);
+
+#ifdef CONFIG_PREALLOC_CHANNELS
+	prep_qrq_channels_clean_klcd();
+#endif
 
 	lcd_set_r0(ret);
 
@@ -1166,6 +1229,9 @@ int register_blkdev_callee(void)
 	/* add disp_item to the channel group */
 	add_chnl_group_item(disp_item, drv_info->ch_grp);
 
+#ifdef CONFIG_PREALLOC_CHANNELS
+	prep_qrq_channels_klcd(lcd_r2());
+#endif
 	/* Hardcoded string for now! */
 	LIBLCD_MSG("Calling register_blkdev");
 	ret = register_blkdev(lcd_r1(), "nullb");
@@ -1204,6 +1270,9 @@ out:
         lcd_set_cr1(CAP_CPTR_NULL);
         lcd_set_cr2(CAP_CPTR_NULL);
 
+#ifdef CONFIG_PREALLOC_CHANNELS
+	prep_qrq_channels_clean_klcd();
+#endif
         lcd_set_r0(major);
 
         if (lcd_sync_reply())
@@ -1331,7 +1400,7 @@ int _queue_rq_fn(struct blk_mq_hw_ctx *ctx, const struct blk_mq_queue_data *bd, 
         struct blk_mq_ops_container *ops_container;
         struct blk_mq_hw_ctx_container *ctx_container;
 
-        if(!PTS()) {
+        if(!current->ptstate) {
                 LCD_MAIN({
                 ret = _queue_rq_fn_ctx(ctx, bd, hidden_args);
                 });
@@ -1403,7 +1472,7 @@ static void queue_rq_async_noyield(struct blk_mq_hw_ctx *ctx, struct blk_mq_queu
 		struct fipc_message *response;
 		int ret; 
 	
-		//printk("[KLCD] ^^async inside do_fin \n");
+		//printk("[KLCD] ---> queue_rq_async_noyield \n");
 		rq = list_first_entry(bd_async->rq_list, struct request, queuelist);
 		list_del_init(&rq->queuelist);
 
@@ -1416,7 +1485,8 @@ static void queue_rq_async_noyield(struct blk_mq_hw_ctx *ctx, struct blk_mq_queu
 		//printk("[KLCD] ^^async get async slot for rq->tag %d ??? \n", rq->tag);
 		//printk("[KLCD] QUEUE_RQ_ASYNC_B4 slot: %ld \n", atomic64_read(&thc_channel_to_fipc(channel)->tx.slot));
 		//BENCH_BEGIN(async_reply);
-		ret = async_msg_blocking_send_start(chnl, &request);
+		//printk("[KLCD] ---> blocking_send_start: chnl:%p \n", chnl);
+		ret = fipc_msg_blocking_send_start(chnl, &request);
 		if (ret) {
 			LIBLCD_ERR("ctx failed to get a send slot");
 			goto fail_async;
@@ -1465,17 +1535,22 @@ static void queue_rq_async_noyield(struct blk_mq_hw_ctx *ctx, struct blk_mq_queu
 #endif
 		/* receive message */
 		//BENCH_BEGIN(async_reply);
-    		ret = thc_ipc_recv_resp_noyield(chnl, &response);
+		//printk("[KLCD] ---> thc_ipc_recv_resp_noyield \n");
+    		ret = fipc_msg_blocking_recv_start(chnl, &response);
 	    	if (ret) {
 			printk(KERN_ERR "thc_ipc_call: error receiving response\n");
 			goto fail_async;
 	    	}
+		//printk("[KLCD] ---> thc_ipc_recv_resp_noyield returns!!! \n");
 		//BENCH_END(async_reply);
 
 		/* This should not execute when ipc_call is blocked on reply */
 		func_ret = fipc_get_reg0(response);
 		fipc_recv_msg_end(thc_channel_to_fipc(chnl), response);
 	
+		//blk_mq_start_request(rq);
+        	//blk_mq_end_request(rq, 0);
+
 		//BENCH_END(async_reply);
 		//BENCH_END(async_reply);
 		switch (func_ret) {
@@ -1487,7 +1562,7 @@ static void queue_rq_async_noyield(struct blk_mq_hw_ctx *ctx, struct blk_mq_queu
 			__blk_mq_requeue_request(rq);
 			break;
 		default:
-			pr_err("blk-mq: bad return on queue: %d\n", ret);
+			pr_err("blk-mq: bad return on queue: %d\n", func_ret);
 		case BLK_MQ_RQ_QUEUE_ERROR:
 			if(rq) {
 				rq->errors = -EIO;
@@ -1583,6 +1658,9 @@ void queue_rq_async_ctx_klcd(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data
 		func_ret = fipc_get_reg0(response);
 		fipc_recv_msg_end(thc_channel_to_fipc(chnl), response);
 	
+		//blk_mq_start_request(rq);
+        	//blk_mq_end_request(rq, 0);
+
 		switch (func_ret) {
 		case BLK_MQ_RQ_QUEUE_OK:
 			bd_async->queued++;
@@ -1626,7 +1704,7 @@ int sender_dispatch(struct thc_channel *chnl, struct fipc_message *out, void *ar
 	return dispatch_async_loop(chnl, out, c_cspace, sync_ep); 
 }
 
-
+#define fipc_test_pause()    asm volatile ( "pause\n": : :"memory" );
 /* Async variant of queue_rq which does DO_FINISH of
  * passing requests to LCD */
 void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_async *bd_async, 
@@ -1655,7 +1733,9 @@ void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_asyn
 			struct blk_mq_queue_data bd;
 		      	struct fipc_message *request;
         		struct fipc_message *response;
+#ifdef SENDER_DISPATCH_LOOP
 			unsigned int request_cookie;
+#endif
 			int ret; 
 		
 			//printk("[KLCD] ^^async inside do_fin \n");
@@ -1670,7 +1750,7 @@ void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_asyn
 
 			//printk("[KLCD] ^^async get async slot for rq->tag %d ??? \n", rq->tag);
 			//printk("[KLCD] QUEUE_RQ_ASYNC_B4 slot: %ld \n", atomic64_read(&thc_channel_to_fipc(channel)->tx.slot));
-			ret = async_msg_blocking_send_start(chnl, &request);
+			ret = fipc_msg_blocking_send_start(chnl, &request);
 			if (ret) {
 				LIBLCD_ERR("ctx failed to get a send slot");
 				goto fail_async;
@@ -1697,6 +1777,7 @@ void queue_rq_async_ctx(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_asyn
 
 				fipc_recv_msg_end(thc_channel_to_fipc(chnl), response);
 #else
+				//printk("[KLCD] ^^waiting for ipc_call \n");
 				ret = thc_ipc_call(chnl, request, &response);
 #endif
 				//ret = thc_ipc_call(chnl, request, &response);
@@ -1780,7 +1861,7 @@ static void create_async_item(struct task_struct *task)
 //	item->info->lcd = current->lcd;
 //	item->info->t[0] = current->lcd_resource_trees[0];
 //	item->info->t[1] = current->lcd_resource_trees[1];
-//	item->info->ptstate = PTS();
+//	item->info->ptstate = current->ptstate;
 	item->task = current;
 	item->pid = current->pid;
 
@@ -1803,7 +1884,7 @@ void queue_rq_async(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_async *b
 	//BENCH_BEGIN(async_reply);
 	ctx_container = container_of(ctx, struct blk_mq_hw_ctx_container, blk_mq_hw_ctx);
        	
-	if(!PTS()) {
+	if(!current->ptstate) {
 		printk("async thread --> current: %p pid: %d name: %s \n",current, current->pid, current->comm);
 		spin_lock(&lock);	
 		if(setup_new_channel(hidden_args->async_chnl, hidden_args->sync_ep)) {
@@ -1825,6 +1906,7 @@ void queue_rq_async(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_async *b
 			int items = 0;
 
 			chnl = thc_pts_get_chnl();
+			//printk("GET_CHNL: %p \n", chnl);
 			
 			list_for_each(item, bd_async->rq_list) {
 				items++;
@@ -1834,6 +1916,8 @@ void queue_rq_async(struct blk_mq_hw_ctx *ctx, struct blk_mq_queue_data_async *b
 			}
 			
 			if (items == 1) {
+				//printk("queue_rq_async_noyeild --> current: %p pid: %d name: %s chnl: %p\n",
+				//	current, current->pid, current->comm, chnl);
 				queue_rq_async_noyield(ctx, bd_async, hidden_args, chnl);
 			 	//LCD_MAIN({
 				//hidden_args->async_chnl = thc_pts_get_chnl();
@@ -1991,7 +2075,7 @@ int _init_hctx_fn(struct blk_mq_hw_ctx *ctx, void *data, unsigned int index, str
 	struct blk_mq_hw_ctx_container *ctx_container;
 	struct blk_mq_ops_container *ops_container;
 
-	if(!PTS()) {
+	if(!current->ptstate) {
 		LIBLCD_MSG("init_hctx from a different context \n");
 		LCD_MAIN({
 			ret = _init_hctx_fn_ctx(ctx, data, index, hidden_args);				
@@ -2040,7 +2124,6 @@ fail_async:
 fail_ipc:
 fail_insert:
 	return func_ret;
-
 }
 
 LCD_TRAMPOLINE_DATA(init_hctx_fn_trampoline);
@@ -2123,7 +2206,7 @@ static int handle_sync(cptr_t sync_ep, cptr_t *tx, cptr_t *rx)
 	lcd_set_cr0(CAP_CPTR_NULL); /* flush cr0 */
 	lcd_set_cr1(CAP_CPTR_NULL); /* flush cr0 */
 
-	lcd_cap_delete(sync_end);	
+	/* lcd_cap_delete(sync_end); */
 
 	if (ret) {
 		LIBLCD_ERR("sync recv failed");
@@ -2189,6 +2272,23 @@ static int setup_new_channel(struct thc_channel *async_chnl, cptr_t sync_ep)
 
 	thc_pts_set_chnl(chnl);
 	thc_pts_set_state(true);
+	printk("*************** SET_CHNL: %p \n", chnl);
+	printk("%s, [%s:%d] channel: %p state: %d "
+			" tx.buffer: %p, rx.buffer: %p\n",
+			__func__,
+			current->comm, current->pid, thc_pts_get_chnl(),
+			thc_pts_get_state(),
+			thc_channel_to_fipc(chnl)->tx.buffer,
+			thc_channel_to_fipc(chnl)->rx.buffer);
+
+	ret = fipc_prep_buffers(PMFS_ASYNC_RPC_BUFFER_ORDER,
+                                (void *)thc_channel_to_fipc(chnl)->tx.buffer,
+                                (void *)thc_channel_to_fipc(chnl)->rx.buffer);
+        if (ret) {
+                LIBLCD_ERR("prep buffers");
+        }
+ 
+	dump_ring_stats(chnl);
 
 	LCD_MAIN(	
 		DO_FINISH_(open, {
@@ -2219,10 +2319,89 @@ fail_async:
 	return ret;
 }
 
+int pick_channel(int lcd_id)
+{
+	int ret = 0;
+	int used_channels;
+	spin_lock(&lcd_metadata[lcd_id].lock);
+
+	used_channels = lcd_metadata[lcd_id].used_channels;
+
+	if (used_channels < MAX_CHANNELS_PER_LCD) {
+		printk("%s, %s:%d lcd_id:%d picking channel[%u]: %p\n", __func__,
+				current->comm, current->pid,
+				lcd_id, used_channels, lcd_metadata[lcd_id].qrq_channels[used_channels]);
+		current->ptstate->thc_chnl = lcd_metadata[lcd_id].qrq_channels[used_channels];
+		/*
+		 * store lcd_id to release the channel without going through
+		 * the list
+		 */
+		current->ptstate->lcd_id = lcd_id;
+		printk("[%s:%d:cpu %02d] %s: %d\n", current->comm,
+					current->pid, smp_processor_id(), __func__,
+					lcd_metadata[lcd_id].used_channels);
+		lcd_metadata[lcd_id].used_channels++;
+		thc_pts_set_chnl(current->ptstate->thc_chnl);
+		thc_pts_set_state(true);
+	} else {
+		printk("%s, exceeded max pre-allocated channels. used: %d, total: %d\n",
+				__func__, used_channels, MAX_CHANNELS_PER_LCD);
+		ret = -ENODEV;
+	}
+	spin_unlock(&lcd_metadata[lcd_id].lock);
+
+	return ret;
+}
+
+#ifdef CONFIG_PREALLOC_CHANNELS
+int open(struct block_device *device, fmode_t mode, struct trampoline_hidden_args *hidden_args)
+{
+	int lcd_id;
+	int ret = 0;
+
+	if(strcmp(current->comm,"systemd-udevd") == 0) {
+		return -ENODEV;
+	}
+
+	printk("[%s:%d:cpu %02d] %s current:%p ptstate: %p\n", current->comm,
+			current->pid, smp_processor_id(), __func__,
+			current, current->ptstate);
+
+	switch(smp_processor_id()) {
+	case 0: case 4: case 8: case 12: case 16: case 20:
+		lcd_id = 0;
+		break;
+	case 1: case 5: case 9: case 13: case 17: case 21: case 25:
+		lcd_id = 1;
+		break;
+	case 2: case 6: case 10: case 14: case 18: case 22: case 26:
+		lcd_id = 2;
+		break;
+	case 3: case 7: case 11: case 15: case 19: case 23: case 27:
+		lcd_id = 3;
+		break;
+	default:
+		lcd_id = 0;
+		break;
+	}
+
+	if (!current->ptstate) {
+		lcd_enter();
+		ret = pick_channel(lcd_id);	
+		printk("[%s:%d:cpu %02d] after %s current: %p ptstate: %p\n", current->comm,
+			current->pid, smp_processor_id(), __func__,
+			current, current->ptstate);
+	}
+
+	printk("%s, done\n", __func__);
+	return ret;
+}
+
+#else
+
 int open(struct block_device *device, fmode_t mode, struct trampoline_hidden_args *hidden_args)
 {
 	int ret = 0;
-
 	if(strcmp(current->comm,"systemd-udevd") == 0) {
 		return -ENODEV;
 	}
@@ -2230,7 +2409,7 @@ int open(struct block_device *device, fmode_t mode, struct trampoline_hidden_arg
 	printk("***** [nullb-open] current: %p name: %s pid: %d ptstate: %p cpu:%d \n", current, current->comm, current->pid, current->ptstate, smp_processor_id());
 
 	spin_lock(&lock);
-	if(!PTS()) {
+	if (!current->ptstate) {
 		ret = setup_new_channel(hidden_args->async_chnl, hidden_args->sync_ep);
 		if (ret) {
 			goto fail;
@@ -2247,13 +2426,13 @@ fail:
 	return -ENODEV;
 }
 
-static int cleanup_channel(struct thc_channel *channel, int pid)
+static int cleanup_channel(struct thc_channel *chnl, int pid)
 {
 	struct fipc_message *request;
 	//struct fipc_message *response;
 	int ret = 0;
 
-	ret = async_msg_blocking_send_start(channel, &request);
+	ret = async_msg_blocking_send_start(chnl, &request);
 	if (ret) {
 		LIBLCD_ERR("failed to get a send slot");
 		goto fail_async;
@@ -2262,8 +2441,15 @@ static int cleanup_channel(struct thc_channel *channel, int pid)
 	async_msg_set_fn_type(request, RELEASE);
 	fipc_set_reg0(request, pid);
 	thc_set_msg_type(request, msg_type_request);
-	fipc_send_msg_end (thc_channel_to_fipc(channel), request);
+	fipc_send_msg_end (thc_channel_to_fipc(chnl), request);
 
+	printk("%s, [%s:%d] channel: %p state: %d "
+			" tx.buffer: %p, rx.buffer: %p\n",
+			__func__,
+			current->comm, current->pid, thc_pts_get_chnl(),
+			thc_pts_get_state(),
+			thc_channel_to_fipc(chnl)->tx.buffer,
+			thc_channel_to_fipc(chnl)->rx.buffer);
 
 	//LCD_MAIN(
 	//	DO_FINISH_(release, {
@@ -2287,7 +2473,35 @@ static int cleanup_channel(struct thc_channel *channel, int pid)
 fail_async:
 	return ret;
 }
+#endif
 
+#ifdef CONFIG_PREALLOC_CHANNELS
+void drop_channel(void)
+{
+	int lcd_id = current->ptstate->lcd_id;
+
+	spin_lock(&lcd_metadata[lcd_id].lock);
+
+	lcd_metadata[lcd_id].used_channels--;
+
+	spin_unlock(&lcd_metadata[lcd_id].lock);
+}
+
+void release(struct gendisk *disk, fmode_t mode, struct trampoline_hidden_args *hidden_args)
+{
+	printk("[%s:%d:cpu %02d] %s current: %p ptstate: %p\n", current->comm,
+				current->pid, smp_processor_id(), __func__, current, current->ptstate);
+	if(thc_pts_get_state() == true) {
+		thc_pts_set_state(false);
+		drop_channel();
+		printk("[%s:%d:cpu %02d] cleanup %s ptstate: %p\n", current->comm,
+			current->pid, smp_processor_id(), __func__,
+			current->ptstate);
+		lcd_exit(0);
+	}
+}
+
+#else
 void release(struct gendisk *disk, fmode_t mode, struct trampoline_hidden_args *hidden_args)
 {
 	struct async_item *item, *next;
@@ -2331,6 +2545,7 @@ void release(struct gendisk *disk, fmode_t mode, struct trampoline_hidden_args *
 	printk("[nullb-release] cleaning-up current: %p name: %s pid: %d ptstate: %p \n", current, current->comm, current->pid, current->ptstate);
 	return;
 }
+#endif
 
 LCD_TRAMPOLINE_DATA(open_trampoline);
 int LCD_TRAMPOLINE_LINKAGE(open_trampoline) open_trampoline(struct block_device *device, fmode_t mode)
