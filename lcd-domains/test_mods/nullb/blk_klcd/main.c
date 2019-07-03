@@ -363,13 +363,14 @@ static void handle_loop(long id)
 		
 			ret = async_loop(&drv, &curr_item, &msg);
 			if (!ret) {
+#if 0
 				if (async_msg_get_fn_type(msg) == BLK_MQ_END_REQUEST) {
 					printk("KLCD: end_request seen \n");
 				}
 				if (async_msg_get_fn_type(msg) == BLK_MQ_START_REQUEST) {
 					printk("KLCD: start_request seen \n");
 				}
-
+#endif
 				//(async_msg_get_fn_type(msg) == BLK_MQ_END_REQUEST) ? count ++ : -1;
 				//(async_msg_get_fn_type(msg) == BLK_MQ_START_REQUEST) ? bench_start() : -1;
 				//((id == 0) && (async_msg_get_fn_type(msg) == BLK_MQ_END_REQUEST)) ? marker_begin() : -1;
@@ -533,13 +534,15 @@ static void loop(cptr_t register_chnl)
 		
 			ret = async_loop(&drv, &curr_item, &msg);
 			if (!ret) {
+
+#if 0
 				if (async_msg_get_fn_type(msg) == BLK_MQ_END_REQUEST) {
 					printk("KLCD: end_request seen \n");
 				}
 				if (async_msg_get_fn_type(msg) == BLK_MQ_START_REQUEST) {
 					printk("KLCD: start_request seen \n");
 				}
-
+#endif
 				//(async_msg_get_fn_type(msg) == BLK_MQ_END_REQUEST) ? count ++ : -1;
 				//(async_msg_get_fn_type(msg) == BLK_MQ_START_REQUEST) ? bench_start() : -1;
 				//((id == 0) && (async_msg_get_fn_type(msg) == BLK_MQ_END_REQUEST)) ? marker_begin() : -1;

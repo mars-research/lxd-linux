@@ -108,7 +108,7 @@ struct request_queue_container {
         cptr_t other_ref;
         cptr_t my_ref;
 };
-
+#define NUM_CPUS		32
 #if NUM_LCDS == 1
 #define NUM_LCD_CPUS				(NUM_LCDS + 1)
   #define MAX_CHANNELS_PER_LCD           	(NUM_CPUS - NUM_LCD_CPUS)
@@ -117,6 +117,7 @@ struct request_queue_container {
   #define MAX_CHANNELS_PER_LCD          15
   #define NUM_THREADS_ON_NODE0		5
 #elif NUM_LCDS == 4
+#define NUM_LCD_CPUS				(NUM_LCDS + 1)
 /* total LCD cores = 5 (lcds=4,klcd=1), free cores = 15 */
 #define MAX_CHANNELS_PER_LCD		7
 #define NUM_THREADS_ON_NODE0		6
