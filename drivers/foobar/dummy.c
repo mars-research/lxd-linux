@@ -12,10 +12,13 @@
 
 static int dummy_dev_init(struct foobar_device *dev)
 {
+	spin_lock(&dev->foobar_lock);
 	dev->dstats = kmalloc(sizeof(struct foo_stats), GFP_KERNEL);
-	if (!dev->dstats)
+	if (!dev->dstats) {
+		spin_unlock(&dev->foobar_lock);
 		return -ENOMEM;
-
+	}
+	spin_unlock(&dev->foobar_lock);
 	return 0;
 }
 
@@ -50,7 +53,9 @@ static int __init dummy_init_module(void)
 	dev_dummy->features = FOOBAR_PRIV_ALLOC;
 	dev_dummy->flags = FOO_LOOPBACK;
 
+	spin_lock_init(&dev_dummy->foobar_lock);
 	err = register_foobar(dev_dummy);
+
 	if (err < 0)
 		goto err;
 	return 0;

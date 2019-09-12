@@ -24,6 +24,7 @@ int register_foobar(struct foobar_device *dev)
 			goto out;
 		}
 	}
+	set_bit(FOOBAR_REGISTERED, &dev->state);
 	printk("%s, foobar registered\n", __func__);
 
 out:

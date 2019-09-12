@@ -1,6 +1,8 @@
 #ifndef _FOOBAR_DEVICE_H
 #define _FOOBAR_DEVICE_H
 
+#include <linux/spinlock.h>
+
 typedef u64 foobar_features_t;
 
 /* features */
@@ -13,6 +15,10 @@ typedef u64 foobar_features_t;
 #define FOO_LOOPBACK		4
 
 struct foobar_device;
+
+enum {
+	FOOBAR_REGISTERED,
+};
 
 struct foobar_device_ops {
 	int			(*init)(struct foobar_device *dev);
@@ -41,6 +47,8 @@ struct foobar_device {
 	foobar_features_t	features;
 	foobar_features_t	hw_features;
 	foobar_features_t	wanted_features;
+
+	spinlock_t		foobar_lock;
 
 	const struct foobar_device_ops *foobardev_ops;
 };
