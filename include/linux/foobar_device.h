@@ -32,6 +32,9 @@ struct foo_stats {
 
 struct foobar_device {
 	char			name[32];
+	char			*ext_name;
+	int			nr_rqs[2];
+	void			*priv;
 	unsigned long		id;
 	unsigned long		mem_end;
 	unsigned long		mem_start;

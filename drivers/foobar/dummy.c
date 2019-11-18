@@ -39,6 +39,10 @@ MODULE_PARM_DESC(numdummies, "Number of dummy pseudo devices");
 
 struct foobar_device *dev_dummy;
 
+struct foobar_priv {
+	int id;
+};
+
 static int __init dummy_init_module(void)
 {
 	int err;
@@ -49,6 +53,16 @@ static int __init dummy_init_module(void)
 		return -ENOMEM;
 
 	dev_dummy->foobardev_ops = &dummy_foobardev_ops;
+	dev_dummy->ext_name = kzalloc(16, GFP_KERNEL);
+
+	dev_dummy->priv = kzalloc(sizeof(struct foobar_priv), GFP_KERNEL);
+
+	if (dev_dummy->ext_name) {
+		strncpy(dev_dummy->ext_name, "dummy_ext", 16);
+	}
+
+	dev_dummy->nr_rqs[0] = 1;
+	dev_dummy->nr_rqs[1] = 2;
 
 	dev_dummy->features = FOOBAR_PRIV_ALLOC;
 	dev_dummy->flags = FOO_LOOPBACK;

@@ -6,7 +6,7 @@
 
 int register_foobar(struct foobar_device *dev)
 {
-	int ret;
+	int ret = 0;
 
 	dev->hw_features |= FOOBAR_IRQ_DELAY;
 	dev->features |= FOOBAR_SOFTIRQ_ENABLE;
@@ -14,6 +14,11 @@ int register_foobar(struct foobar_device *dev)
 
 	if (dev->flags & FOO_LOOPBACK)
 		dev->hw_features |= FOOBAR_ZERO_COPY;
+
+	if (dev->ext_name)
+		printk("%s, ext name: %s\n", __func__, dev->ext_name);
+
+	printk("%s, nr_rqs %d %d\n", __func__, dev->nr_rqs[0], dev->nr_rqs[1]);
 
 	/* Init, if this function is available */
 	if (dev->foobardev_ops->init) {
