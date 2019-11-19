@@ -12,12 +12,15 @@ typedef u64 foobar_features_t;
 #define FOOBAR_PRIV_ALLOC	(1 << 13)
 
 /* flags */
-#define FOO_LOOPBACK		4
+#define FOO_LOOPBACK		(1 << 1)
+#define FOO_DSTATS_UPDATED	(1 << 2)
+#define FOO_SHARED_LIVE		(1 << 3)
 
 struct foobar_device;
 
 enum {
-	FOOBAR_REGISTERED,
+	FOOBAR_REGISTERED = 0x1,
+	FOO_SHARED_STATE = 0x2,
 };
 
 struct foobar_device_ops {
@@ -42,8 +45,11 @@ struct foobar_device {
 	int			irq;
 
 	unsigned long		state;
+	unsigned long		shared_state;
 
 	unsigned int		flags;
+	unsigned int		shared_flags;
+
 	unsigned int		priv_flags;
 
 	struct foo_stats	*dstats;
@@ -52,6 +58,7 @@ struct foobar_device {
 	foobar_features_t	wanted_features;
 
 	spinlock_t		foobar_lock;
+	spinlock_t		foo_shared_lock;
 
 	const struct foobar_device_ops *foobardev_ops;
 };
@@ -60,5 +67,9 @@ int register_foobar(struct foobar_device *dev);
 void unregister_foobar(struct foobar_device *dev);
 struct foobar_device *alloc_foobardev(int id, const char* name);
 void free_foobardev(struct foobar_device *dev);
+void foobar_init_stats(struct foobar_device *dev);
+int foobar_state_change(struct foobar_device *dev);
+void foobar_notify(struct foobar_device *dev);
+
 
 #endif /* _FOOBAR_DEVICE_H */
