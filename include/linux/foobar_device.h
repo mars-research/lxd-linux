@@ -6,15 +6,16 @@
 typedef u64 foobar_features_t;
 
 /* features */
-#define FOOBAR_IRQ_DELAY	(1 << 10)
-#define FOOBAR_SOFTIRQ_ENABLE	(1 << 11)
-#define FOOBAR_ZERO_COPY	(1 << 12)
-#define FOOBAR_PRIV_ALLOC	(1 << 13)
+#define FOOBAR_IRQ_DELAY	0x1
+#define FOOBAR_SOFTIRQ_ENABLE	0x2
+#define FOOBAR_ZERO_COPY	0x4
+#define FOOBAR_PRIV_ALLOC	0x8
+#define FOOBAR_MUTEX		0x10
 
 /* flags */
-#define FOO_LOOPBACK		(1 << 1)
-#define FOO_DSTATS_UPDATED	(1 << 2)
-#define FOO_SHARED_LIVE		(1 << 3)
+#define FOO_LOOPBACK		0x1
+#define FOO_DSTATS_UPDATED	0x2
+#define FOO_SHARED_LIVE		0x4
 
 struct foobar_device;
 

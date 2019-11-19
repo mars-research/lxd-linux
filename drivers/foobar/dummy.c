@@ -10,6 +10,8 @@
 #define DRV_NAME	"foobardummy"
 #define DRV_VERSION	"1.0"
 
+static DEFINE_MUTEX(dummy_mutex);
+
 static int dummy_dev_init(struct foobar_device *dev)
 {
 	spin_lock(&dev->foobar_lock);
@@ -49,6 +51,9 @@ struct foobar_priv {
  * Type: non-shared lock
  * Calls to other domain: None
  * Members updated: None
+ * Usecase:
+ * A non-shared lock does some local operation
+ * Warning: NO as this is a non-shared lock
  */
 int test_non_shared_lock1(struct foobar_device *dev)
 {
@@ -59,6 +64,7 @@ int test_non_shared_lock1(struct foobar_device *dev)
 		spin_unlock(&dev->foobar_lock);
 		return -ENOMEM;
 	}
+	kfree(test);
 	spin_unlock(&dev->foobar_lock);
 }
 
@@ -67,6 +73,9 @@ int test_non_shared_lock1(struct foobar_device *dev)
  * Type: non-shared lock
  * Calls to other domain: None
  * Members updated: foobar_device->dstats
+ * Usecase:
+ * A non-shared lock updating few members of the foobar_device struct
+ * Warning: NO as this is a non-shared lock
  */
 int test_non_shared_lock2(struct foobar_device *dev)
 {
@@ -90,6 +99,10 @@ int test_non_shared_lock2(struct foobar_device *dev)
  * Type: non-shared lock
  * Calls to other domain: foobar_init_stats
  * Members updated: foobar_device->dstats
+ * Usecase:
+ * A non-shared lock updates a few members and calls out to the other domain
+ *
+ * Warning: NO as this is a non-shared lock
  */
 int test_non_shared_lock3(struct foobar_device *dev)
 {
@@ -102,7 +115,7 @@ int test_non_shared_lock3(struct foobar_device *dev)
 	dev->dstats = kmalloc(sizeof(struct foo_stats), GFP_KERNEL);
 	if (!dev->dstats) {
 		spin_unlock(&dev->foobar_lock);
-return -ENOMEM;
+		return -ENOMEM;
 	}
 
 	dev->flags |= FOO_DSTATS_UPDATED;
@@ -114,10 +127,34 @@ return -ENOMEM;
 }
 
 /*
+ * Testcase ns4
+ * Type: non-shared lock
+ * Calls to other domain: foobar_init_stats
+ * Members updated: foobar_device->dstats
+ * Usecase:
+ * A non-shared local lock updates a few members
+ *
+ * Warning: NO as this is a non-shared local lock
+ */
+int test_non_shared_lock4(struct foobar_device *dev)
+{
+	mutex_lock(&dummy_mutex);
+
+	dev->features |= FOOBAR_MUTEX;
+
+	mutex_unlock(&dummy_mutex);
+
+	return 0;
+}
+
+/*
  * Testcase sh1
  * Type: shared lock
  * Calls to other domain: None
  * Members updated: None
+ * Usecase:
+ * A shared lock does some local operation
+ * Warning: NO as it does not update any shared datastructure
  */
 int test_shared_lock1(struct foobar_device *dev)
 {
@@ -126,9 +163,10 @@ int test_shared_lock1(struct foobar_device *dev)
 	spin_lock(&dev->foo_shared_lock);
 	test = kmalloc(sizeof(struct foo_stats), GFP_KERNEL);
 	if (!test) {
-		spin_unlock(&dev->foobar_lock);
+		spin_unlock(&dev->foo_shared_lock);
 		return -ENOMEM;
 	}
+	kfree(test);
 	spin_unlock(&dev->foo_shared_lock);
 	return 0;
 }
@@ -137,7 +175,13 @@ int test_shared_lock1(struct foobar_device *dev)
  * Testcase sh2
  * Type: shared lock
  * Calls to other domain: None
- * Members updated: dev->state
+ * Members updated: dev->shared_state
+ * Usecase:
+ * A shared lock that updates a member of foobar_device struct
+ *
+ * Warning: YES. There is no way to synchronize dev->shared_state. There is a
+ * window of race between calling spin_unlock() until we synchronize this
+ * variable at the end of this function.
  */
 int test_shared_lock2(struct foobar_device *dev)
 {
@@ -146,6 +190,9 @@ int test_shared_lock2(struct foobar_device *dev)
 	dev->shared_state = FOO_SHARED_STATE;
 
 	spin_unlock(&dev->foo_shared_lock);
+
+	/* XXX: Window of race */
+
 	return 0;
 }
 
@@ -153,7 +200,12 @@ int test_shared_lock2(struct foobar_device *dev)
  * Testcase sh3
  * Type: shared lock
  * Calls to other domain: foobar_state_change
- * Members updated: dev->state
+ * Members updated: dev->shared_state
+ * Usecase:
+ * A shared lock that updates a member of foobar_device struct
+ *
+ * Warning: NO. iff we synchronize the updated variable when we call out for
+ * foobar_state_change.
  */
 int test_shared_lock3(struct foobar_device *dev)
 {
@@ -173,7 +225,14 @@ int test_shared_lock3(struct foobar_device *dev)
  * Testcase sh3a
  * Type: shared lock
  * Calls to other domain: foobar_state_change
- * Members updated: dev->state, dev->flags
+ * Members updated: dev->shared_state, dev->shared_flags
+ * Usecase:
+ * A shared lock that updates a member of foobar_device struct and calls out to
+ * the other domain.
+ *
+ * Warning: YES. We do synchronize the updated variable when we call out for
+ * foobar_state_change. After returning from the other domain, we udpate
+ * dev->shared_flags and there is no way to synchronize that variable.
  */
 int test_shared_lock3a(struct foobar_device *dev)
 {
@@ -188,6 +247,8 @@ int test_shared_lock3a(struct foobar_device *dev)
 
 	spin_unlock(&dev->foo_shared_lock);
 
+	/* XXX: Window of race */
+
 	return 0;
 }
 
@@ -196,6 +257,16 @@ int test_shared_lock3a(struct foobar_device *dev)
  * Type: shared lock
  * Calls to other domain: foobar_notify
  * Members updated: dev->shared_state
+ * Usecase:
+ * A shared lock that updates a member of foobar_device struct and calls out.
+ * but it does not synchronize the updated field
+ *
+ * Warning: YES. Ideally, we would synchronize the updated variable when we
+ * call out to the other domain before unlocking. However, in this scenario,
+ * foobar_notify does not have this shared_state variable in its read/write
+ * set. We will not marshall this variable across.
+ * There is a window of race between calling spin_unlock() until we synchronize
+ * this variable at the end of this function.
  */
 int test_shared_lock3b(struct foobar_device *dev)
 {
@@ -208,6 +279,8 @@ int test_shared_lock3b(struct foobar_device *dev)
 
 	spin_unlock(&dev->foo_shared_lock);
 
+	/* XXX: Window of race */
+
 	return 0;
 }
 
@@ -216,6 +289,17 @@ int test_shared_lock3b(struct foobar_device *dev)
  * Type: shared lock
  * Calls to other domain: foobar_state_change
  * Members updated: dev->state
+ * Usecase:
+ * A shared lock that updates a member of foobar_device struct and calls out twice
+ *
+ * Warning: YES. Ideally, we would synchronize the updated variable when we
+ * call out to the other domain before unlocking. However, in this scenario,
+ * foobar_notify does not have this shared_state variable in its read/write
+ * set. We will not marshall this variable across. Also the next function
+ * foobar_state_change synchronizes only shared_state variable.
+ *
+ * There is a window of race between calling spin_unlock() until we synchronize
+ * this variable at the end of this function.
  */
 int test_shared_lock3c(struct foobar_device *dev)
 {
@@ -233,6 +317,7 @@ int test_shared_lock3c(struct foobar_device *dev)
 
 	spin_unlock(&dev->foo_shared_lock);
 
+	/* XXX: Window of race */
 	return 0;
 }
 
@@ -269,6 +354,7 @@ static int __init dummy_init_module(void)
 	test_non_shared_lock1(dev_dummy);
 	test_non_shared_lock2(dev_dummy);
 	test_non_shared_lock3(dev_dummy);
+	test_non_shared_lock4(dev_dummy);
 
 	test_shared_lock1(dev_dummy);
 	test_shared_lock2(dev_dummy);
