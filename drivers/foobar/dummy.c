@@ -292,14 +292,12 @@ int test_shared_lock3b(struct foobar_device *dev)
  * Usecase:
  * A shared lock that updates a member of foobar_device struct and calls out twice
  *
- * Warning: YES. Ideally, we would synchronize the updated variable when we
+ * Warning: NO. Ideally, we would synchronize the updated variable when we
  * call out to the other domain before unlocking. However, in this scenario,
  * foobar_notify does not have this shared_state variable in its read/write
- * set. We will not marshall this variable across. Also the next function
- * foobar_state_change synchronizes only shared_state variable.
+ * set. We will not marshall this variable across. However,the next function
+ * foobar_state_change synchronizes both shared_state shared_flags variable.
  *
- * There is a window of race between calling spin_unlock() until we synchronize
- * this variable at the end of this function.
  */
 int test_shared_lock3c(struct foobar_device *dev)
 {
@@ -317,7 +315,6 @@ int test_shared_lock3c(struct foobar_device *dev)
 
 	spin_unlock(&dev->foo_shared_lock);
 
-	/* XXX: Window of race */
 	return 0;
 }
 
