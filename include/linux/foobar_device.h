@@ -66,11 +66,15 @@ struct foobar_device {
 
 int register_foobar(struct foobar_device *dev);
 void unregister_foobar(struct foobar_device *dev);
-struct foobar_device *alloc_foobardev(int id, const char* name);
+struct foobar_device *alloc_foobardev(int id, const char* name, size_t sizeof_priv);
 void free_foobardev(struct foobar_device *dev);
 void foobar_init_stats(struct foobar_device *dev);
 int foobar_state_change(struct foobar_device *dev);
 void foobar_notify(struct foobar_device *dev);
 
 
+static inline void *foobardev_priv(const struct foobar_device *dev)
+{
+	return (char *)dev + ALIGN(sizeof(struct foobar_device), 32);
+}
 #endif /* _FOOBAR_DEVICE_H */

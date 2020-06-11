@@ -322,7 +322,7 @@ static int __init dummy_init_module(void)
 {
 	int err;
 
-	dev_dummy = alloc_foobardev(0, "dummy0");
+	dev_dummy = alloc_foobardev(0, "dummy0", sizeof(struct foobar_priv));
 
 	if (!dev_dummy)
 		return -ENOMEM;
@@ -330,7 +330,8 @@ static int __init dummy_init_module(void)
 	dev_dummy->foobardev_ops = &dummy_foobardev_ops;
 	dev_dummy->ext_name = kzalloc(16, GFP_KERNEL);
 
-	dev_dummy->priv = kzalloc(sizeof(struct foobar_priv), GFP_KERNEL);
+	/* Get priv from the object allocated to us by the kernel in alloc_foobardev */
+	dev_dummy->priv = foobardev_priv(dev_dummy);
 
 	if (dev_dummy->ext_name) {
 		strncpy(dev_dummy->ext_name, "dummy_ext", 16);

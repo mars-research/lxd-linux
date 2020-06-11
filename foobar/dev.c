@@ -54,9 +54,18 @@ void unregister_foobar(struct foobar_device *dev)
 }
 EXPORT_SYMBOL(unregister_foobar);
 
-struct foobar_device *alloc_foobardev(int id, const char* name)
+struct foobar_device *alloc_foobardev(int id, const char* name, size_t sizeof_priv)
 {
-	struct foobar_device *dev = kmalloc(sizeof(struct foobar_device), GFP_KERNEL);
+	size_t alloc_size = sizeof(struct foobar_device);
+
+	if (sizeof_priv) {
+		/* ensure 32-byte alignment of private area */
+		alloc_size = ALIGN(alloc_size, 32);
+		alloc_size += sizeof_priv;
+	}
+
+	struct foobar_device *dev = kzalloc(alloc_size, GFP_KERNEL);
+
 	strncpy(dev->name, name, sizeof(dev->name));
 	dev->id = id;
 	spin_lock_init(&dev->foo_shared_lock);
