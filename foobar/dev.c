@@ -4,6 +4,8 @@
 #include <linux/slab.h>
 #include <linux/err.h>
 
+static LIST_HEAD(foobar_dev_list);
+
 int register_foobar(struct foobar_device *dev)
 {
 	int ret = 0;
@@ -37,6 +39,8 @@ int register_foobar(struct foobar_device *dev)
 
 	spin_unlock(&dev->foo_shared_lock);
 
+	list_add_tail(&dev->dev_list, &foobar_dev_list);
+
 	printk("%s, foobar registered\n", __func__);
 
 out:
@@ -56,6 +60,7 @@ EXPORT_SYMBOL(unregister_foobar);
 
 struct foobar_device *alloc_foobardev(int id, const char* name, size_t sizeof_priv)
 {
+	struct foobar_device *dev;
 	size_t alloc_size = sizeof(struct foobar_device);
 
 	if (sizeof_priv) {
@@ -64,7 +69,7 @@ struct foobar_device *alloc_foobardev(int id, const char* name, size_t sizeof_pr
 		alloc_size += sizeof_priv;
 	}
 
-	struct foobar_device *dev = kzalloc(alloc_size, GFP_KERNEL);
+	dev = kzalloc(alloc_size, GFP_KERNEL);
 
 	strncpy(dev->name, name, sizeof(dev->name));
 	dev->id = id;
@@ -112,3 +117,33 @@ void foobar_notify(struct foobar_device *dev)
 	schedule();
 }
 EXPORT_SYMBOL(foobar_notify);
+
+void do_foobar_send(int dev_id, unsigned tag, unsigned data) {
+	struct foobar_device *dev;
+	list_for_each_entry(dev, &foobar_dev_list, dev_list) {
+		if (dev->id == dev_id) {
+			dev->active = true;
+			dev->foobardev_ops->send(dev, tag, data);
+			dev->active = false;
+		}
+	}
+}
+
+int do_foobar_open(int dev_id) {
+	struct foobar_device *dev;
+	list_for_each_entry(dev, &foobar_dev_list, dev_list) {
+		if (dev->id == dev_id) {
+			/* just update the base address */
+			dev->base_addr = 0xFEDD0000;
+		}
+	}
+}
+
+int do_foobar_async_send(int dev_id, unsigned tag, unsigned data) {
+	struct foobar_device *dev;
+	list_for_each_entry(dev, &foobar_dev_list, dev_list) {
+		if (dev->id == dev_id) {
+			dev->foobardev_ops->send(dev, tag, data);
+		}
+	}
+}

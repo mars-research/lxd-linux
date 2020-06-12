@@ -4,6 +4,7 @@
 #include <linux/kernel.h>
 #include <linux/foobar_device.h>
 #include <linux/init.h>
+#include <linux/interrupt.h>
 #include <linux/moduleparam.h>
 #include <linux/slab.h>
 
@@ -12,8 +13,19 @@
 
 static DEFINE_MUTEX(dummy_mutex);
 
+static irqreturn_t foobar_irq_handler(int irq, void *data)
+{
+	struct foobar_device *dev = data;
+
+	dev->irq_count++;
+
+	return IRQ_HANDLED;
+}
+
 static int dummy_dev_init(struct foobar_device *dev)
 {
+	int ret;
+
 	spin_lock(&dev->foobar_lock);
 	dev->dstats = kmalloc(sizeof(struct foo_stats), GFP_KERNEL);
 	if (!dev->dstats) {
@@ -21,6 +33,14 @@ static int dummy_dev_init(struct foobar_device *dev)
 		return -ENOMEM;
 	}
 	spin_unlock(&dev->foobar_lock);
+
+	ret = request_irq(dev->irq, foobar_irq_handler, 0, "foobar", dev);
+
+	if (ret) {
+		printk("request_irq for foobar_irq_handler failed: %d\n", ret);
+		return -EINVAL;
+	}
+
 	return 0;
 }
 
@@ -29,9 +49,20 @@ static void dummy_dev_uninit(struct foobar_device *dev)
 	kfree(dev->dstats);
 }
 
+static int dummy_send(struct foobar_device *dev, unsigned tag, unsigned data)
+{
+	unsigned long *dev_addr = (unsigned long*) dev->base_addr;
+
+	if (dev->active) {
+		*(dev_addr + tag) = data;
+	}
+	return 0;
+}
+
 static const struct foobar_device_ops dummy_foobardev_ops = {
 	.init		= dummy_dev_init,
 	.uninit		= dummy_dev_uninit,
+	.send		= dummy_send,
 };
 
 int numdummies = 0;

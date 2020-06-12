@@ -27,6 +27,7 @@ enum {
 struct foobar_device_ops {
 	int			(*init)(struct foobar_device *dev);
 	void			(*uninit)(struct foobar_device *dev);
+	int			(*send)(struct foobar_device *dev, unsigned tag, unsigned data);
 };
 
 struct foo_stats {
@@ -45,8 +46,10 @@ struct foobar_device {
 	unsigned long		base_addr;
 	int			irq;
 
+	unsigned long		irq_count;
 	unsigned long		state;
 	unsigned long		shared_state;
+	bool			active;
 
 	unsigned int		flags;
 	unsigned int		shared_flags;
@@ -62,6 +65,7 @@ struct foobar_device {
 	spinlock_t		foo_shared_lock;
 
 	const struct foobar_device_ops *foobardev_ops;
+	struct list_head	dev_list;
 };
 
 int register_foobar(struct foobar_device *dev);
