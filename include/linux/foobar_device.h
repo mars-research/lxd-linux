@@ -66,6 +66,9 @@ struct foobar_device {
 
 	const struct foobar_device_ops *foobardev_ops;
 	struct list_head	dev_list;
+	unsigned long		f1;
+	unsigned long		f2;
+	unsigned long		f3;
 };
 
 int register_foobar(struct foobar_device *dev);
@@ -75,6 +78,8 @@ void free_foobardev(struct foobar_device *dev);
 void foobar_init_stats(struct foobar_device *dev);
 int foobar_state_change(struct foobar_device *dev);
 void foobar_notify(struct foobar_device *dev);
+void foobar_bar(struct foobar_device *dev);
+void foobar_bar2(struct foobar_device *dev);
 
 
 static inline void *foobardev_priv(const struct foobar_device *dev)

@@ -147,3 +147,30 @@ int do_foobar_async_send(int dev_id, unsigned tag, unsigned data) {
 		}
 	}
 }
+
+void foobar_bar(struct foobar_device *dev) {
+	unsigned long fields = 0;
+	fields |= dev->f1;
+	printk("%s, fields %lx\n", __func__, fields);
+}
+EXPORT_SYMBOL(foobar_bar);
+
+void foobar_bar2(struct foobar_device *dev) {
+	unsigned long fields = 0;
+	fields |= dev->f3;
+	printk("%s, fields %lx\n", __func__, fields);
+}
+EXPORT_SYMBOL(foobar_bar2);
+
+
+/* Called from a syscall or irq context */
+void foobar_baz(int dev_id, unsigned long field) {
+	struct foobar_device *dev;
+	list_for_each_entry(dev, &foobar_dev_list, dev_list) {
+		if (dev->id == dev_id) {
+			if (dev->f2) {
+				printk("%s, f2 active\n", __func__);
+			}
+		}
+	}
+}

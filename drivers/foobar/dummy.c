@@ -22,6 +22,17 @@ static irqreturn_t foobar_irq_handler(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
+void foobar_update_fields(struct foobar_device *dev)
+{
+	dev->f1 = 0xadd;
+	dev->f2 = 0xbad;
+	dev->f3 = 0xdad;
+
+	foobar_bar(dev);
+
+	foobar_bar2(dev);
+}
+
 static int dummy_dev_init(struct foobar_device *dev)
 {
 	int ret;
@@ -40,6 +51,8 @@ static int dummy_dev_init(struct foobar_device *dev)
 		printk("request_irq for foobar_irq_handler failed: %d\n", ret);
 		return -EINVAL;
 	}
+
+	foobar_update_fields(dev);
 
 	return 0;
 }
