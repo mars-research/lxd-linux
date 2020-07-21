@@ -6,6 +6,7 @@ obj-$(CONFIG_X86_MCE_AMD)	+= mce_amd.o
 obj-$(CONFIG_X86_MCE_THRESHOLD) += threshold.o
 obj-$(CONFIG_X86_MCE_INJECT)	+= mce-inject.o
 
+ccflags-$(CONFIG_X86_THERMAL_VECTOR) += -O1
 obj-$(CONFIG_X86_THERMAL_VECTOR) += therm_throt.o
 
 obj-$(CONFIG_ACPI_APEI)		+= mce-apei.o
