@@ -6,10 +6,12 @@ BC_FILES_REPO=/local/device/bc-files
 
 get_definitions() {
 	for m in $(find . -name "*.ko"); do
+		if [ -f $m.log ]; then
+			> $m.log
+		fi
 		echo ">>>>>>>>>>>>>> $m";
 		for s in $(nm $m | grep -i ' u '| awk '{print $NF}'); do
 			cscope -d -f./cscope.out -R -L1 $s | tee -a $m.log;
-
 		done;
 	done
 }
@@ -17,6 +19,7 @@ get_definitions() {
 extract_bc() {
 	LOGS=$(find . -name "*.ko.log")
 	for log in $LOGS; do
+		echo "------------------$log ---------------------";
 		DRIVER_OBJ=$(echo $log | sed 's/\.log//g')
 		DRIVER_BC=${DRIVER_OBJ}".bc"
 		DRIVER_NAME=$(echo $log | sed 's/\.ko\.log//g' | awk -F'/' '{print $NF}')
@@ -43,9 +46,28 @@ extract_bc() {
 	done
 }
 
+gen_idl() {
+	LOGS=$(find . -name "*.ko.log")
+	for log in $LOGS; do
+		DRIVER_NAME=$(echo $log | sed 's/\.ko\.log//g' | awk -F'/' '{print $NF}')
+		DRIVER_PATH=$(echo $log | sed 's/\.ko\.log//g')
+		DRIVER_IDL=${DRIVER_PATH}".idl"
+
+		echo "module $DRIVER_NAME {" > ${DRIVER_IDL}
+
+		while read line; do
+			FN_DEF=$(echo $line | sed 's/struct/projection/g' | cut -d' ' -f4-)
+			echo -e "\trpc $FN_DEF;" >> ${DRIVER_IDL}
+		done < $log
+
+		echo "}" >> ${DRIVER_IDL}
+	done
+}
 
 if [ $1 == "defs" ]; then
 	get_definitions;
 elif [ $1 == "bc" ]; then
 	extract_bc;
-	fi
+elif [ $1 == "idl" ]; then
+	gen_idl;
+fi
