@@ -44,12 +44,18 @@ struct foobar_device {
 	unsigned long		mem_end;
 	unsigned long		mem_start;
 	unsigned long		base_addr;
+	u8		pcie_mpss:3;	/* PCIe Max Payload Size Supported */
 	int			irq;
+
+	unsigned int		is_virtfn: 1;
+	unsigned int		msi_enabled: 1;
 
 	unsigned long		irq_count;
 	unsigned long		state;
 	unsigned long		shared_state;
 	bool			active;
+	unsigned int		msix_enabled: 1;
+	unsigned int		reset_fn:1;
 
 	unsigned int		flags;
 	unsigned int		shared_flags;

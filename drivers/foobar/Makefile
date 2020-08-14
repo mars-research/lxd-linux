@@ -1,1 +1,1 @@
-obj-$(CONFIG_FOOBAR_DUMMY) += dummy.o
+obj-$(CONFIG_FOOBAR_DUMMY) += foobar_dummy.o

@@ -27,6 +27,7 @@ void foobar_update_fields(struct foobar_device *dev)
 	dev->f1 = 0xadd;
 	dev->f2 = 0xbad;
 	dev->f3 = 0xdad;
+	dev->msix_enabled = 1;
 
 	foobar_bar(dev);
 
@@ -52,7 +53,9 @@ static int dummy_dev_init(struct foobar_device *dev)
 		return -EINVAL;
 	}
 
-	foobar_update_fields(dev);
+	if (dev->is_virtfn) {
+		foobar_update_fields(dev);
+	}
 
 	return 0;
 }
