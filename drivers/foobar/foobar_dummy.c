@@ -19,6 +19,8 @@ static irqreturn_t foobar_irq_handler(int irq, void *data)
 
 	dev->irq_count++;
 
+	dev->reset_fn = 0;
+
 	return IRQ_HANDLED;
 }
 
@@ -55,6 +57,7 @@ static int dummy_dev_init(struct foobar_device *dev)
 
 	if (dev->is_virtfn) {
 		foobar_update_fields(dev);
+		dev->reset_fn = 1;
 	}
 
 	return 0;
