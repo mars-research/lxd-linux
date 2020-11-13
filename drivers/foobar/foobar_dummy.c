@@ -399,6 +399,8 @@ static int __init dummy_init_module(void)
 	if (err < 0)
 		goto err;
 
+	printk("%s, u_field %lu pub2 %lu\n", __func__, dev_dummy->u_field, dev_dummy->public_2);
+
 	test_non_shared_lock1(dev_dummy);
 	test_non_shared_lock2(dev_dummy);
 	test_non_shared_lock3(dev_dummy);

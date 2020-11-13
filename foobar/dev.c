@@ -41,6 +41,9 @@ int register_foobar(struct foobar_device *dev)
 
 	list_add_tail(&dev->dev_list, &foobar_dev_list);
 
+	dev->u_field = 0xFEFE;
+	dev->public_2 = 0xFEED;
+
 	printk("%s, foobar registered\n", __func__);
 
 out:

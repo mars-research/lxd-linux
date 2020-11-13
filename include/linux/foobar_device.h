@@ -75,6 +75,15 @@ struct foobar_device {
 	unsigned long		f1;
 	unsigned long		f2;
 	unsigned long		f3;
+	union {
+		unsigned long u_field;
+		void *ptr_field;
+		struct {
+			void *public;
+			unsigned long public_2;
+			unsigned long private;
+		};
+	};
 };
 
 int register_foobar(struct foobar_device *dev);
