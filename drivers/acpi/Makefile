@@ -2,7 +2,6 @@
 # Makefile for the Linux ACPI interpreter
 #
 
-ccflags-y			:= -O0
 ccflags-$(CONFIG_ACPI_DEBUG)	+= -DACPI_DEBUG_OUTPUT
 
 #

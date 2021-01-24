@@ -143,6 +143,7 @@ extern const char * const x86_bug_flags[NBUGINTS*32];
  */
 static __always_inline __pure bool _static_cpu_has(u16 bit)
 {
+#if 0
 		asm_volatile_goto("1: jmp 6f\n"
 			 "2:\n"
 			 ".skip -(((5f-4f) - (2b-1b)) > 0) * "
@@ -181,6 +182,7 @@ static __always_inline __pure bool _static_cpu_has(u16 bit)
 	t_yes:
 		return true;
 	t_no:
+#endif
 		return false;
 }
 

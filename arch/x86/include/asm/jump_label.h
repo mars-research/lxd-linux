@@ -32,6 +32,7 @@
 
 static __always_inline bool arch_static_branch(struct static_key *key, bool branch)
 {
+#if 0
 	asm_volatile_goto("1:"
 		".byte " __stringify(STATIC_KEY_INIT_NOP) "\n\t"
 		".pushsection __jump_table,  \"aw\" \n\t"
@@ -42,11 +43,13 @@ static __always_inline bool arch_static_branch(struct static_key *key, bool bran
 
 	return false;
 l_yes:
+#endif
 	return true;
 }
 
 static __always_inline bool arch_static_branch_jump(struct static_key *key, bool branch)
 {
+#if 0
 	asm_volatile_goto("1:"
 		".byte 0xe9\n\t .long %l[l_yes] - 2f\n\t"
 		"2:\n\t"
@@ -58,6 +61,7 @@ static __always_inline bool arch_static_branch_jump(struct static_key *key, bool
 
 	return false;
 l_yes:
+#endif
 	return true;
 }
 
