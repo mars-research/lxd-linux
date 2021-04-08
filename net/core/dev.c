@@ -7596,6 +7596,7 @@ void netdev_freemem(struct net_device *dev)
 	kvfree(addr);
 }
 
+#ifdef LXDS
 typedef struct cptr {
 	unsigned long cptr;
 } cptr_t;
@@ -7605,6 +7606,7 @@ struct net_device_container {
 	cptr_t other_ref;
 	cptr_t my_ref;
 };
+#endif
 
 /**
  *	alloc_netdev_mqs - allocate network device
@@ -7624,12 +7626,14 @@ struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,
 		void (*setup)(struct net_device *),
 		unsigned int txqs, unsigned int rxqs)
 {
-	struct net_device *dev;
-
+#ifdef LXDS
 	struct net_device_container *dev_c;
-
-	size_t alloc_size;
 	struct net_device_container *p;
+#else
+	struct net_device *dev;
+	struct net_device *p;
+#endif
+	size_t alloc_size;
 
 	BUG_ON(strlen(name) >= sizeof(dev->name));
 
@@ -7645,7 +7649,11 @@ struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,
 	}
 #endif
 
+#ifdef LXDS
 	alloc_size = sizeof(struct net_device_container);
+#else
+	alloc_size = sizeof(struct net_device);
+#endif
 
 	if (sizeof_priv) {
 		/* ensure 32-byte alignment of private area */
@@ -7661,9 +7669,13 @@ struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,
 	if (!p)
 		return NULL;
 
+#ifdef LXDS
 	dev_c = PTR_ALIGN(p, NETDEV_ALIGN);
-
 	dev = &dev_c->dev;
+#else
+	dev = PTR_ALIGN(p, NETDEV_ALIGN);
+#endif
+
 	dev->padded = (char *)dev - (char *)p;
 
 	dev->pcpu_refcnt = alloc_percpu(int);
@@ -7739,7 +7751,9 @@ struct net_device *alloc_netdev_mqs_lcd(int sizeof_priv, const char *name,
 		unsigned int txqs, unsigned int rxqs, u64 other_ref_cptr)
 {
 	struct net_device *dev;
+#ifdef LXDS
 	struct net_device_container *dev_c;
+#endif
 	size_t alloc_size;
 	struct net_device *p;
 
@@ -7757,7 +7771,11 @@ struct net_device *alloc_netdev_mqs_lcd(int sizeof_priv, const char *name,
 	}
 #endif
 
+#ifdef LXDS
 	alloc_size = sizeof(struct net_device_container);
+#else
+	alloc_size = sizeof(struct net_device);
+#endif
 	if (sizeof_priv) {
 		/* ensure 32-byte alignment of private area */
 		alloc_size = ALIGN(alloc_size, NETDEV_ALIGN);
@@ -7772,10 +7790,14 @@ struct net_device *alloc_netdev_mqs_lcd(int sizeof_priv, const char *name,
 	if (!p)
 		return NULL;
 
+#ifdef LXDS
 	dev_c = (struct net_device_container*) PTR_ALIGN(p, NETDEV_ALIGN);
-
 	dev_c->other_ref.cptr = other_ref_cptr;
 	dev = &dev_c->dev;
+#else
+	dev = (struct net_device*) PTR_ALIGN(p, NETDEV_ALIGN);
+#endif
+
 	dev->padded = (char *)dev - (char *)p;
 
 	dev->pcpu_refcnt = alloc_percpu(int);
